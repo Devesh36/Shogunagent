@@ -1,0 +1,145 @@
+# Single-host BYOC: the sidecar (shogun-api --multi, per-principal SQLCipher stores, keys from your
+# KMS), the gateway (apps/api, Node entry) and Postgres for the gateway's ledger.
+#
+#   cp deploy/compose/.env.example deploy/compose/.env   # fill it in (deploy/README.md)
+#   docker compose -f deploy/compose/docker-compose.yml --env-file deploy/compose/.env up -d --build
+#
+# The sidecar shares the gateway's network namespace and binds 127.0.0.1 only: the gateway reaches
+# it at http://127.0.0.1:7464, and nothing outside the pair can. Only the gateway port is published.
+# Each service gets only the variables it needs.
+
+name: shogunagent
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: shogun
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      GATEWAY_DB_PASSWORD: ${GATEWAY_DB_PASSWORD:?set GATEWAY_DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+      - ../../apps/api/sql:/shogun-sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shogun"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/compose/gateway.Dockerfile
+    image: shogunagent-gateway:${SHOGUN_VERSION:-0.1.0}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${GATEWAY_BIND:-127.0.0.1}:${GATEWAY_PORT:-8787}:8787"
+    environment:
+      PORT: "8787"
+      SHOGUN_REGION: ${SHOGUN_REGION:?set SHOGUN_REGION in .env}
+      SHOGUN_SIDECAR_URL: http://127.0.0.1:7464
+      RELAY_DATABASE_URL: postgres://shogun_relay:${GATEWAY_DB_PASSWORD}@postgres:5432/shogun?sslmode=disable
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      BATCH_PROVIDER: ${BATCH_PROVIDER:-openai}
+      LICENSE_PUBKEY_B64: ${LICENSE_PUBKEY_B64:?set LICENSE_PUBKEY_B64 in .env}
+      DAILY_SPEND_CAP_USD: ${DAILY_SPEND_CAP_USD:?set DAILY_SPEND_CAP_USD in .env}
+      SHOGUN_APPROVAL_SIGNING_KEY: ${SHOGUN_APPROVAL_SIGNING_KEY:-}
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:-}
+      AGENT_API_ENABLED: ${AGENT_API_ENABLED:-0}
+      AGENT_POW_SECRET: ${AGENT_POW_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks: [backend, egress]
+
+  sidecar:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: shogunagent:${SHOGUN_VERSION:-0.1.0}
+    restart: unless-stopped
+    # Same network namespace as the gateway: loopback between the two, no port of its own.
+    network_mode: "service:gateway"
+    depends_on:
+      gateway:
+        condition: service_started
+    command: ["--multi", "/data/principals", "--key-provider", "${SHOGUN_KEY_PROVIDER:-vault}"]
+    user: "10001:10001"
+    environment:
+      SHOGUN_REGION: ${SHOGUN_REGION}
+      SHOGUN_API_PORT: "7464"
+      SHOGUN_MULTI_MAX_OPEN: ${SHOGUN_MULTI_MAX_OPEN:-64}
+      SHOGUN_PRINCIPAL_TOKENS: ${SHOGUN_PRINCIPAL_TOKENS:-}
+      SHOGUN_ADMIN_TOKEN: ${SHOGUN_ADMIN_TOKEN:-}
+      SHOGUN_APPROVAL_SIGNING_KEY: ${SHOGUN_APPROVAL_SIGNING_KEY:-}
+      SHOGUN_APPROVAL_BASE_URL: ${SHOGUN_APPROVAL_BASE_URL:-}
+      SHOGUN_KMS_KEY_CACHE_SECS: ${SHOGUN_KMS_KEY_CACHE_SECS:-300}
+      SHOGUN_KMS_TIMEOUT_SECS: ${SHOGUN_KMS_TIMEOUT_SECS:-10}
+      # aws-kms
+      SHOGUN_AWS_KMS_KEY_ID: ${SHOGUN_AWS_KMS_KEY_ID:-}
+      SHOGUN_AWS_KMS_REGION: ${SHOGUN_AWS_KMS_REGION:-}
+      SHOGUN_AWS_KMS_ENDPOINT: ${SHOGUN_AWS_KMS_ENDPOINT:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      # gcp-kms
+      SHOGUN_GCP_KMS_KEY: ${SHOGUN_GCP_KMS_KEY:-}
+      SHOGUN_GCP_ACCESS_TOKEN_FILE: ${SHOGUN_GCP_ACCESS_TOKEN_FILE:-}
+      # vault
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_NAMESPACE: ${VAULT_NAMESPACE:-}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      SHOGUN_VAULT_TRANSIT_MOUNT: ${SHOGUN_VAULT_TRANSIT_MOUNT:-transit}
+      SHOGUN_VAULT_TRANSIT_KEY: ${SHOGUN_VAULT_TRANSIT_KEY:-}
+      # env (evaluation only)
+      SHOGUN_DB_KEY: ${SHOGUN_DB_KEY:-}
+      SQLITE_TMPDIR: /tmp
+    volumes:
+      - principals:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    healthcheck:
+      test:
+        - CMD
+        - /bin/bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/7464 &&
+          printf 'GET /v1/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3 &&
+          IFS= read -r line <&3 && [[ "$$line" == *" 200 "* ]]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pgdata:
+  principals:
+
+networks:
+  # Postgres is reachable from the gateway only and has no route out.
+  backend:
+    internal: true
+  # The gateway's (and, through its namespace, the sidecar's) way out: LLM provider, KMS.
+  egress: {}

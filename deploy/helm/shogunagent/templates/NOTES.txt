@@ -1,0 +1,20 @@
+ShogunAgent {{ .Chart.AppVersion }} in region {{ .Values.region }}: {{ .Values.replicaCount }} replica(s), key provider {{ .Values.keyProvider.type }}.
+
+{{- if eq .Values.keyProvider.type "env" }}
+WARNING: keyProvider.type=env keeps every principal's key in the Secret (SHOGUN_DB_KEY). Use
+aws-kms, gcp-kms or vault for anything but evaluation.
+{{- end }}
+{{- if .Values.secrets.create }}
+WARNING: secrets.create renders secret values into the Helm release record. Evaluation only.
+{{- end }}
+
+Each principal's store and its wrapped key live on the replica's volume:
+  /data/principals/<principal>/memory.db
+  /data/principals/<principal>/<principal>.key.wrapped
+Back up both together (deploy/README.md "Backup and restore").
+{{- if .Values.gateway.enabled }}
+
+The gateway answers on service {{ include "shogunagent.fullname" . }} port {{ .Values.service.port }}:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "shogunagent.fullname" . }} 8787:{{ .Values.service.port }}
+  curl -s http://127.0.0.1:8787/healthz
+{{- end }}

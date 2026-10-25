@@ -1,0 +1,23 @@
+# CI render case: AWS KMS through IRSA, an operator-managed Secret, egress pinned to CIDRs.
+region: ap-northeast-1
+keyProvider:
+  type: aws-kms
+  aws:
+    keyId: alias/shogunagent-principals
+    region: ap-northeast-1
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::111122223333:role/shogunagent-sidecar
+secrets:
+  existingSecret: shogunagent-secrets
+approvals:
+  baseUrl: https://agent.example.co.jp
+networkPolicy:
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  egress:
+    llmRelayCidrs: ["198.51.100.0/24"]
+    kmsCidrs: ["10.20.0.0/24"]
+    databaseCidrs: ["10.30.0.10/32"]
