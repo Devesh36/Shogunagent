@@ -60,7 +60,12 @@ export interface LogVars {
     | "oauth_code_reuse" | "oauth_invalid_request" | "oauth_client_rejected" | "oauth_revoked"
 
     // Remote approvals (approvals/app.ts, plan E15): fixed words, never a token or a summary.
-    | "approval_page" | "approval_decided" | "approval_refused" | "approval_notified" | "slack_rejected" | "webhook_registered";
+    | "approval_page" | "approval_decided" | "approval_refused" | "approval_notified" | "slack_rejected" | "webhook_registered"
+    // E26 enterprise (enterprise/*.ts): fixed words, never a token, an assertion, a claim or a SCIM body.
+    | "region_refused" | "tenant_directory_unavailable" | "tenant_created" | "tenant_updated" | "principal_attached" | "tenant_admin_added"
+    | "scim_token_rotated" | "sso_login_started" | "sso_login_succeeded" | "sso_login_refused" | "saml_replay" | "admin_session_rejected"
+    | "scim_rejected" | "scim_user_created" | "scim_user_updated" | "scim_user_deactivated" | "scim_user_deleted" | "scim_group_synced"
+    | "sidecar_unavailable" | "audit_export_streamed" | "oauth_sso_required" | "member_key_issued";
   /** Server-chosen provider and model of the accepted batch (ids, not content). */
   relayLogModel?: string;
   /** License id (an opaque token id, not user content). */
@@ -92,11 +97,32 @@ export function routeTemplate(pathname: string): string {
   if (["/v1/slack/interactions", "/v1/approvals/notify", "/v1/webhooks"].includes(pathname)) return pathname;
   if (/^\/approve\/[^/]+$/.test(pathname)) return "/approve/:token";
   if (/^\/v1\/webhooks\/[^/]+$/.test(pathname)) return "/v1/webhooks/:id";
+  // E26 enterprise. Tenant, admin, user and group ids in the path collapse to their template.
+  const enterprise = enterpriseRouteTemplate(pathname);
+  if (enterprise) return enterprise;
   if (/^\/v1\/keys\/[^/]+\/revoke$/.test(pathname)) return "/v1/keys/:id/revoke";
   if (/^\/v1\/keys\/[^/]+$/.test(pathname)) return "/v1/keys/:id";
   if (/^\/v1\/receipts\/[^/]+\/dispute$/.test(pathname)) return "/v1/receipts/:id/dispute";
   if (/^\/v1\/ai\/[^/]+$/.test(pathname)) return "/v1/ai/:lane";
   return /^\/v1\/batch\/[^/]+$/.test(pathname) ? "/v1/batch/:id" : "/unmatched";
+}
+
+/** E26: the enterprise routes as templates (`enterprise/app.ts`, `enterprise/scim.ts`), or
+ * `undefined` when the path is not one of them. */
+export function enterpriseRouteTemplate(pathname: string): string | undefined {
+  if (["/v1/admin/tenants", "/v1/tenant/me", "/v1/tenant/audit/export", "/v1/tenant/members", "/v1/tenant/logout", "/legal/dpa", "/legal/zdr", "/legal/sla"].includes(pathname)) return pathname;
+  if (["/scim/v2/ServiceProviderConfig", "/scim/v2/Schemas", "/scim/v2/ResourceTypes", "/scim/v2/Users", "/scim/v2/Groups"].includes(pathname)) return pathname;
+  if (/^\/scim\/v2\/Users\/[^/]+$/.test(pathname)) return "/scim/v2/Users/:id";
+  if (/^\/scim\/v2\/Groups\/[^/]+$/.test(pathname)) return "/scim/v2/Groups/:id";
+  if (/^\/scim\/v2\/(Schemas|ResourceTypes)\/[^/]+$/.test(pathname)) return pathname.replace(/\/[^/]+$/, "/:id");
+  if (/^\/v1\/tenant\/members\/[^/]+\/keys$/.test(pathname)) return "/v1/tenant/members/:id/keys";
+  if (/^\/v1\/admin\/tenants\/[^/]+$/.test(pathname)) return "/v1/admin/tenants/:id";
+  const admin = /^\/v1\/admin\/tenants\/[^/]+\/(principals|admins|scim-token)$/.exec(pathname);
+  if (admin) return `/v1/admin/tenants/:id/${admin[1]}`;
+  if (/^\/v1\/admin\/tenants\/[^/]+\/admins\/[^/]+$/.test(pathname)) return "/v1/admin/tenants/:id/admins/:admin";
+  const sso = /^\/sso\/[^/]+\/(login|oidc\/callback|saml\/acs|saml\/metadata)$/.exec(pathname);
+  if (sso) return `/sso/:tenant/${sso[1]}`;
+  return undefined;
 }
 
 export function redactingLogger(log: LogFn): MiddlewareHandler<{ Variables: LogVars }> {

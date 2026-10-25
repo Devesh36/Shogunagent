@@ -24,6 +24,7 @@ import { lookup } from "node:dns/promises";
 
 import { InMemoryAgentStore } from "./agent-store.js";
 import { InMemoryOAuthStore } from "./oauth/store.js";
+import { InMemoryEnterpriseStore } from "./enterprise/store.js";
 import { BootError, SERVER_TIMEOUTS, agentLaneLine, billingJobs, createRelay, formLaneLine, intFromEnv, postgresStore, relayConfigFromEnv, startPeriodicSweep, trialLaneLine, type RelayStore } from "./boot.js";
 import { operational } from "./logging.js";
 import { TokenBucketLimiter } from "./ratelimit.js";
@@ -78,6 +79,7 @@ async function openStore(): Promise<RelayStore> {
       await store.usage.checkSchema();
       if (config.agent) await store.agent.checkSchema();
       if (config.agent?.oauthSecret) await store.oauth.checkSchema();
+      if (config.agent?.enterprise) await store.enterprise.checkSchema();
     } catch (e) {
       refuse(e instanceof Error ? e.message : "shared store unavailable");
     }
@@ -91,7 +93,7 @@ async function openStore(): Promise<RelayStore> {
     usage: new InMemoryUsageStore(),
     rateLimit: new TokenBucketLimiter(config.rateBurst, config.ratePerMin),
     // Keys, wallets and receipts vanish with the process too.
-    ...(config.agent ? { agent: new InMemoryAgentStore(), oauth: new InMemoryOAuthStore(), resolveHost: resolveAllAddresses } : {}),
+    ...(config.agent ? { agent: new InMemoryAgentStore(), oauth: new InMemoryOAuthStore(), enterprise: new InMemoryEnterpriseStore(), resolveHost: resolveAllAddresses } : {}),
     close: () => Promise.resolve(),
   };
 }

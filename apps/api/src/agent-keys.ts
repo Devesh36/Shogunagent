@@ -95,7 +95,7 @@ export async function verifyAgentKey(key: string, stored: string): Promise<boole
 
 async function pbkdf2(key: string, salt: Uint8Array, iterations: number): Promise<ArrayBuffer> {
   const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(key), "PBKDF2", false, ["deriveBits"]);
-  return crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, material, HASH_BITS);
+  return crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: new Uint8Array(salt), iterations }, material, HASH_BITS);
 }
 
 /** One stored key row. `hash` is the self-describing PBKDF2 string; the secret is nowhere. */
@@ -156,6 +156,34 @@ export interface AgentKeyLookup {
   /** OAuth access tokens (E3-T2, oauth/app.ts): resolve a presented `sat_…` token to the
    * principal it is bound to, or the reason it is refused. Absent = OAuth tokens are not accepted. */
   accessToken?(token: string, nowMs: number): Promise<{ ok: true; principal: AgentPrincipal } | { ok: false; code: "invalid_key" | "key_revoked" | "key_expired" }>;
+  /** E26: a policy check after a bearer resolved (region of the principal's tenant). `undefined`
+   * admits; a refusal is answered as is. Absent = every resolved principal is admitted. */
+  admit?(principal: AgentPrincipal, nowMs: number): Promise<AdmitRefusal | undefined>;
+}
+
+/** Why a resolved principal is not served here (E26 region separation). `extra` joins the error
+ * object (for example `region` and `region_endpoint`). */
+export interface AdmitRefusal {
+  status: 403 | 421 | 503;
+  code: string;
+  message: string;
+  nextAction: string | null;
+  extra?: Record<string, string>;
+}
+
+/** The error envelope of an admission refusal. */
+export function admitRefusalResponse(c: Context, r: AdmitRefusal): Response {
+  return c.json({ error: { code: r.code, message: r.message, next_action: r.nextAction, ...(r.extra ?? {}) } }, r.status, { "cache-control": "no-store" });
+}
+
+/** Run the lookup's admission check, failing closed (503) when the check itself throws. */
+export async function admitPrincipal(lookup: AgentKeyLookup, principal: AgentPrincipal, nowMs: number): Promise<AdmitRefusal | undefined> {
+  if (!lookup.admit) return undefined;
+  try {
+    return await lookup.admit(principal, nowMs);
+  } catch {
+    return { status: 503, code: "tenant_directory_unavailable", message: "The tenant directory is unavailable. Retry shortly.", nextAction: "retry_after" };
+  }
 }
 
 /** An OAuth access token: `sat_` and 43 base64url characters (32 random bytes). */
@@ -243,6 +271,11 @@ export function requireAgentKey(
     c.set("relayLogAgentKey", resolved.principal.keyId);
     if (!hasScopes(resolved.principal.scopes, scopes)) {
       return agentError(c, 403, "insufficient_scope", `This key lacks the ${scopes.join(", ")} scope.`);
+    }
+    const refused = await admitPrincipal(store, resolved.principal, now().getTime());
+    if (refused) {
+      c.set("relayLogEvent", refused.status === 503 ? "tenant_directory_unavailable" : "region_refused");
+      return admitRefusalResponse(c, refused);
     }
     c.set("agentPrincipal", resolved.principal);
     await next();

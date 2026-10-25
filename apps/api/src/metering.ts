@@ -23,7 +23,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { randomUUID } from "node:crypto";
 
-import { agentError, agentMeterSubject, hasScopes, resolveAgentKey, type AgentKeyLookup, type AgentPrincipal, type AgentScope, type AgentVars } from "./agent-keys.js";
+import { admitPrincipal, admitRefusalResponse, agentError, agentMeterSubject, hasScopes, resolveAgentKey, type AgentKeyLookup, type AgentPrincipal, type AgentScope, type AgentVars } from "./agent-keys.js";
 import type { AgentStore, ReserveOutcome } from "./agent-store.js";
 import { paymentRequiredResponse } from "./billing/402.js";
 import { commitTerms, discounted, type CommitTerms } from "./billing/ledger.js";
@@ -293,6 +293,12 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
     }
     const principal = resolved.principal;
     c.set("relayLogAgentKey", principal.keyId);
+    // E26: a principal homed in another region is sent to its endpoint before anything is booked.
+    const refused = await admitPrincipal(deps.keyLookup ?? deps.store, principal, startedMs);
+    if (refused) {
+      c.set("relayLogEvent", refused.status === 503 ? "tenant_directory_unavailable" : "region_refused");
+      return admitRefusalResponse(c, refused);
+    }
     c.set("agentPrincipal", principal);
     const scopes = SCOPE_BY_UNIT[call.unit];
     if (!hasScopes(principal.scopes, scopes)) return agentError(c, 403, "insufficient_scope", `This call needs the ${scopes.join(", ")} scope.`);

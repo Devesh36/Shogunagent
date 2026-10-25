@@ -77,6 +77,8 @@ export interface OAuthStore {
   revokeFamily(familyId: string, nowMs: number): Promise<void>;
   /** Revoke whatever family a code produced (a replayed code). */
   revokeFamilyOfCode(codeHash: string, nowMs: number): Promise<void>;
+  /** E26: revoke every family of a principal (SCIM deactivation and deletion). */
+  revokePrincipal(principalId: string, nowMs: number): Promise<void>;
   /** Retention: expired codes, and tokens a day past their expiry. */
   maintenance(nowMs: number): Promise<void>;
 }
@@ -133,6 +135,11 @@ export class InMemoryOAuthStore implements OAuthStore {
 
   revokeFamilyOfCode(codeHash: string, nowMs: number): Promise<void> {
     for (const f of this.families.values()) if (f.codeHash === codeHash && f.revokedAt === undefined) f.revokedAt = nowMs;
+    return Promise.resolve();
+  }
+
+  revokePrincipal(principalId: string, nowMs: number): Promise<void> {
+    for (const f of this.families.values()) if (f.principalId === principalId && f.revokedAt === undefined) f.revokedAt = nowMs;
     return Promise.resolve();
   }
 
@@ -251,6 +258,12 @@ export class SqlOAuthStore implements OAuthStore {
   revokeFamilyOfCode(codeHash: string, nowMs: number): Promise<void> {
     return this.tx(async (tx) => {
       await tx.query("UPDATE oauth_families SET revoked_at=$2::bigint WHERE code_hash=$1::text AND revoked_at IS NULL", [codeHash, nowMs]);
+    });
+  }
+
+  revokePrincipal(principalId: string, nowMs: number): Promise<void> {
+    return this.tx(async (tx) => {
+      await tx.query("UPDATE oauth_families SET revoked_at=$2::bigint WHERE principal_id=$1::text AND revoked_at IS NULL", [principalId, nowMs]);
     });
   }
 

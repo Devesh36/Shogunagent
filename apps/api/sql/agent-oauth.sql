@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS oauth_families (
   revoked_at    BIGINT
 );
 CREATE INDEX IF NOT EXISTS oauth_families_code ON oauth_families (code_hash);
+-- E26: SCIM deactivation revokes every family of a principal at once.
+CREATE INDEX IF NOT EXISTS oauth_families_principal ON oauth_families (principal_id);
 
 -- Access tokens (`kind = access`, short-lived) and refresh tokens (`kind = refresh`, rotated:
 -- `used_at` flips once; a second presentation revokes the family).
