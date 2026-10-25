@@ -1757,6 +1757,10 @@ supersession links, verifiable provenance and a capability manifest.
 
 - JSON Schema of every line: [`export-v2.schema.json`](export-v2.schema.json)
   (`$id` `https://shogunagent.dev/schemas/export-v2.schema.json`).
+- JSON-LD 1.1 context (each line read as a node object, applied out of band; non-normative):
+  [`export-v2.context.jsonld`](export-v2.context.jsonld), tested in
+  `packages/interop/test/jsonld.test.ts`. The Community Group draft built from this page, not
+  submitted: [`docs/standards/export-v2-cg-draft.md`](../standards/export-v2-cg-draft.md).
 - Implementation: `crates/shogun-memory/src/export/v2.rs` (export, import),
   `crates/shogun-memory/src/export/convert.rs` (v1 ↔ v2). Tests validate every exported line
   against the schema, check every content hash against the source body, and round-trip export →

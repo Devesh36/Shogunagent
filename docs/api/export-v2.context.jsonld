@@ -1,0 +1,22 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@vocab": "https://shogunagent.dev/ns/export/v2#",
+    "sa": "https://shogunagent.dev/ns/export/v2#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "uri": "@id",
+    "type": "@type",
+    "id": "sa:localId",
+    "counterparty": { "@id": "sa:counterparty", "@type": "@id" },
+    "project": { "@id": "sa:project", "@type": "@id" },
+    "subject": { "@id": "sa:subject", "@type": "@id" },
+    "object": { "@id": "sa:object", "@type": "@id" },
+    "superseded_by": { "@id": "sa:supersededBy", "@type": "@id" },
+    "event_uri": { "@id": "sa:event", "@type": "@id" },
+    "aliases": { "@id": "sa:alias", "@container": "@set" },
+    "provenance": { "@id": "sa:provenance", "@container": "@set" },
+    "capabilities": { "@id": "sa:capabilities", "@type": "@json" },
+    "counts": { "@id": "sa:counts", "@type": "@json" },
+    "confidence": { "@id": "sa:confidence", "@type": "xsd:double" }
+  }
+}
