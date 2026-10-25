@@ -20,8 +20,18 @@
 //!
 //! The rules are deterministic and explainable, like the rest of the capture path: fixed cue
 //! phrases, a question / future / negation veto, the same thread, and at least two shared content
-//! words with the row (the artifact and the person), with a tie refused. A message without a thread
-//! (screen capture) is never matched: there is nothing that says which row it is about.
+//! words with the row (the artifact and the person), with a tie refused.
+//!
+//! **Text without a thread** (screen capture, a note ingested with no `thread_key`) never changes
+//! a row here, local candidate or not ([`reconcile_unthreaded_event`]). Nothing says which row it
+//! is about; its time is when it was *seen*, not when it was said (an old "Sent …" scrolled into
+//! view, a date read against the wrong day); and the same text comes back frame after frame. The
+//! one thing it may do is leave a lead for the consolidator: a resolution or cancellation (never a
+//! re-date) that names exactly one open row the consolidator owns — at least
+//! [`MIN_SHARED_WORDS_UNTHREADED`] shared content words, at least half of its own, and no other
+//! open row sharing [`MIN_SHARED_WORDS`] — is recorded unread and unapplied, once per row and
+//! quote. The consolidator sees it with its source and changes the row only through a quote of its
+//! own; a local candidate is left to its thread.
 //!
 //! The pass runs in the Dream Cycle's StateUpdate job and the hourly maintenance
 //! ([`crate::recompute::recompute_overdue_and_staleness_detailed`]) over the events inserted since
@@ -39,6 +49,8 @@ pub const FIRST_SCAN_LOOKBACK_MS: i64 = 30 * 86_400_000;
 pub const SCAN_BATCH: i64 = 5_000;
 /// Content words an outcome must share with the row it closes.
 pub const MIN_SHARED_WORDS: usize = 2;
+/// Content words an outcome in text without a thread must share with the one row it names.
+pub const MIN_SHARED_WORDS_UNTHREADED: usize = 3;
 /// The confidence below which a row is a local candidate the local path may change.
 pub const DASHBOARD_LINE: f64 = 0.5;
 
@@ -215,6 +227,12 @@ struct Target {
 
 /// Open rows with evidence in `thread_key` said before `before_ts` (not on `event_id` itself).
 fn thread_targets(conn: &Connection, thread_key: &str, event_id: i64, before_ts: i64) -> Result<Vec<Target>, rusqlite::Error> {
+    targets(conn, Some(thread_key), event_id, before_ts)
+}
+
+/// Open rows with evidence said before `before_ts` (not on `event_id` itself), in `thread_key`
+/// when one is given, anywhere otherwise.
+fn targets(conn: &Connection, thread_key: Option<&str>, event_id: i64, before_ts: i64) -> Result<Vec<Target>, rusqlite::Error> {
     let mut out = Vec::new();
     for (table, open, due) in [
         (StateTable::Commitments, "('open', 'overdue')", "s.due_at"),
@@ -231,7 +249,7 @@ fn thread_targets(conn: &Connection, thread_key: &str, event_id: i64, before_ts:
               WHERE s.status IN {open} AND s.aged_at IS NULL AND s.merged_into IS NULL
                 AND EXISTS (SELECT 1 FROM state_provenance p JOIN event_log e ON e.id = p.event_id
                              WHERE p.state_table = '{t}' AND p.state_id = s.id
-                               AND e.thread_key = ?1 AND e.id != ?2 AND e.ts <= ?3)
+                               AND (?1 IS NULL OR e.thread_key = ?1) AND e.id != ?2 AND e.ts <= ?3)
               ORDER BY s.id"
         );
         let rows = conn
@@ -360,7 +378,8 @@ pub fn reconcile_event(conn: &Connection, event_id: i64, now: i64) -> Result<Rec
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?;
-    let Some((content, ts, Some(thread))) = row else { return Ok(done) };
+    let Some((content, ts, thread)) = row else { return Ok(done) };
+    let Some(thread) = thread else { return reconcile_unthreaded_event(conn, event_id, &content, ts, now) };
     let outcomes = detect(&content, ts);
     if outcomes.is_empty() {
         return Ok(done);
@@ -388,8 +407,62 @@ pub fn reconcile_event(conn: &Connection, event_id: i64, now: i64) -> Result<Rec
     Ok(done)
 }
 
-/// One pass over the threaded events inserted since the last pass (at most [`SCAN_BATCH`]); the
-/// first pass after the upgrade starts [`FIRST_SCAN_LOOKBACK_MS`] back. Idempotent.
+/// The one open row anywhere a thread-less outcome names: at least
+/// [`MIN_SHARED_WORDS_UNTHREADED`] shared content words and half of the outcome's own, and no other
+/// open row sharing even [`MIN_SHARED_WORDS`] (two rows it could be about is one too many).
+fn pick_unthreaded<'t>(targets: &'t [Target], outcome: &Outcome<'_>) -> Option<&'t Target> {
+    let words = content_words(outcome.quote);
+    let mut close = targets
+        .iter()
+        .map(|t| (t, content_words(&t.description).intersection(&words).count()))
+        .filter(|(_, shared)| *shared >= MIN_SHARED_WORDS);
+    let (target, shared) = close.next()?;
+    if close.next().is_some() || shared < MIN_SHARED_WORDS_UNTHREADED || 2 * shared < words.len() {
+        return None;
+    }
+    Some(target)
+}
+
+/// An event without a thread (see the module notes): never applied, never a re-date, never about a
+/// local candidate; a resolution or cancellation that names exactly one consolidator-owned row is
+/// recorded unread for the consolidator, once per (row, kind, quote) however often the text is
+/// captured again. Sources the Batch lane may not see (meeting text) are skipped: the consolidator
+/// would never be shown them.
+fn reconcile_unthreaded_event(conn: &Connection, event_id: i64, content: &str, ts: i64, now: i64) -> Result<Reconciled, rusqlite::Error> {
+    let mut done = Reconciled { scanned: 1, ..Reconciled::default() };
+    let outcomes: Vec<Outcome<'_>> = detect(content, ts).into_iter().filter(|o| o.kind != UpdateKind::Redated).collect();
+    if outcomes.is_empty() {
+        return Ok(done);
+    }
+    let source: Option<String> = conn.query_row("SELECT source FROM event_log WHERE id = ?1", [event_id], |r| r.get(0)).optional()?;
+    if source.is_some_and(|s| crate::event_log::BATCH_EXCLUDED_SOURCES.contains(&s.as_str())) {
+        return Ok(done);
+    }
+    for outcome in &outcomes {
+        let targets = targets(conn, None, event_id, ts)?;
+        let Some(target) = pick_unthreaded(&targets, outcome) else { continue };
+        if target.local {
+            continue; // a local candidate changes only on its own thread's words
+        }
+        let Some(quote) = crate::sanitize::persist_generated(outcome.quote) else { continue };
+        let seen: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM loop_updates WHERE state_table = ?1 AND state_id = ?2 AND kind = ?3 AND quote = ?4)",
+            params![target.table.as_str(), target.id, outcome.kind.as_str(), quote.text.as_ref()],
+            |r| r.get(0),
+        )?;
+        if seen {
+            continue; // the same words captured again
+        }
+        let (recorded, applied) = record(conn, target, event_id, outcome, now)?;
+        debug_assert!(!applied, "a consolidator-owned row is never applied locally");
+        done.recorded += usize::from(recorded);
+    }
+    Ok(done)
+}
+
+/// One pass over the events inserted since the last pass (at most [`SCAN_BATCH`]; threaded and
+/// not, [`reconcile_event`]); the first pass after the upgrade starts [`FIRST_SCAN_LOOKBACK_MS`]
+/// back. Idempotent.
 pub fn reconcile(conn: &mut Connection, now: i64) -> Result<Reconciled, rusqlite::Error> {
     let tx = conn.savepoint()?;
     let watermark: Option<i64> = tx
@@ -403,22 +476,19 @@ pub fn reconcile(conn: &mut Connection, now: i64) -> Result<Reconciled, rusqlite
             |r| r.get(0),
         )?,
     };
-    let ids: Vec<(i64, bool)> = tx
-        .prepare("SELECT id, thread_key IS NOT NULL FROM event_log WHERE id > ?1 ORDER BY id LIMIT ?2")?
-        .query_map(params![from, SCAN_BATCH], |r| Ok((r.get(0)?, r.get(1)?)))?
+    let ids: Vec<i64> = tx
+        .prepare("SELECT id FROM event_log WHERE id > ?1 ORDER BY id LIMIT ?2")?
+        .query_map(params![from, SCAN_BATCH], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     let mut total = Reconciled::default();
-    for &(id, threaded) in &ids {
-        if !threaded {
-            continue;
-        }
+    for &id in &ids {
         let one = reconcile_event(&tx, id, now)?;
         total.scanned += one.scanned;
         total.recorded += one.recorded;
         total.closed += one.closed;
         total.redated += one.redated;
     }
-    let last = ids.last().map_or(from, |(id, _)| *id);
+    let last = ids.last().copied().unwrap_or(from);
     tx.execute(
         "INSERT INTO loop_update_scan (id, last_event_id) VALUES (1, ?1)
          ON CONFLICT (id) DO UPDATE SET last_event_id = MAX(last_event_id, excluded.last_event_id)",
@@ -658,5 +728,88 @@ mod tests {
         let out = reconcile(&mut conn, MON).unwrap();
         assert_eq!(out.closed, 0, "older than the first-pass window: {out:?}");
         assert_eq!(status(&conn, "commitments", c).0, "open");
+    }
+
+    fn unread(conn: &Connection) -> Vec<(String, i64, String)> {
+        conn.prepare("SELECT kind, state_id, quote FROM loop_updates WHERE applied = 0 AND read_at IS NULL ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// E49: text without a thread (screen capture) never closes or re-dates a row. A resolution
+    /// that names exactly one consolidator-owned row is left unread for the consolidator, once;
+    /// a local candidate, a re-date, a weak or ambiguous match and meeting text leave nothing.
+    #[test]
+    fn text_without_a_thread_only_leaves_an_unambiguous_lead_for_the_consolidator() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let local_said = "I'll send the Q3 budget to Oren Vale by Friday.";
+        let e1 = event(&conn, 1, MON, Some("t1"), local_said);
+        let local = commitment(&mut conn, e1, local_said, None, 0.35);
+        let reviewed_said = "I'll send the board memo to Priya Nand by Friday.";
+        let e2 = event(&conn, 2, MON, Some("t2"), reviewed_said);
+        let reviewed = commitment(&mut conn, e2, reviewed_said, crate::due::due_at(reviewed_said, MON), 0.9);
+
+        // A local candidate is not touched by text without a thread, however clear.
+        event(&conn, 3, MON + HOUR, None, "Sent the Q3 budget to Oren Vale.");
+        // A re-date read off a screen is never taken: the capture time is not when it was said.
+        event(&conn, 4, MON + HOUR, None, "Update: the board memo for Priya Nand moves to Thursday.");
+        // Too few shared words to name the row.
+        event(&conn, 5, MON + HOUR, None, "Sent it to Priya.");
+        let out = reconcile(&mut conn, MON + 2 * HOUR).unwrap();
+        assert_eq!((out.recorded, out.closed, out.redated), (0, 0, 0), "{out:?}");
+        assert_eq!(status(&conn, "commitments", local).0, "open");
+        assert!(unread(&conn).is_empty());
+
+        // The resolution of the consolidator's row is left for it, unapplied; the row stays open.
+        let done = "Sent the board memo to Priya Nand";
+        event(&conn, 6, MON + 3 * HOUR, None, &format!("{done}. Next: lunch."));
+        // The same words captured again in a later frame are not a second lead.
+        event(&conn, 7, MON + 3 * HOUR + 60_000, None, &format!("{done}. Next: lunch at noon."));
+        let out = reconcile(&mut conn, MON + 4 * HOUR).unwrap();
+        assert_eq!((out.recorded, out.closed), (1, 0), "{out:?}");
+        assert_eq!(unread(&conn), vec![("resolved".to_string(), reviewed, done.to_string())]);
+        let (st, conf, _) = status(&conn, "commitments", reviewed);
+        assert_eq!((st.as_str(), conf), ("open", 0.9), "only the consolidator closes it, through its own quote");
+        let input = crate::loops::consolidation_input(&conn, MON + 4 * HOUR).unwrap().unwrap();
+        assert!(input.text.contains(&format!("C{reviewed} | resolved |")), "{}", input.text);
+
+        // Two open rows the words could be about: nothing.
+        let other_said = "I'll send the board deck to Priya Nand by Monday.";
+        let e8 = event(&conn, 8, MON + 5 * HOUR, Some("t3"), other_said);
+        commitment(&mut conn, e8, other_said, None, 0.9);
+        event(&conn, 9, MON + 6 * HOUR, None, "Sent the board stuff to Priya Nand.");
+        let out = reconcile(&mut conn, MON + 7 * HOUR).unwrap();
+        assert_eq!(out.recorded, 0, "{out:?}");
+    }
+
+    /// Meeting text never reaches the Batch lane, so it leaves no lead for the consolidator.
+    #[test]
+    fn meeting_text_without_a_thread_leaves_no_lead() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let said = "I'll send the board memo to Priya Nand by Friday.";
+        let e1 = event(&conn, 1, MON, Some("t1"), said);
+        let reviewed = commitment(&mut conn, e1, said, None, 0.9);
+        crate::event_log::insert(
+            &conn,
+            &crate::event_log::NewEvent {
+                ts: MON + HOUR,
+                source: "meeting",
+                kind: "transcript",
+                app_bundle_id: None,
+                window_title: None,
+                content: "Sent the board memo to Priya Nand.",
+                content_hash: "m1",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+        let out = reconcile(&mut conn, MON + 2 * HOUR).unwrap();
+        assert_eq!(out.recorded, 0, "{out:?}");
+        assert_eq!(status(&conn, "commitments", reviewed).0, "open");
     }
 }
