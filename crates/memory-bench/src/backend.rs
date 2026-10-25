@@ -247,10 +247,18 @@ impl MemoryBackend for ShogunBackend {
                 // corpus, so `since_ts` / `to_ts` filtering is on the measured path and a
                 // question's own recency cue ("currently") is read by the search itself, not
                 // simulated here (E12-T1).
+                //
+                // The bench's consumer is the recall and abstention scorer, which reads every
+                // returned row as evidence handed to a reader, so it opts in to the relevance
+                // floor's empty result (`abstain_below_floor`). The daemon's suggestion and
+                // context paths leave it off and carry the floor's verdict in their
+                // answerability signal instead; the floor itself is measured the same way on
+                // both.
                 let opts = shogun_memory::search::FederatedSearchOptions {
                     since_ts: Some(0),
                     to_ts: Some(self.now_ms),
                     depth: SearchDepth::WarmOnly,
+                    abstain_below_floor: true,
                     ..Default::default()
                 };
                 let result = search::search_federated(

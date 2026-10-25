@@ -58,6 +58,10 @@ pub struct SearchResponseV1 {
     pub federated_hits: Vec<shogun_memory::search::FederatedHit>,
     /// The newest event row behind each federated hit (`when` / `where` on API results).
     pub event_places: std::collections::BTreeMap<i64, shogun_memory::search::EventPlace>,
+    /// The relevance floor's verdict (`shogun_memory::search::RELEVANCE_FLOOR_COVERAGE`). This
+    /// path never empties `federated_hits` on it — suggestions stay available for the Notch and
+    /// the context assembly — and expresses a failing verdict through `answerability` instead.
+    pub relevance: shogun_memory::search::RelevanceFloor,
     pub answerability: AnswerabilityV1,
     pub requested_depth: SearchDepthV1,
     pub effective_depth: SearchDepthV1,
@@ -71,9 +75,16 @@ pub struct SearchResponseV1 {
     pub elapsed_ms: u64,
 }
 
+/// The answerability verdict for a search result. The hits are never emptied on the daemon's
+/// path; a conservative verdict is expressed here. The relevance floor
+/// (`shogun_memory::search::RELEVANCE_FLOOR_COVERAGE`, measured by every federated search)
+/// only ever lowers the verdict: a top hit that would otherwise read as answerable but covers
+/// too little of the question is reported as `LowQuality`, so the Memory API's `answerable:
+/// false` follows from the floor without the candidates being withheld.
 pub(crate) fn answerability(
     query: &str,
     hits: &[shogun_memory::search::FederatedHit],
+    relevance: &shogun_memory::search::RelevanceFloor,
 ) -> AnswerabilityV1 {
     const MIN_MATCH_QUALITY: f64 = 0.4;
     const MAX_SUBSTRING_COVERAGE_GAP: f64 = 0.25;
@@ -91,6 +102,7 @@ pub(crate) fn answerability(
         } else if quality.term_coverage < MIN_MATCH_QUALITY
             || quality.lexical_quality < MIN_MATCH_QUALITY
             || quality.lexical_quality - quality.term_coverage > MAX_SUBSTRING_COVERAGE_GAP
+            || !relevance.passed
         {
             AnswerabilityReasonV1::LowQuality
         } else {
@@ -156,7 +168,12 @@ impl Db {
                 hits: Vec::new(),
                 federated_hits: Vec::new(),
                 event_places: Default::default(),
-                answerability: answerability(&request.query, &[]),
+                relevance: shogun_memory::search::RelevanceFloor::not_applicable(),
+                answerability: answerability(
+                    &request.query,
+                    &[],
+                    &shogun_memory::search::RelevanceFloor::not_applicable(),
+                ),
                 requested_depth: resolved.requested_depth,
                 effective_depth: resolved.effective_depth,
                 requested_range: resolved.requested_range,
@@ -290,9 +307,10 @@ impl Db {
 
         Ok(SearchResponseV1 {
             hits,
-            answerability: answerability(&request.query, &outcome.hits),
+            answerability: answerability(&request.query, &outcome.hits, &outcome.relevance),
             federated_hits: outcome.hits,
             event_places,
+            relevance: outcome.relevance,
             requested_depth: resolved.requested_depth,
             effective_depth: resolved.effective_depth,
             requested_range: resolved.requested_range,
@@ -382,6 +400,42 @@ mod tests {
         }
     }
 
+    fn passed_floor() -> shogun_memory::search::RelevanceFloor {
+        shogun_memory::search::RelevanceFloor {
+            passed: true,
+            reason: shogun_memory::search::RelevanceFloorReason::Passed,
+            coverage: Some(1.0),
+            threshold: shogun_memory::search::RELEVANCE_FLOOR_COVERAGE,
+        }
+    }
+
+    #[test]
+    fn a_failing_relevance_floor_lowers_an_answerable_verdict_to_low_quality() {
+        // The daemon never withholds the candidates on the floor; the Memory API's
+        // `answerable: false` follows from this verdict instead.
+        let quality = MatchQualitySummary {
+            lexical_quality: 0.5,
+            term_coverage: 0.5,
+            anchor_coverage: 1.0,
+            anchor_count: 1,
+        };
+        let below = shogun_memory::search::RelevanceFloor {
+            passed: false,
+            reason: shogun_memory::search::RelevanceFloorReason::BelowFloor,
+            coverage: Some(0.25),
+            threshold: shogun_memory::search::RELEVANCE_FLOOR_COVERAGE,
+        };
+        let lowered = answerability("Who owns Orchid rollout delivery?", &[hit(quality, true)], &below);
+        assert_eq!(lowered.reason, AnswerabilityReasonV1::LowQuality);
+        assert!(!lowered.answerable);
+        let kept = answerability("Who owns Orchid rollout delivery?", &[hit(quality, true)], &passed_floor());
+        assert_eq!(kept.reason, AnswerabilityReasonV1::Answerable);
+        // Weaker reasons are not rewritten: an anchorless top hit stays "insufficient signal".
+        let anchorless = MatchQualitySummary { anchor_count: 0, ..quality };
+        let kept = answerability("what happened in the meeting", &[hit(anchorless, true)], &below);
+        assert_eq!(kept.reason, AnswerabilityReasonV1::InsufficientSignal);
+    }
+
     #[test]
     fn partial_natural_wording_is_answerable() {
         let result = answerability(
@@ -395,6 +449,7 @@ mod tests {
                 },
                 true,
             )],
+            &passed_floor(),
         );
 
         assert_eq!(result.reason, AnswerabilityReasonV1::Answerable);
@@ -413,6 +468,7 @@ mod tests {
                 },
                 true,
             )],
+            &passed_floor(),
         );
 
         assert_eq!(result.reason, AnswerabilityReasonV1::LowQuality);
@@ -431,6 +487,7 @@ mod tests {
                 },
                 false,
             )],
+            &passed_floor(),
         );
 
         assert_eq!(result.reason, AnswerabilityReasonV1::NoEligibleMatch);

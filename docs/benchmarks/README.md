@@ -79,7 +79,7 @@ Every suite row has the same keys; a value a suite cannot express is `null`, nev
 |---|---|---|---|
 | `query_p95` | `clean` (100k unique events, 500 questions, one answer each) | `query_p95_ms` | 95th percentile of one search's wall time through `search_federated`, the path every Memory API search runs. NFR-SLO-04 states the budget at 500 ms for 100k events. An in-memory run (`environment.in_memory: true`) measures retrieval without the filesystem; it is a regression signal, not a certification (`docs/shogunai-origin/memory-quality-verification.md` describes what certifies). |
 | `temporal_recall_at_1` | `temporal` (12 projects each restating a fact three times, A → B → A; present-tense question "where does {p} currently store its records") | `recall_at_1` | share of questions whose top result carries the fact asserted **last**. The earlier value is a genuine row that matches the words; ranking it first is a wrong answer to a present-tense question. |
-| `abstention_false_evidence` | `abstention` (chatter only; 500 questions about decisions no row ever made) | `false_evidence_rate` | share of unanswerable questions that still got rows back — the share of the time a downstream agent would be handed evidence for an answer that does not exist. Lower is better; `0.0` means the search abstained every time. |
+| `abstention_false_evidence` | `abstention` (chatter only; 500 questions about decisions no row ever made) | `false_evidence_rate` | share of unanswerable questions that still got rows back — the share of the time a downstream agent would be handed evidence for an answer that does not exist. Lower is better; `0.0` means the search abstained every time. The bench opts in to the relevance floor's empty result (`abstain_below_floor`, below); the floor itself is measured identically on every path. |
 | `multi_session_coverage_at_5` | `multi-session` (48 questions whose answer is two facts stated far apart, in different apps) | `coverage_at_5` | share of questions whose **whole** answer (both facts) was inside the top 5. Recall asks whether a part appeared; coverage asks whether the question became answerable. |
 | `omnimemeval` | OmniMemEval question set | — | `not_run`: the dataset is not bundled and this build has no reader/judge adapter. `SHOGUN_OMNIMEMEVAL_DIR` is the hook the adapter will read. |
 | `mem0-harness` | Mem0 public harness conversations | — | `not_run`, same reason; `SHOGUN_MEM0_HARNESS_DIR`. |
@@ -114,11 +114,28 @@ prefers its shorter sentence as well. The old value ranked first in every projec
 
 **Abstention false evidence (100% → 0.000).** Retrieval ORs the question's words
 and had no notion of "nothing here is relevant", so a question about the kestrel compliance audit
-returned every row that mentioned kestrel. `search_federated` now applies a **relevance floor**
-(`RELEVANCE_FLOOR_COVERAGE = 0.5`): below it, `hits` and `raw_event_ranks` are empty and
-`FederatedSearchResult::relevance` says why (`below_floor` / `no_candidates`); the Memory API's
-existing abstention signal (`AnswerabilityV1 { answerable: false, reason: no_eligible_match }`)
-follows from the empty result. The rule, per candidate among the `limit` best by score:
+returned every row that mentioned kestrel. `search_federated` now measures a **relevance floor**
+(`RELEVANCE_FLOOR_COVERAGE = 0.5`) on every search and reports the verdict in
+`FederatedSearchResult::relevance` (`passed` / `below_floor` / `no_candidates`, with the measured
+coverage). What a failing verdict does is the caller's choice, **opt-in per request**
+(`FederatedSearchOptions::abstain_below_floor`, default off):
+
+- **opted in — the bench** (`crates/memory-bench`, `--path federated`): `hits` and
+  `raw_event_ranks` come back empty, so a question nothing in memory answers hands a reader no
+  rows. This is the right contract for a consumer that reads every returned row as evidence, and
+  it is what `abstention_false_evidence` measures.
+- **not opted in — the daemon's paths** (`Db::search_request`, which `memory.search` on MCP /
+  REST / CLI, the AI keyword phase and the search box call; and `assemble_context`, the Notch's
+  suggestion and context assembly): the best candidates are still returned, and the verdict
+  travels with them (`SearchResponseV1::relevance`). A failing floor is expressed through the
+  answerability signal instead of by emptying the result: a top hit that would otherwise read as
+  answerable is reported `answerable: false, reason: low_quality`, and the weaker verdicts
+  (`insufficient_signal`, `missing_anchor`, `no_eligible_match`) are left as they were. A generic
+  question ("what happened in the meeting") therefore keeps its suggestions with a conservative
+  verdict, as the daemon's tests pin, and an agent reading `memory.search` sees both the rows
+  and that they do not cover the question.
+
+The rule, per candidate among the `limit` best by score:
 
 - coverage = idf-weighted share of the question's **content** words the row contains. Source cues
   ("meeting", "standup", 会議 …) are never required but count when matched; a word no row in scope
@@ -134,10 +151,20 @@ Calibration: on the bench's abstention questions the best chatter row covers one
 (0.25) or — "hardware budget" against "budget spreadsheet for kestrel" — two of four (0.50, two
 words missing); the answer-bearing workloads cover two of three or more (≥ 0.67). On the golden
 search eval (`docs/shogunai-origin/search-eval.md`, 132 cases, `cargo test -p shogun-core
---features db --test search_golden_eval`) the result is unchanged to the third decimal: R@5 0.985,
-R@10 0.989, MRR 0.948, zero-result 0.000, answerable 0.873, false-answerable 0.000. An earlier
-draft of the floor (plain coverage ≥ 0.5, cues excluded) blanked two positives there ("Orchid の
-ローンチ延期", "standup notes yesterday"); the cue and script rules above are what fixed them.
+--features db --test search_golden_eval`) the result is unchanged to the third decimal — with the
+floor folded into answerability as described above, re-measured 2026-10-25: R@5 0.985, R@10
+0.989, MRR 0.948, zero-result 0.000, answerable 0.873, false-answerable 0.000. An earlier draft
+of the floor (plain coverage ≥ 0.5, cues excluded) blanked two positives there ("Orchid の
+ローンチ延期", "standup notes yesterday"); the cue and script rules above are what fixed them. A
+first version of the floor emptied the result on every path; that broke the daemon's suggestion
+contract (generic and over-long questions must still return candidates) and was replaced by the
+opt-in the same day.
+
+One side effect of the recency cue was also corrected: the cue words ("now", "latest",
+"currently") leave the search's lexical terms, but the chat's follow-up detection counts what a
+question names and must not read "When is the Orchid launch now?" as a two-word follow-up that
+borrows the previous turn's topic. It counts the cue words back in
+(`shogun_memory::search::is_recency_cue_word`); ranking and the floor are unaffected.
 
 ### Before → after
 
@@ -154,6 +181,13 @@ row used the old question wording, which on that search layer scores the same as
 | multi-session coverage@5 (48 questions) | 1.000 (20k) | 1.000 [1.000, 1.000] | 1.000 |
 | query p95, clean, in-memory (500 questions) | — (not measured before) | 6.68 ms [6.10, 7.26] | 22.12 ms |
 | query p95, clean, on-disk (500 questions) | 12.24 ms (100k; p50 7.53, R@1 0.932, MRR 0.965) | — | 21.87 ms (p50 13.56, R@1 0.932, MRR 0.965) |
+
+Re-measured on 2026-10-25 after the floor became opt-in (release, 20k × seeds 42–44, in memory,
+`--path federated`, the bench opted in): temporal recall@1 1.000 [1.000, 1.000], abstention
+false-evidence 0.000 [0.000, 0.000], multi-session coverage@5 1.000 [1.000, 1.000], query p95
+6.13 ms [3.04, 9.21]. The committed `benchmarks.json` keeps the ten-seed run; the quality values
+are identical, and the measured path is the same code (the opt-in only names what the bench was
+already getting).
 
 The SLO budget is 500 ms; the on-disk 100k p95 is 4.4% of it. Tokens per answer and the
 raw per-seed values are in `benchmarks.json`. The abstention "before" was taken with 100 questions
