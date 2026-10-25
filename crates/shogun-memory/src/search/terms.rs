@@ -347,12 +347,25 @@ fn is_temporal_word(word: &str) -> bool {
     matches!(
         word,
         "yesterday" | "today" | "tonight" | "tomorrow" | "ago" | "earlier" | "recently"
-    )
+    ) || is_latest_word(word)
 }
+
+/// Words that ask for the present state of something rather than for any mention of it
+/// ("latest", "currently", "now"). They are not searched for as text — a row rarely says
+/// "currently" — and they turn on newest-first ordering of equally matching rows
+/// (`super::query_asks_for_latest`, E12-T1).
+pub(crate) fn is_latest_word(word: &str) -> bool {
+    matches!(word, "latest" | "newest" | "currently" | "nowadays" | "now")
+}
+
+/// Japanese counterparts of [`is_latest_word`]: stripped from the terms like the relative dates
+/// (`最近` is in [`TEMPORAL_PHRASES_JA`] already) and read as a recency cue.
+pub(crate) const LATEST_PHRASES_JA: &[&str] = &["最新", "現在", "直近", "最近", "今は", "今の", "いまは", "いまの"];
 
 const TEMPORAL_PHRASES_JA: &[&str] = &[
     "一昨日", "おととい", "昨日", "きのう", "今日", "きょう", "本日", "今朝", "先々週", "先週",
     "今週", "来週", "先月", "今月", "来月", "今年", "去年", "昨年", "最近", "この前", "さっき",
+    "最新", "現在", "直近",
 ];
 
 /// Blank out Japanese relative-date phrases (`昨日`, `3日前`, `過去7日`) so they neither become

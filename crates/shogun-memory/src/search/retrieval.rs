@@ -816,7 +816,7 @@ pub fn search_meetings_in_range(
     Ok(hits)
 }
 
-fn is_meeting_cue(concept: &super::terms::Concept) -> bool {
+pub(crate) fn is_meeting_cue(concept: &super::terms::Concept) -> bool {
     let key = concept
         .surface
         .as_deref()

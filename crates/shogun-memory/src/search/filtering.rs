@@ -32,6 +32,21 @@ pub fn query_asks_about_screen(query: &str) -> bool {
     .any(|p| q.contains(p))
 }
 
+/// True when the question asks for the present state of something — "latest", "currently",
+/// "now", 最新, 現在 — rather than for any mention of it. `search_federated` then orders the rows
+/// that match the question equally well newest-first, by when each was last seen, so a value
+/// restated most recently outranks the one it replaced (E12-T1).
+pub fn query_asks_for_latest(query: &str) -> bool {
+    let normalized = super::terms::normalize(query);
+    let latin = normalized
+        .split(|character: char| !character.is_alphanumeric() || super::terms::is_cjk(character))
+        .any(|word| super::terms::is_latest_word(word) || word == "current");
+    latin
+        || super::terms::LATEST_PHRASES_JA
+            .iter()
+            .any(|phrase| normalized.contains(phrase))
+}
+
 /// Exact local calendar boundaries supplied by the OS-facing caller.
 ///
 /// Two boundaries are required because a local day can be 23 or 25 hours across DST changes.
