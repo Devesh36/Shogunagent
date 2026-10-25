@@ -144,7 +144,11 @@ pub fn token_registry(resolver: &dyn PrincipalResolver) -> TokenRegistry {
 /// gates are the wallet and the caps, not a plan), the in-process approval queue, no desktop gates.
 pub fn app_state(store: Arc<PrincipalStore>, resolver: Arc<dyn PrincipalResolver>, clock: Clock) -> AppState {
     let tokens = Arc::new(token_registry(resolver.as_ref()));
-    let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
+    // Approval ids are never reused across restarts: the in-process queue starts above every id
+    // an earlier process could have handed out (a thousand per millisecond of uptime), so a
+    // decision the principal's store persisted (V103) never names a later approval.
+    let seed = u64::try_from((clock)()).unwrap_or(0).saturating_mul(1_000).max(1);
+    let approvals = Arc::new(Mutex::new(ApprovalQueue::with_next_id(seed)));
     AppState::new(tokens, Arc::new(NoPrincipalBackend), approvals, clock)
         .with_entitlements(Arc::new(|| {
             shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0)

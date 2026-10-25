@@ -2475,6 +2475,13 @@ impl MemoryBackend for DbBackend {
         self.db.acl(operation, by)
     }
 
+    fn approval_ledger(
+        &self,
+        op: shogun_mcp::remote_approvals::LedgerOp<'_>,
+    ) -> Result<shogun_mcp::remote_approvals::LedgerReply, String> {
+        self.db.approval_ledger(op)
+    }
+
     fn principal_may_read(&self, grantee_principal: &str) -> bool {
         self.db.principal_may_read(grantee_principal)
     }

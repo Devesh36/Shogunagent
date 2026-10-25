@@ -652,7 +652,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             let answered = shogun_memory::actor::with_call_scope(scope, || match routed {
                 // E15: the approval summaries, from the queue and the ledger (never the body).
                 Routed::Read { tool: tool @ (crate::memory_api::Tool::ApprovalsList | crate::memory_api::Tool::ApprovalsGet), id } => {
-                    governance::approvals_read(&state, tool, id, principal.as_deref())
+                    governance::approvals_read(&state, backend.as_ref(), tool, id, principal.as_deref())
                 }
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
                 // A local action is answered here, before the queue (issue #779): a search runs,
@@ -808,20 +808,10 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                         None => rest::respond_with(&rreq, &tokens, &ent, backend.as_ref()),
                     }
                 }
+                // The queue's answer, else the decision the caller's store persisted (V103);
+                // multi-principal, only for the caller's own approvals.
                 Routed::ApprovalStatus { id } => {
-                    if let Some(store) = &state.approval_store {
-                        match store.with_queue(|queue| rest::poll_approval(id, queue, (state.clock)())) {
-                            Ok(body) => (200, body),
-                            Err(why) => (500, approval_store_error(&why)),
-                        }
-                    } else {
-                        match state.approvals.lock() {
-                            Ok(mut queue) => {
-                                (200, rest::poll_approval(id, &mut queue, (state.clock)()))
-                            }
-                            Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
-                        }
-                    }
+                    governance::approval_status(&state, backend.as_ref(), id, principal.as_deref())
                 }
                 // Discovery answers with the port actually bound, when the server knows it.
                 Routed::Status => (200, rest::status_body(state.port)),

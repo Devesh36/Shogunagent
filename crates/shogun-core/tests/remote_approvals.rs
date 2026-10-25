@@ -17,7 +17,7 @@ use shogun_cli::http::request;
 use shogun_core::daemon::Clock;
 use shogun_core::tenancy::{EnvKeyProvider, PrincipalStore, TokenPrincipalMap};
 use shogun_mcp::remote_approvals::{ApprovalSigner, RemoteApprovals};
-use shogun_mcp::server::{bind_local, serve_on};
+use shogun_mcp::server::{bind_local, serve_on, AppState};
 use shogun_memory::DbKey;
 
 const TOKEN_A: &str = "token-alice-0001";
@@ -47,23 +47,30 @@ fn now_ms() -> u64 {
     u64::try_from((wall_clock())()).unwrap()
 }
 
-fn boot() -> (u16, TempRoot) {
-    let dir = std::env::temp_dir().join(format!("shogun_remote_approvals_{}", std::process::id()));
+fn temp_root(tag: &str) -> TempRoot {
+    let dir = std::env::temp_dir().join(format!("shogun_remote_approvals_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let root = TempRoot(dir.canonicalize().unwrap());
+    TempRoot(dir.canonicalize().unwrap())
+}
+
+/// Start one server object over the principal files under `root` (a second call over the same
+/// root is a restart: fresh queue, fresh in-process ledger, the same stores).
+fn serve(root: PathBuf, configure: impl FnOnce(AppState) -> AppState + Send + 'static) -> u16 {
     let keys = EnvKeyProvider::with_default(DbKey::new([0x5a; 32]));
-    let store = Arc::new(PrincipalStore::new(root.0.clone(), Arc::new(keys), wall_clock(), 8));
+    let store = Arc::new(PrincipalStore::new(root, Arc::new(keys), wall_clock(), 8));
     let resolver = TokenPrincipalMap::parse(&format!("alice:{TOKEN_A}:claude-code,bob:{TOKEN_B}")).unwrap();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
-            let state = shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), wall_clock())
-                .with_admin_token(Some(ADMIN))
-                .with_remote_approvals(
-                    RemoteApprovals::default().with_base_url(Some(BASE.into())).with_signer(ApprovalSigner::new(KEY)),
-                );
+            let state = configure(
+                shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), wall_clock())
+                    .with_admin_token(Some(ADMIN))
+                    .with_remote_approvals(
+                        RemoteApprovals::default().with_base_url(Some(BASE.into())).with_signer(ApprovalSigner::new(KEY)),
+                    ),
+            );
             let listener = bind_local(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             tx.send(port).unwrap();
@@ -72,7 +79,12 @@ fn boot() -> (u16, TempRoot) {
     });
     let port = rx.recv().unwrap();
     std::thread::sleep(Duration::from_millis(300));
-    (port, root)
+    port
+}
+
+fn boot() -> (u16, TempRoot) {
+    let root = temp_root("main");
+    (serve(root.0.clone(), |state| state), root)
 }
 
 /// One request with extra headers; returns (status, raw headers, body).
@@ -210,4 +222,44 @@ fn a_gateway_decides_once_with_a_signed_token_and_an_agent_never_does() {
     // Bob's audit log holds none of it.
     let bob = request(port, "GET", "/v1/audit", Some(TOKEN_B), None).unwrap();
     assert_eq!(json_of(&bob.body)["records"], json!([]), "{}", bob.body);
+}
+
+/// V103: the spent nonce and the decision live in the principal's store, so a restarted server
+/// (a new server object over the same files, with an empty queue and an empty in-process ledger)
+/// still refuses the replayed token and still reports who decided.
+#[test]
+fn a_restart_forgets_neither_the_spent_nonce_nor_the_decision() {
+    let root = temp_root("restart");
+    let port = serve(root.0.clone(), |state| state);
+    let signer = ApprovalSigner::new(KEY).unwrap();
+    let (id, token, _url) = send(port, "aiko@example.com");
+    let claims = signer.verify(&token, now_ms()).unwrap();
+    let (status, body) = decide(port, id, &token, &claims.nonce, "approve");
+    assert_eq!(status, 200, "{body}");
+    // This build's REST face carries no executor in this configuration: the approval stays
+    // approved and says so.
+    assert_eq!(json_of(&body)["next_action"], "execute_unavailable", "{body}");
+
+    let restarted = serve(root.0.clone(), |state| state);
+    let (status, body) = decide(restarted, id, &token, &claims.nonce, "approve");
+    assert_eq!(status, 409, "{body}");
+    assert!(body.contains("token_replayed"), "{body}");
+    // A reject replay of the same token is the same replay.
+    assert_eq!(decide(restarted, id, &token, &claims.nonce, "reject").0, 409);
+
+    // The decision survives: the summary and the poll read it from Alice's store.
+    let after = request(restarted, "GET", &format!("/v1/approvals/{id}"), Some(TOKEN_A), None).unwrap();
+    assert_eq!(after.status, 200, "{}", after.body);
+    let approval = &json_of(&after.body)["approval"];
+    assert_eq!((approval["status"].as_str(), approval["decision"]["decided_by"].as_str()), (Some("approved"), Some("web:approval-page")));
+    let poll = request(restarted, "GET", &format!("/v1/actions/status/{id}"), Some(TOKEN_A), None).unwrap();
+    let poll = json_of(&poll.body);
+    assert_eq!((poll["status"].as_str(), poll["next_action"].as_str()), (Some("approved"), Some("execute_unavailable")));
+    // Bob's store holds none of it.
+    assert_eq!(request(restarted, "GET", &format!("/v1/approvals/{id}"), Some(TOKEN_B), None).unwrap().status, 404);
+    let bob_poll = request(restarted, "GET", &format!("/v1/actions/status/{id}"), Some(TOKEN_B), None).unwrap();
+    assert_eq!(json_of(&bob_poll.body)["status"], "unknown", "{}", bob_poll.body);
+    // An approval queued after the restart gets a fresh id: a persisted decision never names it.
+    let (fresh, _, _) = send(restarted, "kenji@example.com");
+    assert!(fresh > id, "{fresh} <= {id}");
 }

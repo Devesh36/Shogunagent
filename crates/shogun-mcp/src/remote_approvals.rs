@@ -313,6 +313,83 @@ impl ApprovalLedger {
     }
 }
 
+/// One operation on the principal's durable approval ledger (V103,
+/// [`shogun_memory::approval_ledger`]): the spent nonces and the decisions, kept in the
+/// principal's own store so a restart forgets neither.
+#[derive(Debug, Clone, Copy)]
+pub enum LedgerOp<'a> {
+    /// Spend a decision token's nonce. Answers [`LedgerReply::Done`]`(false)` for a replay.
+    SpendNonce { nonce: &'a str, approval_id: u64, expires_ms: u64, now_ms: u64 },
+    /// Record a decision. `Done(false)` when the approval already had one.
+    Record(&'a shogun_memory::approval_ledger::DecisionRow),
+    /// The recorded decision on an approval.
+    Get(u64),
+    /// Claim an approved action for execution, once (`pending` → `executing`).
+    Claim(u64),
+    /// Settle a claimed execution (`executing` → `sent` / `failed`).
+    Settle { approval_id: u64, sent: bool, reason_class: Option<&'a str>, now_ms: u64 },
+}
+
+/// What a [`LedgerOp`] answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LedgerReply {
+    Done(bool),
+    Row(Option<shogun_memory::approval_ledger::DecisionRow>),
+}
+
+/// The status a persisted decision reports when the queue no longer knows the approval (after a
+/// restart): the same names `actions.status` uses.
+pub fn persisted_status(row: &shogun_memory::approval_ledger::DecisionRow) -> &'static str {
+    use shogun_memory::approval_ledger::Execution;
+    if !row.approve {
+        return "rejected";
+    }
+    match row.execution {
+        Execution::Sent => "sent",
+        Execution::Failed => "send_failed",
+        // Claimed by an executor that never settled it (a crash mid-send): delivery unknown.
+        Execution::Executing => "outcome_unknown",
+        Execution::None | Execution::Pending | Execution::Unavailable => "approved",
+    }
+}
+
+/// The `next_action` of an approval's status: `execute_unavailable` for an approved action no
+/// executor in this build will carry out, else none.
+pub fn status_next_action(status: &str, executor: bool) -> Option<&'static str> {
+    match status {
+        "approved" if !executor => Some("execute_unavailable"),
+        _ => None,
+    }
+}
+
+/// The redacted summary of a decision the ledger persisted, for an approval the queue and the
+/// in-process ledger no longer know (after a restart). Body-free, like every terminal row.
+pub fn persisted_summary(row: &shogun_memory::approval_ledger::DecisionRow, executor: bool) -> Value {
+    let status = persisted_status(row);
+    let decided_ms = u64::try_from(row.decided_at).unwrap_or(0);
+    let mut out = json!({
+        "approval_id": row.approval_id,
+        "status": status,
+        "level": row.level,
+        "decision": {
+            "decision": if row.approve { "approve" } else { "reject" },
+            "decided_by": row.decided_by,
+            "decided_at": iso_ms(decided_ms),
+            "via": row.via,
+        },
+    });
+    if let Some(reason) = &row.reason_class {
+        out["reason"] = Value::String(reason.clone());
+    }
+    if let Some(at) = row.executed_at {
+        out["executed_at"] = iso(u64::try_from(at).unwrap_or(0));
+    }
+    if let Some(next) = status_next_action(status, executor) {
+        out["next_action"] = Value::String(next.into());
+    }
+    out
+}
+
 /// The remote-approval configuration one process shares across its faces: where humans approve,
 /// the signing key, and the ledger. Cheap to clone.
 #[derive(Debug, Clone, Default)]

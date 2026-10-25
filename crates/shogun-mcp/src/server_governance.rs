@@ -20,8 +20,14 @@ use subtle::ConstantTimeEq;
 use super::AppState;
 use crate::backend::MemoryBackend;
 use crate::memory_api::Tool;
-use crate::remote_approvals::{self, Applied, DecisionRecord, RemoteDecision};
+use crate::remote_approvals::{self, Applied, DecisionRecord, LedgerOp, LedgerReply, RemoteDecision};
 use crate::rest::{Method, Routed};
+use shogun_memory::approval_ledger::{DecisionRow, Execution};
+
+/// The 503 of a decision the principal's store cannot record (V103): nothing was decided.
+fn ledger_unavailable() -> (u16, String) {
+    error(503, "approval_ledger_unavailable", "The principal's store cannot record the decision right now; nothing was decided. Retry.")
+}
 
 /// The 403 body of a cross-principal call that is not a world-state read.
 pub(super) const CROSS_READ_ONLY: &str = r#"{"error":"cross_principal_read_only","message":"A teammate's store answers world-state reads only: no writes, scratch files, approvals, audit log or grants.","next_action":null}"#;
@@ -91,6 +97,11 @@ impl AppState {
 
     fn multi(&self) -> bool {
         self.principals.is_some()
+    }
+
+    /// Whether this server carries out an approved action itself.
+    pub(super) fn executes(&self) -> bool {
+        false
     }
 
     /// Whether `bearer` is the operator's admin credential (constant-time).
@@ -199,15 +210,66 @@ fn summary_by_token(state: &AppState, req: &Incoming<'_>, id: u64) -> (u16, Stri
     let Some(token) = req.approval_token else {
         return error(401, "unauthorized", "Present the approval token.");
     };
-    if let Err(refusal) = verify_token(state, token, id) {
-        return refusal;
-    }
+    let claims = match verify_token(state, token, id) {
+        Ok(claims) => claims,
+        Err(refusal) => return refusal,
+    };
     let now = state.now_u64();
     match state.on_queue(|queue| remote_approvals::summary(queue, state.remote.ledger(), id, now)) {
         Ok(Some(summary)) => (200, json!({ "approval": summary }).to_string()),
-        Ok(None) => error(404, "not_found", "No such approval."),
+        // After a restart the queue and the in-process ledger forget; the principal's store
+        // still holds the decision (V103).
+        Ok(None) => match state.store_of(claims.principal.as_deref()).ok().and_then(|store| persisted(store.as_ref(), id)) {
+            Some(row) => (200, json!({ "approval": remote_approvals::persisted_summary(&row, state.executes()) }).to_string()),
+            None => error(404, "not_found", "No such approval."),
+        },
         Err(refusal) => refusal,
     }
+}
+
+/// The decision the principal's store persisted for `id`, if any.
+fn persisted(backend: &dyn MemoryBackend, id: u64) -> Option<DecisionRow> {
+    match backend.approval_ledger(LedgerOp::Get(id)) {
+        Ok(LedgerReply::Row(row)) => row,
+        _ => None,
+    }
+}
+
+/// `actions.status` on REST: the queue's answer for an approval the caller may see, else the
+/// decision the caller's store persisted, else `unknown`. Multi-principal: an approval another
+/// principal queued reads as `unknown`, exactly like one that never existed.
+pub(super) fn approval_status(state: &AppState, backend: &dyn MemoryBackend, id: u64, principal: Option<&str>) -> (u16, String) {
+    let now = (state.clock)();
+    let owner_ok = !state.multi() || state.remote.ledger().get(id).is_some_and(|e| e.principal.as_deref() == principal);
+    let polled = if owner_ok {
+        match state.on_queue(|queue| crate::rest::poll_approval(id, queue, now)) {
+            Ok(body) => body,
+            Err(refusal) => return refusal,
+        }
+    } else {
+        json!({ "approval_id": id, "status": "unknown" }).to_string()
+    };
+    let mut value: Value = serde_json::from_str(&polled).unwrap_or_else(|_| json!({ "approval_id": id, "status": "unknown" }));
+    if value["status"] == "unknown" {
+        if let Some(row) = persisted(backend, id) {
+            value["status"] = Value::String(remote_approvals::persisted_status(&row).into());
+            if let Some(reason) = &row.reason_class {
+                value["reason"] = Value::String(reason.clone());
+            }
+        }
+    } else if value["status"] == "approved" || value["status"] == "send_failed" {
+        // The queue keeps only allowlisted reasons; the store has the failure class.
+        if value.get("reason").is_none() {
+            if let Some(reason) = persisted(backend, id).and_then(|row| row.reason_class) {
+                value["reason"] = Value::String(reason);
+            }
+        }
+    }
+    let status = value["status"].as_str().unwrap_or("unknown").to_string();
+    if let Some(next) = remote_approvals::status_next_action(&status, state.executes()) {
+        value["next_action"] = Value::String(next.into());
+    }
+    (200, value.to_string())
 }
 
 fn decide(state: &AppState, req: &Incoming<'_>, id: u64) -> (u16, String) {
@@ -231,6 +293,23 @@ fn decide(state: &AppState, req: &Incoming<'_>, id: u64) -> (u16, String) {
             }
             if !state.remote.ledger().consume(&claims.nonce, claims.expires_ms, now) {
                 return error(409, "token_replayed", "This approval token was already used. Each link decides once.");
+            }
+            // The in-process ledger forgets on restart; the principal's store does not (V103). A
+            // nonce the store cannot record is refused: no decision without a durable record.
+            let spent = state.store_of(claims.principal.as_deref()).and_then(|store| {
+                store
+                    .approval_ledger(LedgerOp::SpendNonce {
+                        nonce: &claims.nonce,
+                        approval_id: id,
+                        expires_ms: claims.expires_ms,
+                        now_ms: now,
+                    })
+                    .map_err(|_| ledger_unavailable())
+            });
+            match spent {
+                Ok(LedgerReply::Done(true)) => {}
+                Ok(_) => return error(409, "token_replayed", "This approval token was already used. Each link decides once."),
+                Err(refusal) => return refusal,
             }
             (claims.principal, "token")
         }
@@ -262,29 +341,45 @@ fn decide(state: &AppState, req: &Incoming<'_>, id: u64) -> (u16, String) {
         Applied::Expired => "expired",
         Applied::NotPending => "not_pending",
     };
+    let store = state.store_of(principal.as_deref()).ok();
     if matches!(applied, Applied::Approved | Applied::Rejected) {
         state.remote.ledger().decide(
             id,
             DecisionRecord { decision: body.decision, decided_by: body.decided_by.clone(), decided_ms: now, via },
         );
+        // The durable record (V103): a restart still knows who decided and what came of it.
+        let approve = body.decision == RemoteDecision::Approve;
+        let execution = if approve { Execution::Unavailable } else { Execution::None };
+        let recorded = DecisionRow::new(id, approve, &body.decided_by, i64::try_from(now).unwrap_or(i64::MAX), via, &level, execution)
+            .map_err(|_| "approval_ledger_unavailable".to_string())
+            .and_then(|row| match &store {
+                Some(store) => store.approval_ledger(LedgerOp::Record(&row)).map(|_| ()),
+                None => Err("approval_ledger_unavailable".to_string()),
+            });
+        if recorded.is_err() {
+            eprintln!("shogun-api: approval ledger record failed for approvals.decide ({outcome})");
+        }
     }
-    if let Ok(store) = state.store_of(principal.as_deref()) {
+    if let Some(store) = &store {
         state.audit(store.as_ref(), (&body.decided_by, principal.as_deref()), ("approvals.decide", &level, outcome), req.request_id);
     }
     match applied {
-        Applied::Approved | Applied::Rejected => (
-            200,
-            json!({
-                "approval_id": id,
-                "decision": body.decision.as_str(),
-                "status": if body.decision == RemoteDecision::Approve { "approved" } else { "rejected" },
-                "decided_by": body.decided_by,
-                "decided_at": remote_approvals::iso_ms(now),
-                "via": via,
-                "next_action": Value::Null,
-            })
-            .to_string(),
-        ),
+        Applied::Approved | Applied::Rejected => {
+            let status = if body.decision == RemoteDecision::Approve { "approved" } else { "rejected" };
+            (
+                200,
+                json!({
+                    "approval_id": id,
+                    "decision": body.decision.as_str(),
+                    "status": status,
+                    "decided_by": body.decided_by,
+                    "decided_at": remote_approvals::iso_ms(now),
+                    "via": via,
+                    "next_action": remote_approvals::status_next_action(status, false),
+                })
+                .to_string(),
+            )
+        }
         Applied::Expired => error(410, "approval_expired", "The approval window elapsed before the decision; nothing was approved. Ask the agent to submit it again."),
         Applied::NotPending => error(409, "not_pending", "This approval is no longer pending: it was already decided, timed out, or never existed."),
     }
@@ -367,21 +462,38 @@ fn teams(state: &AppState, req: &Incoming<'_>) -> (u16, String) {
 
 /// `approvals.list` / `approvals.get` on REST (a bearer read). Multi-principal: only the caller's
 /// principal's approvals.
-pub(super) fn approvals_read(state: &AppState, tool: Tool, id: Option<i64>, principal: Option<&str>) -> (u16, String) {
+pub(super) fn approvals_read(
+    state: &AppState,
+    backend: &dyn MemoryBackend,
+    tool: Tool,
+    id: Option<i64>,
+    principal: Option<&str>,
+) -> (u16, String) {
     let now = state.now_u64();
     let multi = state.multi();
     let ledger = state.remote.ledger();
+    let executes = state.executes();
     let answered = state.on_queue(|queue| match tool {
         Tool::ApprovalsGet => {
             let Some(id) = id.and_then(|id| u64::try_from(id).ok()).filter(|id| *id > 0) else {
                 return error(404, "not_found", "No such approval.");
             };
-            if multi && ledger.get(id).and_then(|e| e.principal).as_deref() != principal {
+            let entry = ledger.get(id);
+            if multi && entry.as_ref().is_some_and(|e| e.principal.as_deref() != principal) {
                 return error(404, "not_found", "No such approval.");
             }
-            match remote_approvals::summary(queue, ledger, id, now) {
+            // Multi-principal: the shared queue answers only for an approval the ledger says is
+            // the caller's; anything else is read from the caller's own store (a file boundary).
+            let from_queue = if multi && entry.is_none() { None } else { remote_approvals::summary(queue, ledger, id, now) };
+            match from_queue {
                 Some(summary) => (200, json!({ "tool": "approvals.get", "approval": summary }).to_string()),
-                None => error(404, "not_found", "No such approval."),
+                None => match persisted(backend, id) {
+                    Some(row) => (
+                        200,
+                        json!({ "tool": "approvals.get", "approval": remote_approvals::persisted_summary(&row, executes) }).to_string(),
+                    ),
+                    None => error(404, "not_found", "No such approval."),
+                },
             }
         }
         _ => {

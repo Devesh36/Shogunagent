@@ -391,6 +391,14 @@ The sidecar's approval decision API (`crates/shogun-mcp/src/remote_approvals.rs`
   the gateway only). Claims: approval id, principal, expiry (the approval's own 10-minute window),
   nonce. A decision repeats the nonce; the sidecar spends it, so a replay is `409 token_replayed`,
   an expired token `410 token_expired`, a forged one `403 invalid_token`.
+- **Durable ledger** (V103 `approval_decisions`, `approval_spent_nonces`, in the principal's own
+  store). The spent nonce is written to the principal's store before anything is decided, and the
+  decision (who, when, how, tier, execution state) right after, so a restarted sidecar still
+  refuses a replayed token and still answers `approvals.get` / `actions.status` for a decided
+  approval. A store that cannot record the nonce refuses the decision (`503
+  approval_ledger_unavailable`, nothing decided). In multi-principal mode approval ids start above
+  every id an earlier process handed out, so a persisted decision never names a later approval,
+  and `actions.status` answers `unknown` for another principal's approval.
 - **Approved** is a terminal status (`actions.status` reads `approved`): a human confirmed with the
   dedicated button's authority; the executor that owns the action carries it out. The decision is
   recorded with `decided_by` and the time in the ledger and in the audit log.
