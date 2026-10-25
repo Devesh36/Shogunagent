@@ -21,6 +21,18 @@ The ShogunAgent router — "OpenRouter for Agents" (README §7, §11): one base 
 
 Also: `GET /health`, `GET /v1/router/catalog` (the content-hashed manifest), `POST /mcp` (JSON-RPC: `initialize`, `ping`, `tools/list`, `tools/call`). Every response carries `Mcp-Method` and, for a tool call, `Mcp-Name`, which is what `apps/api` meters on without reading bodies (invariant 10).
 
+### Open catalog (E29)
+
+Public, no key, generated from the compiled catalog and the live health window (`src/open-catalog.ts`):
+
+| Route | What |
+|---|---|
+| `GET /v1/catalog` | every listed endpoint: price (`quote_micro_usd`, usage model, failures and empty results $0), health (success rate, p50/p95, `observed` or `declared`), categories, `first_party` label, permission level, data-handling statement, entry hash; plus the score formula, weights and the no-self-preferencing policy. Filters: `?category=`, `?provider=`, `?first_party=true|false` |
+| `GET /v1/catalog/{tool_id}` | one entry with its description, exclusions, notes, input/output JSON Schema and the formula |
+| `GET /catalog` | the same list as a server-rendered HTML page: no JavaScript, every value escaped, `Content-Security-Policy: default-src 'none'` |
+
+Legal name, contact and payout reference from `provider.json` are not in the compiled catalog, so they cannot reach these routes; `test/open-catalog.test.ts` checks every manifest's values against every public body.
+
 ### discover
 
 ```bash
@@ -113,6 +125,8 @@ curl -s -X POST http://localhost:8787/v1/router/run \
 
 Each run emits one `ToolRunRecord { ts, actor, tool_id, task_hint, outcome, cost_micro_usd, latency_ms, hint_followed }` to the `RunLogSink` (no bodies; `actor` is a hash of the key).
 
+Each run that reserved also settles exactly once with a `RunSettlement { format, run_id, ts, tool_id, provider_id, first_party, payout_account_ref, outcome, quantity, provider_micro_usd }` (E29): `outcome` is `ok`, `empty`, `provider_error` or `transport_error`, and `provider_micro_usd` is the provider's price for an `ok` run and 0 otherwise. The settlement has no actor and no body; `run_id` is the receiver's idempotency key. apps/api turns it into the provider's daily accrual and computes our 5% take from its own rate table (docs/api/payouts.md).
+
 ### MCP
 
 ```bash
@@ -151,7 +165,8 @@ Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the conte
 
 | Interface | Default | Production home |
 |---|---|---|
-| `MeteringClient` (`identify`, `reserve`, `settle`) | `InMemoryMeteringClient` — `sa_` keys, $1 default balance, 401 for anonymous metered runs, x402-shaped 402 | apps/api wallet (E9) |
+| `MeteringClient` (`identify`, `reserve`, `settle(reservation, cost, settlement?)`) | `InMemoryMeteringClient` — `sa_` keys, $1 default balance, 401 for anonymous metered runs, x402-shaped 402; forwards each run's settlement to its `settlements` sink | apps/api wallet (E9) |
+| `SettlementSink` (E29, `src/settlement.ts`) | none (development); `InMemorySettlementSink` in tests | `HttpSettlementSink` → apps/api `POST /v1/internal/router/settlements` (`ROUTER_SETTLEMENT_URL` + secret `ROUTER_SETTLEMENT_TOKEN`), the provider payout ledger (docs/api/payouts.md) |
 | `RunLogSink` | `InMemoryRunLogSink` | `tool_runs` (V94) in the principal's store |
 | `PersonalStore` (behind `PersonalRanker`, E20) | `InMemoryPersonalStore` | the principal's `tool_runs` (V94) via the sidecar — never a hosted shared DB |
 | `IdempotencyStore` | `InMemoryIdempotencyStore` (24 h TTL, bounded) | the principal's store — never a hosted DB (invariant 2) |

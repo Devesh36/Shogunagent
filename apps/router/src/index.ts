@@ -10,6 +10,8 @@ export { handleMcp, mcpTools } from "./mcp.js";
 export { authorize, buildScopeTable, levelFor, isExternalSend, type Level, type ScopeTable } from "./scope.js";
 export { createFetchTransport, createReplayTransport, TransportError, type Transport, type TransportCall } from "./transport.js";
 export { InMemoryMeteringClient, type MeteringClient, type PaymentRequired, type Quote } from "./metering.js";
+export { buildSettlement, HttpSettlementSink, InMemorySettlementSink, payoutRefOf, RUN_SETTLEMENT_KEYS, SETTLEMENT_FORMAT, type RunSettlement, type SettledOutcome, type SettlementSink } from "./settlement.js";
+export { openCatalog, openCatalogDetail, openCatalogHtml, OPEN_CATALOG_FORMAT, type OpenCatalogDocument, type OpenCatalogEntry } from "./open-catalog.js";
 export { InMemoryRunLogSink, noopRunLogSink, TOOL_RUN_RECORD_KEYS, type RunLogSink, type ToolRunRecord } from "./runlog.js";
 export { InMemoryIdempotencyStore, type IdempotencyStore } from "./idempotency.js";
 export { InMemoryHealthStore, noopHealthStore, type HealthStore } from "./health.js";

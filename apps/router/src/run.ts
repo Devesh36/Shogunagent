@@ -23,6 +23,7 @@ import type { PersonalRanker } from "./personal.js";
 import { clampTaskHint, type RunLogSink, type RunOutcome } from "./runlog.js";
 import { authorize, type Level } from "./scope.js";
 import type { Secret } from "./secret.js";
+import { buildSettlement, type SettledOutcome } from "./settlement.js";
 import { TransportError, type Transport } from "./transport.js";
 import { settleUsage, type Usage, ZERO_USAGE } from "./usage.js";
 import type { RunVerbInput } from "./verbs.js";
@@ -231,6 +232,13 @@ export async function run(deps: RunDeps, call: RunCall): Promise<RunResult> {
     return fail("payment_required", "insufficient balance for this run", "top_up", "payment_required", { payment: reservation.payment, hints: hints() });
   }
 
+  // The run id is minted once the run is committed to: it names the result, and it is the
+  // settlement's idempotency key at the payout ledger (E29, src/settlement.ts). Every run that
+  // reserved settles once, failures and empty results at $0 included.
+  const runId = randomId();
+  const settle = (outcome: SettledOutcome, cost: number, quantity: number): Promise<void> =>
+    deps.metering.settle(reservation.reservation_id, cost, buildSettlement({ runId, ts: start, toolId, provider: def.provider, endpoint: def.endpoint, outcome, quantity, costMicroUsd: cost }));
+
   // 8. execute. The transport injects the provider credential; the engine never holds it.
   const request = def.endpoint.input.toRequest ? def.endpoint.input.toRequest({ input, request: { method: def.endpoint.request.method, path: def.endpoint.request.path } }) : defaultRequest(def.endpoint, input);
   const providerRef = { id: def.provider.id, auth: def.provider.auth, baseUrl: def.provider.request.baseUrl, ...(def.provider.request.baseUrlEnv ? { baseUrlEnv: def.provider.request.baseUrlEnv } : {}) };
@@ -240,7 +248,7 @@ export async function run(deps: RunDeps, call: RunCall): Promise<RunResult> {
   try {
     response = await deps.transport.execute({ provider: providerRef, request, ...callerForwarding });
   } catch (e) {
-    await deps.metering.settle(reservation.reservation_id, 0);
+    await settle("transport_error", 0, 0);
     deps.health.observe(toolId, { latency_ms: now() - execStart, ok: false });
     if (e instanceof TransportError) {
       if (e.code === "caller_bearer_missing") return fail("provider_unavailable", "this tool reads the user's own state; send your agent key as the bearer", "authenticate", "transport_error");
@@ -252,7 +260,7 @@ export async function run(deps: RunDeps, call: RunCall): Promise<RunResult> {
   const execLatency = now() - execStart;
   const failed = def.endpoint.output.isFailure ? def.endpoint.output.isFailure(response) : response.status >= 400;
   if (failed) {
-    await deps.metering.settle(reservation.reservation_id, 0);
+    await settle("provider_error", 0, 0);
     deps.health.observe(toolId, { latency_ms: execLatency, ok: false });
     const h = hints();
     return fail("upstream_error", `the provider answered with status ${response.status}; nothing was charged`, h.length ? "try_alternative" : "retry_after", "provider_error", { hints: h });
@@ -261,13 +269,13 @@ export async function run(deps: RunDeps, call: RunCall): Promise<RunResult> {
   // 9. map, settle, record.
   const output: Json = def.endpoint.output.fromResponse ? def.endpoint.output.fromResponse({ input, response }) : response.body;
   const usage = settleUsage(def.endpoint, { input, response, output });
-  await deps.metering.settle(reservation.reservation_id, usage.cost_micro_usd);
+  await settle(usage.quantity === 0 ? "empty" : "ok", usage.cost_micro_usd, usage.quantity);
   deps.health.observe(toolId, { latency_ms: execLatency, ok: true });
   const body: RunOkBody = {
     resultType: "result",
     result: output,
     tool_id: toolId,
-    run_id: randomId(),
+    run_id: runId,
     permission_level: level,
     replayed: false,
     usage,

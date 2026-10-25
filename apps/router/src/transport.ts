@@ -9,6 +9,7 @@
  */
 import type { Json, ProviderAuth, RunRequest } from "../connectors/types.js";
 import type { Secret } from "./secret.js";
+import type { RunSettlement } from "./settlement.js";
 
 export interface ProviderRef {
   id: string;
@@ -127,6 +128,33 @@ export function createFetchTransport(opts: FetchTransportOptions): Transport {
       }
       return { status: res.status, body };
     },
+  };
+}
+
+/**
+ * The settlement poster (E29): POSTs run settlements to apps/api's payout ledger
+ * (`POST /v1/internal/router/settlements`). Lives here because this module is the router's only
+ * egress and the only reader of the secret map: `ROUTER_SETTLEMENT_TOKEN` is read at send time
+ * and never leaves this function. Settlements are content-free (src/settlement.ts).
+ */
+export function createSettlementPoster(opts: { env: CredentialEnv; url: string; fetch?: typeof fetch; timeoutMs?: number }): (settlements: RunSettlement[]) => Promise<{ status: number }> {
+  const doFetch = opts.fetch ?? fetch;
+  return async (settlements) => {
+    const token = opts.env["ROUTER_SETTLEMENT_TOKEN"];
+    if (!token) throw new TransportError("credential_missing", "ROUTER_SETTLEMENT_TOKEN is not configured");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10_000);
+    try {
+      const res = await doFetch(opts.url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ settlements }),
+        signal: controller.signal,
+      });
+      return { status: res.status };
+    } finally {
+      clearTimeout(timer);
+    }
   };
 }
 
