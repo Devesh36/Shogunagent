@@ -212,6 +212,7 @@ README.ja.md               This document (Japanese)
 CLAUDE.md                  Rules for working in this repository
 crates/                    Rust workspace migrated from ShogunAI (engine, MCP/REST/CLI, evals)
 apps/api/                  Gateway and relay (Hono on Cloudflare Workers + Postgres)
+apps/web/                  shogunagent.com: agent-first landing page (llms.txt, index.md and HTML from one source)
 packages/config/           Shared config
 scripts/                   Invariant guards and the feature-matrix runner
 docs/implementation-plan.md  Epics and tasks per phase, with acceptance criteria

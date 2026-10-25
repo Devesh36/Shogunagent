@@ -213,6 +213,7 @@ README.ja.md               本文書（日本語）
 CLAUDE.md                  このリポジトリで作業する際のルール
 crates/                    ShogunAI から移行した Rust ワークスペース（エンジン、MCP/REST/CLI、評価）
 apps/api/                  ゲートウェイと中継（Cloudflare Workers + Postgres 上の Hono）
+apps/web/                  shogunagent.com：エージェントファーストのランディング（llms.txt・index.md・HTML を単一ソースから生成）
 packages/config/           共有設定
 scripts/                   不変条件ガードと feature matrix 実行スクリプト
 docs/implementation-plan.md  フェーズごとのエピックとタスク、受け入れ条件

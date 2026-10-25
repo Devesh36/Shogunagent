@@ -1,0 +1,30 @@
+// shogunagent.com: static assets (dist/, built by `pnpm build`) behind the small negotiation
+// Worker in src/worker.js. Separate from apps/api's Worker: no database, no secrets, no bodies.
+//
+//   pnpm --filter @shogun-ai/web build && pnpm --filter @shogun-ai/web deploy
+//
+// The domain shogunagent.com is registered; add it as a Cloudflare zone, then the two routes
+// below attach on deploy. `api.shogunagent.com` is reserved for apps/api (Phase 1) and is not
+// served by this Worker.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shogunagent-web",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-03-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "shogunagent.com", "custom_domain": true },
+    { "pattern": "www.shogunagent.com", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // The Worker runs for every request so `/` can be answered with Markdown when asked for it.
+    "run_worker_first": true,
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  // Nothing to log: the Worker reads no body and keeps no state. Off.
+  "observability": { "enabled": false }
+}

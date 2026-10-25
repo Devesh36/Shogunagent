@@ -226,6 +226,7 @@
 | E10-T8 | `benchmarks.json`（reader、judge、seed、トークン、コスト、p95） | `crates/memory-bench` 出力 | E12 の出力から生成 |
 | E10-T9 | Claude Code プラグイン（`.claude-plugin/marketplace.json`）、Glama / Smithery 掲載（`smithery.yaml`、`/.well-known/mcp-config`） | リポジトリ root | 掲載が確認できる（手動） |
 | E10-T10 | `npx shogunagent`：ローカルサイドカーを起こし、見つけた AI アプリ（Claude Code / Codex / Cursor）に MCP 設定を書く（ShogunAI の `client_install` を移植、`read` のみ） | `packages/cli` (new), `shogun-mcp/src/client_install.rs` | 新規 Mac/Linux で 1 コマンドで Claude Code から `profile.whoami` が返る |
+| E10-T11 | shogunagent.com（取得済みドメイン）をエージェントファーストで公開：`content/site.json` を単一ソースに `index.html` / `index.md` / `llms.txt` / `llms-full.txt` / `setup-prompt.txt` / `robots.txt`（`LLMs-Txt:`、`Content-Signal:`）を生成。`Accept: text/markdown` または `?agent=1` の `/` には Markdown を返す。hosted の面は本番で応答するまで `phase1` ラベル | `apps/web/` (new) | HTML・Markdown・llms.txt のツール名集合が一致（テスト）。hosted 面が `live` と表示されない（テスト）。E10-T1〜T7 が出荷したら `status` を `live` に切り替える |
 
 ### E11. 選択 eval
 

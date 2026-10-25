@@ -43,6 +43,12 @@ importers:
         specifier: ^4.151.3
         version: 4.152.0(@types/node@22.20.5)
 
+  apps/web:
+    devDependencies:
+      wrangler:
+        specifier: ^4.151.3
+        version: 4.152.0(@types/node@22.20.5)
+
   packages/config: {}
 
 packages:

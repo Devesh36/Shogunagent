@@ -1,0 +1,21 @@
+{
+  "name": "@shogun-ai/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "description": "shogunagent.com. An agent-first landing page: content/site.json is the single source, build.mjs renders index.html, index.md, llms.txt, llms-full.txt, setup-prompt.txt, robots.txt and sitemap.xml from it, and src/worker.js serves Markdown to agents that ask for it. No runtime dependencies.",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs && node scripts/serve.mjs",
+    "typecheck": "node --check build.mjs && node --check src/worker.js && node --check scripts/serve.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:node": "node --test test/*.test.mjs",
+    "deploy": "node build.mjs && wrangler deploy --config wrangler.jsonc"
+  },
+  "devDependencies": {
+    "wrangler": "^4.151.3"
+  }
+}

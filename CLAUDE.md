@@ -31,6 +31,7 @@ The state layer for AI agents: a typed, provenance-backed model of a person's wo
 - No telemetry by default. Opt-in only, counts only, never content.
 - UI copy does not exist here; API error messages are plain English and say what to do next.
 - Conventional Commits. Schema changes ship with the migration and its rollback note in the same commit.
+- shogunagent.com (`apps/web`) is edited through `content/site.json` only; `index.html`, `index.md` and `llms.txt` are generated from it. A hosted surface is labeled `live` there only once it answers in production.
 
 ## Local verification (run before pushing)
 
@@ -43,6 +44,7 @@ for g in http-egress secret-exposure media-writes log-hygiene migrations batch-s
   python3 scripts/check-$g.py --self-test && python3 scripts/check-$g.py
 done
 pnpm install && pnpm --filter @shogun-ai/api typecheck && pnpm --filter @shogun-ai/api test:node
+pnpm --filter @shogun-ai/web build && pnpm --filter @shogun-ai/web test
 ```
 
 ## Repository layout
@@ -50,6 +52,7 @@ pnpm install && pnpm --filter @shogun-ai/api typecheck && pnpm --filter @shogun-
 ```
 crates/            Rust workspace (engine, MCP/REST/CLI, evals). See docs/MIGRATION.md.
 apps/api/          Gateway and relay (Hono on Cloudflare Workers + Postgres).
+apps/web/          shogunagent.com. Agent-first landing page generated from content/site.json (HTML, index.md, llms.txt).
 packages/config/   Shared config (license public key).
 scripts/           Invariant guards and the feature-matrix runner.
 docs/              implementation-plan.md, MIGRATION.md, migrations/ (rollbacks), mcp/, shogunai-origin/ (reference).

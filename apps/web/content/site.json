@@ -1,0 +1,181 @@
+{
+  "$comment": "Single source for shogunagent.com. build.mjs renders index.html, index.md, llms.txt, llms-full.txt, robots.txt, sitemap.xml and setup-prompt.txt from this file. Human-facing copy is derived from machine-facing data here, never the reverse (CLAUDE.md invariant 12). Prices are estimates from README.md §7 and are revised from design partners' usage.",
+  "name": "ShogunAgent",
+  "domain": "shogunagent.com",
+  "url": "https://shogunagent.com",
+  "api_url": "https://api.shogunagent.com",
+  "mcp_url": "https://api.shogunagent.com/mcp",
+  "repo": "https://github.com/Torutesu/Shogunagent",
+  "license": "Apache-2.0",
+  "status_line": "Pre-release. The engine is migrated and builds on Linux; the hosted endpoints below ship in Phase 1 and are not live yet.",
+  "tagline": "The state layer for AI agents.",
+  "motto": "Memory remembers. State knows.",
+  "one_sentence": "Calibrated truth about a person's work (people, projects, commitments, open loops) with provenance on every fact and a human gate on every send, shared across all their agents.",
+  "developer_30s": "Your agents start every session from zero and act without asking. ShogunAgent gives them one typed, provenance-backed model of the user's work over MCP, enforces three permission tiers on every action, keeps data on the device by default, and exports everything in an open format. Reads are free; you pay for what you ingest and run.",
+  "not_a_memory_api": "It is not a memory API. Agent memory is a saturated category and the labs ship personalization memory for free. ShogunAgent names a different thing: not what an agent remembers, but what is true now.",
+  "setup_prompt": "Set up ShogunAgent in this project. Read https://shogunagent.com/llms.txt and follow it. Reads are L1 and free; anything that sends, posts or pays is L3 and needs human approval, so never try to bypass an approval URL.",
+  "works_with": [
+    "Claude Code",
+    "Codex",
+    "Cursor",
+    "Claude Desktop",
+    "MCP",
+    "Claude Agent SDK",
+    "OpenAI Agents SDK",
+    "Vercel AI SDK",
+    "Mastra",
+    "LangGraph",
+    "CrewAI"
+  ],
+  "surfaces": [
+    { "path": "/llms.txt", "what": "Agent-readable index of this site and the API", "why": "Agents read docs before humans do", "status": "live", "host": "site" },
+    { "path": "/llms-full.txt", "what": "Everything on this site as one Markdown document", "why": "One fetch, whole picture", "status": "live", "host": "site" },
+    { "path": "/index.md", "what": "This page as Markdown. Also what `Accept: text/markdown` returns for `/`", "why": "No HTML parsing", "status": "live", "host": "site" },
+    { "path": "/setup-prompt.txt", "what": "The one-paragraph prompt a human pastes into their coding agent", "why": "Agents install it themselves", "status": "live", "host": "site" },
+    { "path": "/.well-known/mcp/server-card.json", "what": "MCP Server Card: endpoint, auth, tool list with annotations", "why": "Progressive discovery without a handshake", "status": "phase1", "host": "api" },
+    { "path": "/.well-known/agent-card.json", "what": "Signed A2A Agent Card", "why": "Cross-organization handoff and identity", "status": "phase1", "host": "api" },
+    { "path": "/openapi.json", "what": "OpenAPI 3.1 for the REST face", "why": "Code-generating agents", "status": "phase1", "host": "api" },
+    { "path": "/.well-known/pricing.json", "what": "Machine-readable rate card, free allowance, caps", "why": "Price comparison before the first call", "status": "phase1", "host": "api" },
+    { "path": "/.well-known/status.json", "what": "Live p50 / p95, error rate, incident history", "why": "Health-weighted ranking", "status": "phase1", "host": "api" },
+    { "path": "/health", "what": "Liveness and latency", "why": "Health-weighted ranking", "status": "phase1", "host": "api" },
+    { "path": "/v1/agents", "what": "POST: agent self-registration. Returns a scoped key and the free allowance. No email", "why": "Onboarding without a form", "status": "phase1", "host": "api" },
+    { "path": "/v1/quote", "what": "Exact cost before committing; every metered call also takes `dryRun`", "why": "Budgeted agents refuse unknown costs", "status": "phase1", "host": "api" },
+    { "path": "SKILL.md", "what": "Trigger conditions, non-trigger exceptions, setup, auth, precedence, cost warnings, L2/L3 meaning", "why": "Agents install and operate it themselves", "status": "phase1", "host": "repo" },
+    { "path": "io.github.torutesu/shogunagent", "what": "Canonical entry in the MCP Registry", "why": "Where Claude Code, Cursor and gateways look first", "status": "phase1", "host": "registry" }
+  ],
+  "pillars": [
+    {
+      "title": "Typed state, not text memory",
+      "claim": "Every fact is a typed row with a verbatim quote from its source event and a confidence score. Newer facts supersede older ones, contradictions are explicit, confidence decays over time.",
+      "proof": "Writes with empty state_provenance are rejected at the repository layer. High / Medium / Low bands are enforced in one place (shogun-fusion/confidence.rs). The loop consolidator stores nothing without an exact quote match and confidence ≥ 0.84."
+    },
+    {
+      "title": "Permission tiers on every action",
+      "claim": "Reads run immediately (L1). Writes touching user data need one-tap confirmation (L2). External sends and payments need explicit human approval (L3). Enforced by type, the same for every agent.",
+      "proof": "SendAction is L3 by construction in shogun-agents. The tiers map 1:1 onto MCP readOnlyHint / destructiveHint / openWorldHint and MRTR input_required / URL elicitation."
+    },
+    {
+      "title": "Local-first, open, portable",
+      "claim": "Data stays on the device by default. The cloud path retains no bodies. The engine is open source. State exports in an open format.",
+      "proof": "Zero-retention relay: the traceability log has no body column. Secret redaction: recall 1.0, 0 false positives. User-held keys. Apache-2.0."
+    }
+  ],
+  "tiers": [
+    { "level": "L1", "name": "Read", "what": "Reads and the agent's own notes. Runs immediately, never asks.", "examples": "state.*, memory.recall, memory.search, memory.get_context_pack, discover, inspect", "mcp": "readOnlyHint: true", "cost": "Free" },
+    { "level": "L2", "name": "Write to the user's data", "what": "One-tap confirmation. Returned as MCP MRTR `resultType: \"input_required\"`; retry with `inputResponses`.", "examples": "connector writes that change the user's own records", "mcp": "destructiveHint: true", "cost": "Metered" },
+    { "level": "L3", "name": "Act on the world", "what": "Explicit human approval at a URL. Sending, posting, paying, calendar creation. Always L3, for every caller, agent or human.", "examples": "actions.execute kind=send_email, payments, any ExternalSend", "mcp": "openWorldHint: true, URL-mode elicitation", "cost": "Metered" }
+  ],
+  "tools": {
+    "note": "The core wire names are frozen and snapshot-tested. Changing one requires a new name and a deprecation entry, never an in-place change. Desktop-only tools (about 100, including meeting.*) stay in the ShogunAI Mac app.",
+    "groups": [
+      {
+        "title": "Reads · L1 · free",
+        "items": [
+          { "name": "state.open_loops.list", "task": "What is pending, for whom, since when" },
+          { "name": "state.commitments.list", "task": "What the user committed to, and to whom" },
+          { "name": "state.people.list", "task": "People the user works with, with confidence" },
+          { "name": "state.people.get", "task": "One person: role, open items, last contact, evidence" },
+          { "name": "state.projects.list", "task": "Projects and their state" },
+          { "name": "state.projects.get", "task": "One project: people, commitments, open loops" },
+          { "name": "memory.get_context_pack", "task": "Budgeted pack: High as fact, Medium as \"possibly\", Low excluded" },
+          { "name": "memory.recall", "task": "Scoped recall for a task or a person" },
+          { "name": "memory.search", "task": "Federated search over events and state" },
+          { "name": "memory.get_context", "task": "Context around one event" },
+          { "name": "memory.get_events", "task": "Raw events in a window" },
+          { "name": "memory.read_session", "task": "One session's turns" },
+          { "name": "memory.get_wrap", "task": "A period's summary" },
+          { "name": "memory.get_periods", "task": "Which periods have summaries" },
+          { "name": "calendar.upcoming", "task": "What is on the calendar next" },
+          { "name": "profile.whoami", "task": "Who the principal is and what this key may do" },
+          { "name": "wiki.evidence", "task": "The verbatim quotes behind a fact" },
+          { "name": "actions.status", "task": "Where an L2/L3 action stands" }
+        ]
+      },
+      {
+        "title": "Writes · L1 · metered",
+        "items": [
+          { "name": "memory.ingest", "task": "Conversation turns, tool results, task progress. Idempotency key required" },
+          { "name": "memory.append_note", "task": "The agent's own note, kept as an event" }
+        ]
+      },
+      {
+        "title": "Actions · L1/L2/L3 by action kind",
+        "items": [
+          { "name": "actions.execute", "task": "Run an action. Reads run; user-data writes return input_required; sends return an approval URL" }
+        ]
+      },
+      {
+        "title": "Router · no key needed for discover and inspect",
+        "items": [
+          { "name": "discover", "task": "Candidates for a task with score breakdown, price, p50/p95 and a first_party label" },
+          { "name": "inspect", "task": "Schema, price, examples and hints for one tool" },
+          { "name": "run", "task": "Run a tool under L1/L2/L3 and keep the result as state. Takes idempotency_key and dryRun" }
+        ]
+      }
+    ]
+  },
+  "faces": {
+    "intro": "Three faces, one behavior. Every capability is exposed over MCP, REST and CLI with the same permission level and the same result.",
+    "mcp": "{\"jsonrpc\":\"2.0\",\"id\":1,\n \"method\":\"tools/call\",\n \"params\":{\"name\":\"state.open_loops.list\",\n           \"arguments\":{\"person\":\"Sam\",\"limit\":5}}}",
+    "rest": "curl -s https://api.shogunagent.com/v1/state/open_loops \\\n  -H \"Authorization: Bearer $SHOGUNAGENT_KEY\" \\\n  --data-urlencode person=Sam --data-urlencode limit=5 -G",
+    "cli": "shogunagent state open-loops --person Sam --limit 5 --json",
+    "response": "{\n  \"result\": [{\n    \"id\": \"loop_7f3\",\n    \"summary\": \"Send Sam the revised budget\",\n    \"owner\": \"you\", \"with\": \"Sam\",\n    \"since\": \"2026-10-21\",\n    \"confidence\": 0.91, \"band\": \"high\",\n    \"evidence\": [{ \"event\": \"evt_a91\", \"quote\": \"I'll get you the revised budget by Thursday\" }]\n  }],\n  \"usage\": { \"unit\": \"reads\", \"quantity\": 1, \"cost_micro_usd\": 0 },\n  \"latency_ms\": 41,\n  \"hints\": [],\n  \"next_action\": null\n}",
+    "payment_required": "HTTP/1.1 402 Payment Required\n\n{\n  \"error\": { \"code\": \"payment_required\", \"next_action\": \"top_up\" },\n  \"payment\": {\n    \"amount_micro_usd\": 6000,\n    \"unit\": \"events\",\n    \"accepts\": [{ \"rail\": \"card\", \"url\": \"https://api.shogunagent.com/topup?k=…\" }],\n    \"retry_after\": 0\n  }\n}",
+    "l3": "{\n  \"resultType\": \"input_required\",\n  \"level\": \"L3\",\n  \"approval_url\": \"https://api.shogunagent.com/approve/act_31c\",\n  \"expires_in_s\": 900,\n  \"usage\": { \"unit\": \"actions\", \"quantity\": 0, \"cost_micro_usd\": 0 },\n  \"next_action\": \"approve_at_url\"\n}"
+  },
+  "pricing": {
+    "line": "Reads are free. You pay for what you ingest and what you run. No subscription, prepaid credits, 402 when exhausted, per-key and per-agent hard caps from day one.",
+    "disclaimer": "All prices are estimates and will be revised from design partners' real usage. Failed and empty results cost nothing. Delete and export are always free.",
+    "rows": [
+      { "item": "State reads (state.*, get_context_pack, recall, search)", "price": "$0", "note": "Metered for observability, never billed" },
+      { "item": "Remote L2/L3 approvals", "price": "$0", "note": "" },
+      { "item": "Local (open source)", "price": "$0", "note": "Same API; switch baseURL" },
+      { "item": "Ingest", "price": "$0.50 / 1K events", "note": "Includes extraction LLM cost" },
+      { "item": "Model-invoking op", "price": "$0.10 / 1K", "note": "Consolidation, AI search, entity pages" },
+      { "item": "Tool run, first-party connector", "price": "$0.002 / call", "note": "Writes pass L2/L3 at the same price" },
+      { "item": "Tool run, third-party provider", "price": "provider price + 5%", "note": "Failures and empty results $0" },
+      { "item": "Hosted storage", "price": "$0.10 / GB-month", "note": "Delete and export always free" },
+      { "item": "Enterprise", "price": "same rates, 10–25% off with annual commit", "note": "BYOC / ZDR / SSO / audit included; no seat fees" }
+    ]
+  },
+  "deploy": [
+    { "title": "On your laptop", "body": "The open-source engine, MCP / REST / CLI on loopback, one SQLCipher file per principal. $0. Nothing leaves the device." },
+    { "title": "Hosted", "body": "The same API behind api.shogunagent.com. Sync a second device or agent, top up a wallet, approve L3 actions from the web or Slack. Bodies are relayed, never stored." },
+    { "title": "In your cloud", "body": "BYOC, zero data retention, SSO / SCIM, audit export. Same rates, no seat fees." }
+  ],
+  "open_source": {
+    "open": "The engine (state tables, confidence, consolidator, Dream Cycle), local MCP / REST / CLI, connector definitions and the router engine, SKILL.md, the export format, all six eval harnesses.",
+    "closed": "Hosted sync, remote approvals, wallet and billing, the hosted router catalog and provider contracts.",
+    "telemetry": "No telemetry by default. Opt-in only, counts only, never content."
+  },
+  "comparison": {
+    "intro": "Memory APIs (Mem0, Zep, Letta, supermemory, Cognee) store free text in a vendor cloud and expose read/write. Routers and registries have no permission tiers and no state. ShogunAgent is the system of record underneath both.",
+    "rows": [
+      { "axis": "Unit of storage", "memory": "Free-text facts, embeddings", "shogun": "Typed rows with quote, confidence and supersession" },
+      { "axis": "Permission model", "memory": "Read / write", "shogun": "L1 / L2 / L3 by action type, same for every agent" },
+      { "axis": "Where data lives", "memory": "Vendor cloud", "shogun": "The device by default; hosted path keeps no bodies" },
+      { "axis": "Engine", "memory": "Closed; clients open at best", "shogun": "Apache-2.0" },
+      { "axis": "Leaving", "memory": "Export varies", "shogun": "Open export format; delete and export free" },
+      { "axis": "Reads", "memory": "Billed", "shogun": "Free" }
+    ]
+  },
+  "faq": [
+    { "q": "Is this a memory API?", "a": "No. Memory APIs answer \"what did the agent see\". ShogunAgent answers \"what is true now\": who owes whom what, which loops are open, with a quote behind every row. It can sit behind Anthropic's memory tool as storage, and it ingests from Mem0-style free text, but the product is the typed state." },
+      { "q": "Can an agent start without a human?", "a": "Yes. discover, inspect and a tightly scoped read need no key. POST /v1/agents returns a scoped key and the free allowance with no email. The first metered call returns 402 with everything needed to proceed. The only human step is attaching a card, once." },
+    { "q": "What can an agent never do?", "a": "Send, post, pay or create calendar events without a human approving at a URL. That is L3 by type, and the router denies any operation that is not in its scope table." },
+    { "q": "Which model does it use?", "a": "It is model-agnostic. Our own LLM use is extraction and consolidation only, in cheap batch lanes. Your agents bring their own model." },
+    { "q": "Where is it today?", "a": "Pre-release. About 330k lines of Rust migrated from ShogunAI build and test on Linux. Phase 1 (Streamable HTTP MCP with the frozen core tools, API-key auth, /memories projection, export v1, router skeleton, 402 and the agent-readable surfaces) is in progress. Watch the repo." }
+  ],
+  "nav": [
+    { "id": "agents", "label": "For agents" },
+    { "id": "what", "label": "What it is" },
+    { "id": "faces", "label": "Three faces" },
+    { "id": "tiers", "label": "Permission tiers" },
+    { "id": "tools", "label": "Tools" },
+    { "id": "pricing", "label": "Pricing" },
+    { "id": "deploy", "label": "Runs everywhere" },
+    { "id": "compare", "label": "Not a memory API" },
+    { "id": "open", "label": "Open source" },
+    { "id": "faq", "label": "FAQ" }
+  ]
+}
