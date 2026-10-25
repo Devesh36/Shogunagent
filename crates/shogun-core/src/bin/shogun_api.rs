@@ -376,6 +376,9 @@ async fn main() -> std::io::Result<()> {
     // E4-T1: the MCP face at `POST /mcp` (Streamable HTTP, stateless) over the same backend,
     // token list, approval queue, plan gate and store gate as REST. Every request is authenticated
     // by its own bearer against the live list (`handle_line_as`); there is no process session.
+    // E15: one remote-approval configuration (base URL, signing key, ledger) for both faces, so an
+    // approval queued over MCP and decided over REST is one record.
+    let remote = shogun_mcp::remote_approvals::RemoteApprovals::from_env();
     let mcp = {
         let clock = clock.clone();
         let plan_source = plan_source.clone();
@@ -391,6 +394,7 @@ async fn main() -> std::io::Result<()> {
         .with_plan_lock(move || lock_source.diagnose(u64::try_from((lock_clock)()).unwrap_or(0)).lock)
         .with_memory_gate(move || store.unavailable())
         .with_approval_store(approval_store.clone())
+        .with_remote_approvals(remote.clone())
         .with_llm_rate_limiter(llm_limiter.clone())
         .with_desktop_running_check(move || {
             shogun_mcp::desktop_heartbeat::fresh(
@@ -410,6 +414,7 @@ async fn main() -> std::io::Result<()> {
         // #800: every memory request re-checks the store's schema; no restart after an upgrade.
         .with_memory_gate(move || store.unavailable())
         .with_approval_store(approval_store)
+        .with_remote_approvals(remote)
         .with_llm_rate_limiter(llm_limiter)
         .with_desktop_running_check(move || {
             shogun_mcp::desktop_heartbeat::fresh(

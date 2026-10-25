@@ -121,6 +121,19 @@ pub enum Tool {
     /// projection and the caller's scratch files. Writes to the caller's scratch edit it; writes
     /// elsewhere become `memory.ingest` events. Local, L1.
     MemoryFs,
+    /// Remote approvals (E15): the approvals this principal's agents queued, each as its redacted
+    /// summary (kind, tier, recipient class, a masked preview, times, status). A read. Deciding is
+    /// never a tool: a human decides on the approval page, in Slack, or with the operator's CLI.
+    ApprovalsList,
+    /// One approval's redacted summary by id (E15). A read.
+    ApprovalsGet,
+    /// The principal's audit log (E18): one record per write and per approval decision — actor,
+    /// principal, tool or route, tier, outcome, time, request id; never a body. A read.
+    AuditList,
+    /// Access grants on the principal's store (E18): which agent may read or write another agent's
+    /// scratch, and which team member may read the world state. A read; granting and revoking are
+    /// the operator's (REST / CLI with the admin credential), never an agent's.
+    AclList,
     ActionsExecute,
     /// Poll a body-free L3 approval outcome.
     ActionsStatus,
@@ -460,6 +473,10 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryIngest,
     Tool::MemoryRecall,
     Tool::MemoryFs,
+    Tool::ApprovalsList,
+    Tool::ApprovalsGet,
+    Tool::AuditList,
+    Tool::AclList,
     Tool::ActionsExecute,
     Tool::ActionsStatus,
     Tool::ActionsQuestions,
@@ -621,6 +638,10 @@ impl Tool {
             Tool::MemoryIngest => "memory.ingest",
             Tool::MemoryRecall => "memory.recall",
             Tool::MemoryFs => "memory.fs",
+            Tool::ApprovalsList => "approvals.list",
+            Tool::ApprovalsGet => "approvals.get",
+            Tool::AuditList => "audit.list",
+            Tool::AclList => "acl.list",
             Tool::ActionsExecute => "actions.execute",
             Tool::ActionsStatus => "actions.status",
             Tool::ActionsQuestions => "actions.questions",
@@ -866,6 +887,8 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         // `/memories` file operations (E6-T2): a view reads, a write edits the caller's own
         // scratch or records an ingest event — local and reversible, L1 like `memory.ingest`.
         Tool::MemoryFs => ApiLevel::Write(Level::L1),
+        // Governance reads (E15 / E18): summaries, the audit trail, the grant list. Free reads.
+        Tool::ApprovalsList | Tool::ApprovalsGet | Tool::AuditList | Tool::AclList => ApiLevel::Read,
         // Pausing narrows what SHOGUN reads and runs directly (L1). Ending the user's pause
         // starts reading the screen again: the same "removes a privacy boundary" reason
         // `CaptureExclusionsSet` is L3, so the ceiling is L3 and that half is queued for the
@@ -1011,6 +1034,9 @@ pub enum ToolGroup {
     /// The `/memories` virtual filesystem (`memory.fs`, E6): the world model as files plus the
     /// caller's scratch files. Served by every build and listed by default (`all`).
     Files,
+    /// Governance (E15 / E18): remote approvals, the audit log and the access grants. Reads
+    /// only; served by every build and listed by default (`all`).
+    Governance,
     /// Preferences that mirror Settings panes, plus device / support status.
     Settings,
 }
@@ -1031,6 +1057,7 @@ pub const ALL_GROUPS: &[ToolGroup] = EVERY_GROUP;
 pub const ALL_GROUPS: &[ToolGroup] = &[
     ToolGroup::Core,
     ToolGroup::Files,
+    ToolGroup::Governance,
     ToolGroup::Import,
     ToolGroup::State,
     ToolGroup::Skills,
@@ -1042,6 +1069,7 @@ pub const ALL_GROUPS: &[ToolGroup] = &[
 pub const EVERY_GROUP: &[ToolGroup] = &[
     ToolGroup::Core,
     ToolGroup::Files,
+    ToolGroup::Governance,
     ToolGroup::Import,
     ToolGroup::State,
     ToolGroup::Meeting,
@@ -1102,6 +1130,7 @@ impl ToolGroup {
             ToolGroup::Export => "export",
             ToolGroup::Translate => "translate",
             ToolGroup::Files => "files",
+            ToolGroup::Governance => "governance",
             ToolGroup::Settings => "settings",
         }
     }
@@ -1145,6 +1174,7 @@ pub fn tool_group(tool: Tool) -> ToolGroup {
         | Tool::ActionsExecute
         | Tool::ActionsStatus => ToolGroup::Core,
         Tool::MemoryFs => ToolGroup::Files,
+        Tool::ApprovalsList | Tool::ApprovalsGet | Tool::AuditList | Tool::AclList => ToolGroup::Governance,
         // Imports are user-reviewed flows (preview, then commit what the user chose) that write
         // to memory and carry the largest input schema; not an everyday mid-task tool.
         Tool::MemoryImportPreview
@@ -2679,6 +2709,10 @@ mod tests {
                         | Tool::MailSettingsGet
                         | Tool::ActionsStatus
                         | Tool::ActionsQuestions
+                        | Tool::ApprovalsList
+                        | Tool::ApprovalsGet
+                        | Tool::AuditList
+                        | Tool::AclList
                         | Tool::ExportWritesList
                         | Tool::ExportFoldersList
                         | Tool::TranslateStatus

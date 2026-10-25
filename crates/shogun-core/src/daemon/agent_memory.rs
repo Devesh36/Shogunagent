@@ -69,8 +69,14 @@ fn legacy_marker_key(idempotency_key: &str) -> String {
 
 /// The writer and namespace of an ingest (E2-T4 / E2-T5). A bare id is an agent (`agent:<id>`);
 /// `<kind>:<id>` is taken as written. `agent_scratch` is the actor's own namespace.
+///
+/// E18: when the face authenticated the call as an agent (the multi-principal server, from the
+/// agent's key), that agent is the writer whatever the body's `actor` says — a body cannot name
+/// another agent and so write into its scratch. The body's `actor` still validates.
 pub fn write_context(request: &IngestRequest) -> Result<WriteContext, String> {
-    let actor = parse_actor(&request.actor)?;
+    let claimed = parse_actor(&request.actor)?;
+    let call = shogun_memory::actor::current_write().actor;
+    let actor = if shogun_memory::acl::is_restricted(&call) { call } else { claimed };
     let namespace = match request.namespace {
         WireNamespace::World => Namespace::World,
         WireNamespace::AgentScratch => Namespace::scratch_of(&actor).map_err(|_| "invalid_actor".to_string())?,

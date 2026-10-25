@@ -57,7 +57,10 @@ export interface LogVars {
     | "statement_closed" | "commit_created" | "adjustment_applied" | "refund_debited" | "dispute_resolved" | "licence_linked" | "topup_expired"
     // E3-T2 OAuth (oauth/app.ts): fixed words, never a client id, a code or a token.
     | "oauth_consent_shown" | "oauth_code_issued" | "oauth_denied" | "oauth_token_issued" | "oauth_refresh_rotated" | "oauth_refresh_reuse"
-    | "oauth_code_reuse" | "oauth_invalid_request" | "oauth_client_rejected" | "oauth_revoked";
+    | "oauth_code_reuse" | "oauth_invalid_request" | "oauth_client_rejected" | "oauth_revoked"
+
+    // Remote approvals (approvals/app.ts, plan E15): fixed words, never a token or a summary.
+    | "approval_page" | "approval_decided" | "approval_refused" | "approval_notified" | "slack_rejected" | "webhook_registered";
   /** Server-chosen provider and model of the accepted batch (ids, not content). */
   relayLogModel?: string;
   /** License id (an opaque token id, not user content). */
@@ -84,6 +87,11 @@ export function routeTemplate(pathname: string): string {
     "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server",
     "/oauth/authorize", "/oauth/token", "/oauth/revoke"].includes(pathname)) return pathname;
   if (/^\/v1\/admin\/disputes\/[^/]+\/resolve$/.test(pathname)) return "/v1/admin/disputes/:id/resolve";
+  // Remote approvals (plan E15). The approval page's path carries the decision token: it is
+  // collapsed to its template, never logged.
+  if (["/v1/slack/interactions", "/v1/approvals/notify", "/v1/webhooks"].includes(pathname)) return pathname;
+  if (/^\/approve\/[^/]+$/.test(pathname)) return "/approve/:token";
+  if (/^\/v1\/webhooks\/[^/]+$/.test(pathname)) return "/v1/webhooks/:id";
   if (/^\/v1\/keys\/[^/]+\/revoke$/.test(pathname)) return "/v1/keys/:id/revoke";
   if (/^\/v1\/keys\/[^/]+$/.test(pathname)) return "/v1/keys/:id";
   if (/^\/v1\/receipts\/[^/]+\/dispute$/.test(pathname)) return "/v1/receipts/:id/dispute";

@@ -239,19 +239,48 @@ impl ReadScope {
     pub const WITH_SCRATCH: Self = Self { include_scratch: true };
 
     /// A SQL predicate on the `namespace` column of the table `prefix` names (`""` for the
-    /// statement's only table, `"e."` for an alias). Always true when scratch is included.
+    /// statement's only table, `"e."` for an alias).
+    ///
+    /// With scratch included, an agent writer of the current call (E18 scratch ACL) reads the
+    /// world, its own scratch and the namespaces it holds a grant on ([`crate::acl`]); anyone
+    /// else (the owner, a team member, a system job, no call scope) reads every namespace.
     pub fn predicate(self, prefix: &str) -> String {
-        if self.include_scratch {
-            "1 = 1".to_string()
-        } else {
-            format!("{prefix}namespace = '{WORLD}'")
+        if !self.include_scratch {
+            return format!("{prefix}namespace = '{WORLD}'");
+        }
+        match restricted_reader() {
+            Some(actor) => crate::acl::readable_predicate(prefix, &actor),
+            None => "1 = 1".to_string(),
         }
     }
 
-    /// Whether a row whose `namespace` column holds `namespace` is in scope.
-    pub fn allows(self, namespace: &str) -> bool {
-        self.include_scratch || namespace == WORLD
+    /// Whether every row is in scope (scratch included, and the call's writer is not an agent
+    /// restricted by the scratch ACL). Callers use it to skip the scope filter entirely.
+    pub fn unrestricted(self) -> bool {
+        self.include_scratch && restricted_reader().is_none()
     }
+
+    /// Whether a row whose `namespace` column holds `namespace` is in scope, without consulting
+    /// grants: for a restricted agent only the world and its own scratch. The SQL
+    /// [`Self::predicate`] is the full check.
+    pub fn allows(self, namespace: &str) -> bool {
+        if namespace == WORLD {
+            return true;
+        }
+        if !self.include_scratch {
+            return false;
+        }
+        match restricted_reader() {
+            Some(actor) => namespace.strip_prefix(SCRATCH_PREFIX).is_some_and(|id| id == actor.id()),
+            None => true,
+        }
+    }
+}
+
+/// The current call's writer when the scratch ACL restricts what it reads: an agent.
+pub fn restricted_reader() -> Option<Actor> {
+    let actor = current_write().actor;
+    crate::acl::is_restricted(&actor).then_some(actor)
 }
 
 /// The context of the call a thread is serving: its writer and its read scope.

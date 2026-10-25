@@ -208,7 +208,7 @@ const components: Json = {
 };
 
 interface Route {
-  method: "get" | "post" | "patch" | "all";
+  method: "get" | "post" | "patch" | "delete" | "all";
   path: string;
   tag: string;
   summary: string;
@@ -291,6 +291,12 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     // --- E23: legal pages ---
     { method: "get", path: "/privacy", tag: "well-known", security: "none", summary: "Privacy policy (DRAFT pending legal review), rendered from docs/legal/privacy-policy.md.", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
     { method: "get", path: "/terms", tag: "well-known", security: "none", summary: "Terms of service (DRAFT pending legal review), rendered from docs/legal/terms.md.", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
+    // --- remote approvals (E15): webhooks for agents; the page, Slack and the notification are for humans and the core ---
+    { method: "post", path: "/v1/webhooks", tag: "approvals", security: "key", scope: "write", summary: "Register an HTTPS endpoint for approval.created / approval.decided. Deliveries are signed (X-Shogun-Signature: t=<unix>,v1=HMAC-SHA256(secret, \"<t>.<body>\")), retried with backoff, and carry the redacted summary only. The secret is shown once.", requestBody: jsonBody({ type: "object", required: ["url"], properties: { url: { type: "string", format: "uri" }, events: { type: "array", items: { type: "string", enum: ["approval.created", "approval.decided"] } } } }), responses: { "201": jsonBody({ type: "object", properties: { id: { type: "string" }, url: { type: "string" }, events: { type: "array", items: { type: "string" } }, secret: { type: "string" } } }), "400": errorResponse("invalid_url | invalid_events | invalid_json"), "409": errorResponse("too_many_webhooks") } },
+    { method: "get", path: "/v1/webhooks", tag: "approvals", security: "key", scope: "read", summary: "The principal's approval webhooks (no secrets).", responses: { "200": jsonBody({ type: "object" }) } },
+    { method: "delete", path: "/v1/webhooks/{id}", tag: "approvals", security: "key", scope: "write", summary: "Remove one of the principal's webhooks.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": jsonBody({ type: "object" }), "404": errorResponse("webhook_not_found") } },
+    { method: "get", path: "/approve/{token}", tag: "approvals", security: "none", summary: "The human approval page for an approval URL (redacted summary, Approve / Reject). Not for agents: an agent never decides its own L2/L3.", parameters: [{ name: "token", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "HTML page" }, "410": { description: "The link expired" } } },
+    { method: "post", path: "/v1/slack/interactions", tag: "approvals", security: "none", summary: "Slack button presses on approval messages (Slack-signed). Not for agents.", responses: { "200": { description: "Acknowledged" }, "401": errorResponse("invalid_signature") } },
     // --- the metered MCP proxy ---
     {
       method: "all", path: "/mcp", tag: "mcp", security: "key", scope: "any",
@@ -365,6 +371,7 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       { name: "oauth", description: "OAuth 2.1 + Client ID Metadata Documents for MCP clients. No dynamic registration." },
       { name: "mcp", description: "The metered MCP Streamable HTTP proxy." },
       { name: "router", description: "discover / inspect / run (apps/router)." },
+      { name: "approvals", description: "Remote L2/L3 approvals: webhooks for the principal, the approval page and Slack for humans." },
     ],
     paths,
     components,

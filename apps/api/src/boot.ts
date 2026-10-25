@@ -124,6 +124,8 @@ import { REGISTER_PER_HOUR, REGISTER_WINDOW_MS } from "./agent-app.js";
 import { DEFAULT_PBKDF2_ITERATIONS, MAX_PBKDF2_ITERATIONS } from "./agent-keys.js";
 import { parseSigningKey } from "./wellknown/agent-card.js";
 import { SqlAgentStore } from "./agent-pg-store.js";
+import { httpSidecarClient } from "./approvals/sidecar-client.js";
+import { InMemoryWebhookStore, SqlWebhookStore, type WebhookStore } from "./approvals/webhooks.js";
 import type { AgentStore } from "./agent-store.js";
 import { grantProBundle, reportCommitOverage } from "./billing/jobs.js";
 import type { ResolveHost } from "./oauth/cimd.js";
@@ -267,6 +269,37 @@ export interface AgentConfig {
   /** `AGENT_MCP_URL`: the Streamable HTTP endpoint the documents name when it is not
    * `<PUBLIC_BASE_URL>/mcp`. */
   mcpUrl?: string;
+  /** Remote approvals (E15): `SHOGUN_APPROVAL_SIGNING_KEY` (shared with the sidecar),
+   * `SHOGUN_SIDECAR_URL`, `WEBHOOK_SIGNING_SECRET`, and the Slack app (`SLACK_BOT_TOKEN`,
+   * `SLACK_SIGNING_SECRET`, `SLACK_APPROVAL_CHANNEL`, all three or none). Absent = the approval
+   * page, Slack and webhook routes are not served. */
+  approvals?: {
+    signingKey: string;
+    sidecarUrl: string;
+    webhookSecret: string;
+    slack?: { botToken: string; signingSecret: string; channel: string };
+  };
+}
+
+/** Parse the remote-approval settings, or `undefined` when `SHOGUN_APPROVAL_SIGNING_KEY` is unset.
+ * Throws `BootError` naming the variable, never echoing a value. */
+export function approvalsConfigFromEnv(env: EnvRecord): AgentConfig["approvals"] {
+  const signingKey = env.SHOGUN_APPROVAL_SIGNING_KEY?.trim();
+  if (!signingKey) return undefined;
+  if (signingKey.length < 32) throw new BootError("invalid SHOGUN_APPROVAL_SIGNING_KEY (at least 32 characters, the same value the sidecar has)");
+  const sidecarUrl = env.SHOGUN_SIDECAR_URL?.trim();
+  if (!sidecarUrl || !/^https?:\/\/[^\s]+$/.test(sidecarUrl)) throw new BootError("missing or invalid SHOGUN_SIDECAR_URL (the sidecar's base URL; SHOGUN_APPROVAL_SIGNING_KEY is set)");
+  const webhookSecret = env.WEBHOOK_SIGNING_SECRET?.trim();
+  if (!webhookSecret || webhookSecret.length < 32) throw new BootError("missing WEBHOOK_SIGNING_SECRET (at least 32 characters; SHOGUN_APPROVAL_SIGNING_KEY is set)");
+  const botToken = env.SLACK_BOT_TOKEN?.trim();
+  const slackSecret = env.SLACK_SIGNING_SECRET?.trim();
+  const channel = env.SLACK_APPROVAL_CHANNEL?.trim();
+  const slackSet = [botToken, slackSecret, channel].filter(Boolean).length;
+  if (slackSet !== 0 && slackSet !== 3) throw new BootError("SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET and SLACK_APPROVAL_CHANNEL must be set together");
+  return {
+    signingKey, sidecarUrl, webhookSecret,
+    ...(botToken && slackSecret && channel ? { slack: { botToken, signingSecret: slackSecret, channel } } : {}),
+  };
 }
 
 /** Parse the agent-API settings, or `undefined` when the API is off. Throws `BootError` naming
@@ -306,6 +339,7 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
   if (overagePriceId && !stripeKey) throw new BootError("STRIPE_COMMIT_OVERAGE_PRICE_ID needs STRIPE_SECRET_KEY");
   const oauthSecret = env.AGENT_OAUTH_SECRET;
   if (oauthSecret !== undefined && oauthSecret !== "" && oauthSecret.length < 32) throw new BootError("invalid AGENT_OAUTH_SECRET (at least 32 characters)");
+  const approvals = approvalsConfigFromEnv(env);
   return {
     powSecret,
     powBits: intFromEnv(env, "AGENT_POW_BITS", DEFAULT_POW_BITS, 0, MAX_POW_BITS),
@@ -317,6 +351,7 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
     ...(oauthSecret ? { oauthSecret } : {}),
     ...(agentCardSigningKey ? { agentCardSigningKey } : {}),
     ...(mcpUrl ? { mcpUrl } : {}),
+    ...(approvals ? { approvals } : {}),
   };
 }
 
@@ -482,6 +517,8 @@ export interface RelayStore {
   oauth?: OAuthStore;
   /** Resolves a CIMD host before it is fetched (the Node entry: `node:dns`). */
   resolveHost?: ResolveHost;
+  /** Approval webhooks (E15). Absent = an in-process store (development). */
+  webhooks?: WebhookStore;
   close(): Promise<void>;
 }
 
@@ -502,6 +539,7 @@ export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurs
     formInFlight: new SqlInFlightLimiter(db, FORM_DECIDE_MAX_IN_FLIGHT, FORM_IN_FLIGHT_LEASE_MS, () => warn("inflight_unavailable (failing open)")),
     agent: new SqlAgentStore(db),
     registerLimiter: new SqlWindowLimiter(db, config.agent?.registerPerHour ?? REGISTER_PER_HOUR, REGISTER_WINDOW_MS, () => warn("ratelimit_unavailable (failing open)")),
+    webhooks: new SqlWebhookStore(db),
     close: () => db.close(),
   };
 }
@@ -602,6 +640,16 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
           ...(config.agent.agentCardSigningKey ? { agentCardSigningKey: config.agent.agentCardSigningKey } : {}),
           ...(config.agent.mcpUrl ? { mcpUrl: config.agent.mcpUrl } : {}),
         },
+        // Remote approvals (E15): the page, Slack and webhooks reach the sidecar through one client.
+        ...(config.agent.approvals ? {
+          approvals: {
+            signingKey: config.agent.approvals.signingKey,
+            sidecar: httpSidecarClient(config.agent.approvals.sidecarUrl),
+            webhooks: store.webhooks ?? new InMemoryWebhookStore(),
+            webhookSecret: config.agent.approvals.webhookSecret,
+            ...(config.agent.approvals.slack ? { slack: config.agent.approvals.slack } : {}),
+          },
+        } : {}),
       },
     } : {}),
   };

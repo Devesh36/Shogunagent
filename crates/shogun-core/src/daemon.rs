@@ -70,6 +70,7 @@ mod relay_attempts;
 mod maintenance;
 mod meetings;
 mod export_v1;
+mod governance;
 mod memory_fs;
 mod memory_import;
 mod memory_notes;

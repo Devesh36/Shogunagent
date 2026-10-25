@@ -185,6 +185,12 @@ pub fn tool_handling(tool: Tool) -> ToolHandling {
         | Tool::MemoryIngest
         // The `/memories` tree is state rows and the caller's scratch: no meeting or screen text.
         | Tool::MemoryFs
+        // Governance reads (E15 / E18): redacted approval summaries, audit labels and grants —
+        // no meeting or screen text.
+        | Tool::ApprovalsList
+        | Tool::ApprovalsGet
+        | Tool::AuditList
+        | Tool::AclList
         | Tool::ActionsStatus
         | Tool::ActionsQuestions
         | Tool::ActionsAnswer

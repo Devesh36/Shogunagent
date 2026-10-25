@@ -133,21 +133,16 @@ pub fn input_required(tool: Tool, args: &Value, responses: Option<&Value>) -> Op
     }
 }
 
-/// The URL a human opens to approve `approval_id`: `<base>/approvals/<id>`.
-pub fn approval_url(base_url: Option<&str>, approval_id: u64) -> Option<String> {
-    let base = base_url?.trim().trim_end_matches('/');
-    if base.is_empty() {
-        return None;
-    }
-    Some(format!("{base}/approvals/{approval_id}"))
-}
-
 /// Reshape a `tools/call` response whose text is the pending envelope into
 /// `resultType: "approval_required"` (URL-mode elicitation, E4-T2). Any other response is
 /// returned unchanged. The envelope's own fields stay in the text block (the id, the level, the
 /// origin), joined by the URL when one is configured, so an older client that reads only the text
 /// still finds the id to poll.
-pub fn shape_approval(response: String, base_url: Option<&str>) -> String {
+///
+/// `link(approval_id, level)` mints the approval URL (`<base>/approve/<signed token>`, E15,
+/// [`crate::remote_approvals::RemoteApprovals::on_queued`]) and is called once, only for a
+/// pending envelope; `None` answers without a URL.
+pub fn shape_approval(response: String, link: impl FnOnce(u64, &str) -> Option<String>) -> String {
     let Ok(mut value) = serde_json::from_str::<Value>(&response) else {
         return response;
     };
@@ -165,7 +160,7 @@ pub fn shape_approval(response: String, base_url: Option<&str>) -> String {
     };
     let level = payload["level"].as_str().unwrap_or("L3").to_string();
     let origin = payload["origin"].as_str().map(str::to_string);
-    let url = approval_url(base_url, approval_id);
+    let url = link(approval_id, &level);
     let message = match &url {
         Some(_) => "Hand the URL to the human; it approves or rejects this request outside the MCP client. Poll actions.status until it leaves pending. Never report the action as done before it says sent.",
         None => "The human approves this request in the ShogunAI app. Poll actions.status until it leaves pending. Never report the action as done before it says sent.",
@@ -273,20 +268,24 @@ mod tests {
             "result": { "content": [{ "type": "text", "text": r#"{"pending":true,"approval_id":9,"level":"L3","origin":"mcp"}"# }], "isError": false }
         })
         .to_string();
-        let shaped: Value = serde_json::from_str(&shape_approval(pending.clone(), Some("https://approve.example/"))).unwrap();
+        let link = |id: u64, level: &str| {
+            assert_eq!(level, "L3");
+            Some(format!("https://approve.example/approve/tok-{id}"))
+        };
+        let shaped: Value = serde_json::from_str(&shape_approval(pending.clone(), link)).unwrap();
         assert_eq!(shaped["result"]["resultType"], RESULT_APPROVAL_REQUIRED);
         assert_eq!(shaped["result"]["approval"]["approval_id"], 9);
-        assert_eq!(shaped["result"]["approval"]["url"], "https://approve.example/approvals/9");
+        assert_eq!(shaped["result"]["approval"]["url"], "https://approve.example/approve/tok-9");
         assert_eq!(shaped["result"]["approval"]["origin"], "mcp");
         assert_eq!(shaped["result"]["approval"]["poll"]["tool"], "actions.status");
         assert_eq!(shaped["result"]["inputRequests"][0]["mode"], "url");
-        assert_eq!(shaped["result"]["inputRequests"][0]["url"], "https://approve.example/approvals/9");
+        assert_eq!(shaped["result"]["inputRequests"][0]["url"], "https://approve.example/approve/tok-9");
         let text: Value = serde_json::from_str(shaped["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(text["approval_id"], 9, "the id stays in the text for older clients");
-        assert_eq!(text["url"], "https://approve.example/approvals/9");
+        assert_eq!(text["url"], "https://approve.example/approve/tok-9");
         assert_eq!(text["next_action"], "approve_at_url");
 
-        let without: Value = serde_json::from_str(&shape_approval(pending, None)).unwrap();
+        let without: Value = serde_json::from_str(&shape_approval(pending, |_, _| None)).unwrap();
         assert_eq!(without["result"]["resultType"], RESULT_APPROVAL_REQUIRED);
         assert_eq!(without["result"]["approval"]["url"], Value::Null);
         assert!(without["result"].get("inputRequests").is_none(), "no URL, no URL-mode request");
@@ -302,7 +301,7 @@ mod tests {
             json!({ "jsonrpc": "2.0", "id": 1, "result": { "content": [{ "type": "text", "text": "not json" }], "isError": false } }).to_string(),
             json!({ "jsonrpc": "2.0", "id": 1, "result": { "content": [{ "type": "text", "text": r#"{"pending":false,"approval_id":2}"# }], "isError": false } }).to_string(),
         ] {
-            assert_eq!(shape_approval(response.clone(), Some("https://a.example")), response);
+            assert_eq!(shape_approval(response.clone(), |_, _| Some("https://a.example/approve/t".into())), response);
         }
     }
 

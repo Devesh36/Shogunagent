@@ -36,6 +36,8 @@ pub enum ScratchError {
     NotFound,
     /// The namespace is not an agent's scratch namespace.
     NotScratch,
+    /// The writer neither owns this namespace nor holds a `write` grant on it (E18 scratch ACL).
+    Denied,
     Db,
 }
 
@@ -70,6 +72,22 @@ fn namespace_sql(namespace: &Namespace) -> Result<String, ScratchError> {
     }
 }
 
+/// Whether the current call's writer may read `ns` (E18: another agent's scratch is invisible
+/// without a grant; the owner and other non-agent writers read every namespace).
+fn readable(conn: &Connection, ns: &str) -> Result<bool, ScratchError> {
+    let actor = crate::actor::current_write().actor;
+    crate::acl::may_read(conn, &actor, ns).map_err(|_| ScratchError::Db)
+}
+
+/// Refuse a write by `actor` into `ns` it neither owns nor holds a `write` grant on.
+fn writable(conn: &Connection, actor: &crate::actor::Actor, ns: &str) -> Result<(), ScratchError> {
+    if crate::acl::may_write(conn, actor, ns).map_err(|_| ScratchError::Db)? {
+        Ok(())
+    } else {
+        Err(ScratchError::Denied)
+    }
+}
+
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ScratchFile> {
     Ok(ScratchFile { path: r.get(0)?, content: r.get(1)?, actor: r.get(2)?, created_at: r.get(3)?, updated_at: r.get(4)? })
 }
@@ -77,6 +95,9 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ScratchFile> {
 /// Every file of `namespace`, in path order.
 pub fn list(conn: &Connection, namespace: &Namespace) -> Result<Vec<ScratchFile>, ScratchError> {
     let ns = namespace_sql(namespace)?;
+    if !readable(conn, &ns)? {
+        return Ok(Vec::new());
+    }
     let mut stmt = conn.prepare(
         "SELECT path, content, actor, created_at, updated_at FROM scratch_files WHERE namespace = ?1 ORDER BY path",
     )?;
@@ -87,6 +108,9 @@ pub fn list(conn: &Connection, namespace: &Namespace) -> Result<Vec<ScratchFile>
 /// One file, or `None`.
 pub fn read(conn: &Connection, namespace: &Namespace, path: &str) -> Result<Option<ScratchFile>, ScratchError> {
     let ns = namespace_sql(namespace)?;
+    if !readable(conn, &ns)? {
+        return Ok(None);
+    }
     let found = conn
         .query_row(
             "SELECT path, content, actor, created_at, updated_at FROM scratch_files WHERE namespace = ?1 AND path = ?2",
@@ -101,6 +125,7 @@ pub fn read(conn: &Connection, namespace: &Namespace, path: &str) -> Result<Opti
 /// Returns whether the file existed before.
 pub fn write(conn: &Connection, ctx: &WriteContext, path: &str, content: &str, now: i64) -> Result<bool, ScratchError> {
     let ns = namespace_sql(&ctx.namespace)?;
+    writable(conn, &ctx.actor, &ns)?;
     let path = clean_path(path).ok_or(ScratchError::InvalidPath)?;
     if content.chars().count() > MAX_CONTENT_CHARS {
         return Err(ScratchError::TooLarge);
@@ -128,6 +153,7 @@ const UNDER: &str = "(path = ?2 OR substr(path, 1, length(?2) + 1) = ?2 || '/')"
 /// Delete one file, or every file under `path` when it names a directory. Returns how many went.
 pub fn delete(conn: &Connection, namespace: &Namespace, path: &str) -> Result<usize, ScratchError> {
     let ns = namespace_sql(namespace)?;
+    writable(conn, &crate::actor::current_write().actor, &ns)?;
     let path = clean_path(path).ok_or(ScratchError::InvalidPath)?;
     let removed = conn.execute(&format!("DELETE FROM scratch_files WHERE namespace = ?1 AND {UNDER}"), params![ns, path])?;
     if removed == 0 {
@@ -139,6 +165,7 @@ pub fn delete(conn: &Connection, namespace: &Namespace, path: &str) -> Result<us
 /// Rename one file, or every file under a directory, never overwriting. Returns how many moved.
 pub fn rename(conn: &Connection, ctx: &WriteContext, from: &str, to: &str, now: i64) -> Result<usize, ScratchError> {
     let ns = namespace_sql(&ctx.namespace)?;
+    writable(conn, &ctx.actor, &ns)?;
     let from = clean_path(from).ok_or(ScratchError::InvalidPath)?;
     let to = clean_path(to).ok_or(ScratchError::InvalidPath)?;
     if from == to || to.starts_with(&format!("{from}/")) {

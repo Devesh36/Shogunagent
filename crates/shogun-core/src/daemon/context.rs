@@ -1797,7 +1797,10 @@ pub(super) fn context_event_evidence(
 ) -> Option<Evidence> {
     let (ts, source, title, content) = conn
         .query_row(
-            "SELECT ts, source, window_title, content FROM event_log WHERE id = ?1",
+            &format!(
+                "SELECT ts, source, window_title, content FROM event_log WHERE id = ?1 AND {}",
+                shogun_memory::actor::current_read().predicate("")
+            ),
             [event_id],
             |row| {
                 Ok((

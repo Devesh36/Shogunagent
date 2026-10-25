@@ -31,6 +31,7 @@ fn scratch_error(path: &str, error: ScratchError) -> FsReply {
         ScratchError::TooLarge => format!("Error: the file is larger than {} characters.", scratch_files::MAX_CONTENT_CHARS),
         ScratchError::TooManyFiles => format!("Error: your scratch directory already holds {} files; delete some first.", scratch_files::MAX_FILES_PER_NAMESPACE),
         ScratchError::NotScratch => "Error: this caller has no scratch directory.".to_string(),
+        ScratchError::Denied => format!("Error: no write access to {path}; the principal has not granted it."),
         ScratchError::Db => "Error: the memory store could not complete the operation; retry.".to_string(),
     })
 }
@@ -80,7 +81,7 @@ impl Db {
                         .map(|_| FsReply::ok(format!("File created successfully at: {path}")))
                 }),
                 Place::Root | Place::OwnScratch(None) => Ok(FsReply::error(format!("Error: {path} is a directory; name a file under it."))),
-                Place::OtherScratch => Ok(FsReply::error(memfs_tool::missing(path))),
+                Place::OtherScratch => self.granted_scratch_write(&writer, path, file_text, now, "File created successfully at: "),
                 Place::World => self.world_write(&writer, command, path, file_text),
             },
             FsCommand::StrReplace { path, old_str, new_str } => {
@@ -158,6 +159,20 @@ impl Db {
                 ))),
             },
         }
+    }
+
+    /// A write into another agent's scratch file (E18): allowed only with a `write` grant, which
+    /// the data layer checks. Without one the path answers as missing, so a caller learns nothing
+    /// about another agent's files.
+    fn granted_scratch_write(&self, writer: &WriteContext, path: &str, text: &str, now: i64, done: &str) -> Result<FsReply, String> {
+        let Some((namespace, rel)) = memfs::scratch_target(path) else {
+            return Ok(FsReply::error(memfs_tool::missing(path)));
+        };
+        let ctx = WriteContext { actor: writer.actor.clone(), namespace };
+        let reply = self.scratch_write(path, |conn| {
+            scratch_files::write(conn, &ctx, rel, text, now).map(|_| FsReply::ok(format!("{done}{path}")))
+        })?;
+        Ok(if reply.is_error { FsReply::error(memfs_tool::missing(path)) } else { reply })
     }
 
     fn memfs_read(&self, path: &str, scratch: &Namespace) -> Result<Option<String>, String> {

@@ -107,6 +107,16 @@ pub(super) fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
                 level: Level::L1,
             },
         ),
+        // E15 / E18 governance reads. Deciding (`POST /v1/approvals/{id}/decide`), granting
+        // (`POST /v1/acl/grant|revoke`) and teams are the server's operator routes, answered before
+        // this table and never reachable with an agent's bearer.
+        ["v1", "approvals"] => method_is(method, Method::Get, Routed::Read { tool: Tool::ApprovalsList, id: None }),
+        ["v1", "approvals", id] => match id.parse::<i64>() {
+            Ok(id) if id > 0 => method_is(method, Method::Get, Routed::Read { tool: Tool::ApprovalsGet, id: Some(id) }),
+            _ => Ok(Routed::NotFound),
+        },
+        ["v1", "audit"] => method_is(method, Method::Get, Routed::Read { tool: Tool::AuditList, id: None }),
+        ["v1", "acl"] => method_is(method, Method::Get, Routed::Read { tool: Tool::AclList, id: None }),
         // E6-T2: the memory tool's file operations (`memory.fs`), the MCP arguments as the body.
         ["v1", "memory", "fs"] => method_is(
             method,

@@ -319,6 +319,10 @@
     {
       "name": "router",
       "description": "discover / inspect / run (apps/router)."
+    },
+    {
+      "name": "approvals",
+      "description": "Remote L2/L3 approvals: webhooks for the principal, the approval page and Slack for humans."
     }
   ],
   "paths": {
@@ -1875,6 +1879,240 @@
               "text/html": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/webhooks": {
+      "post": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "Register an HTTPS endpoint for approval.created / approval.decided. Deliveries are signed (X-Shogun-Signature: t=<unix>,v1=HMAC-SHA256(secret, \"<t>.<body>\")), retried with backoff, and carry the redacted summary only. The secret is shown once.",
+        "operationId": "post_v1_webhooks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "url"
+                ],
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "approval.created",
+                        "approval.decided"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "secret": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_url | invalid_events | invalid_json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "too_many_webhooks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          },
+          {
+            "oauth": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "The principal's approval webhooks (no secrets).",
+        "operationId": "get_v1_webhooks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/webhooks/{id}": {
+      "delete": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "Remove one of the principal's webhooks.",
+        "operationId": "delete_v1_webhooks_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "webhook_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          },
+          {
+            "oauth": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/approve/{token}": {
+      "get": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "The human approval page for an approval URL (redacted summary, Approve / Reject). Not for agents: an agent never decides its own L2/L3.",
+        "operationId": "get_approve_token",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "HTML page"
+          },
+          "410": {
+            "description": "The link expired"
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/slack/interactions": {
+      "post": {
+        "tags": [
+          "approvals"
+        ],
+        "summary": "Slack button presses on approval messages (Slack-signed). Not for agents.",
+        "operationId": "post_v1_slack_interactions",
+        "responses": {
+          "200": {
+            "description": "Acknowledged"
+          },
+          "401": {
+            "description": "invalid_signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }

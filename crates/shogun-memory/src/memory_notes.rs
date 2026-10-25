@@ -121,7 +121,7 @@ pub fn out_of_scope_ids(
     scope: crate::actor::ReadScope,
 ) -> Result<std::collections::HashSet<i64>, rusqlite::Error> {
     let mut out = std::collections::HashSet::new();
-    if scope.include_scratch || ids.is_empty() {
+    if scope.unrestricted() || ids.is_empty() {
         return Ok(out);
     }
     for chunk in ids.chunks(500) {

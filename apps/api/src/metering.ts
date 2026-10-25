@@ -79,7 +79,12 @@ export interface MeteringDeps {
   /** The Protected Resource Metadata URL a 401 points MCP clients at (RFC 9728 §5.1), when OAuth
    * is served. */
   resourceMetadataUrl?: string;
+  /** Remote approvals (E15): called with the decision token when the core's answer names one in
+   * `X-Shogun-Approval-Token` (an approval was queued). The header is read, never the body, and
+   * is not passed on to the agent (the body already carries the URL). */
+  onApprovalToken?: (token: string) => Promise<unknown>;
 }
+
 
 /** The `WWW-Authenticate` of a 401 on a metered route: names the resource metadata when OAuth is
  * on, so an MCP client can discover the authorization server from the 401 alone. */
@@ -102,6 +107,17 @@ export async function priceCall(deps: Pick<MeteringDeps, "store">, principal: Ag
   if (!commit) return { charged: quote.cost_micro_usd };
   const terms = commitTerms(commit);
   return { charged: discounted(quote.cost_micro_usd, terms.discountBps), terms };
+}
+
+
+/** Run `work` past the response: Workers' `waitUntil` when there is one, else detached. */
+function deferWork(c: Context, work: Promise<unknown>): void {
+  const settled = work.catch(() => undefined);
+  try {
+    c.executionCtx.waitUntil(settled);
+  } catch {
+    void settled;
+  }
 }
 
 /** What one classified request is, before any money moves. */
@@ -316,6 +332,9 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
     const { charged, list } = settledPrice(reserved.price, upstream.status >= 200 && upstream.status < 300 ? quote.cost_micro_usd : 0);
     await settleCall(deps, reserved.receiptId, charged, list, principal, reserved.price.terms?.funding ?? "wallet");
     const headers = new Headers(upstream.headers);
+    const approvalToken = headers.get("x-shogun-approval-token");
+    headers.delete("x-shogun-approval-token");
+    if (approvalToken && deps.onApprovalToken) deferWork(c, deps.onApprovalToken(approvalToken));
     for (const [k, v] of Object.entries(usageHeaders(reserved.receiptId, { ...quote, cost_micro_usd: charged }))) headers.set(k, v);
     if (reserved.price.terms) headers.set("x-usage-list-cost-micro-usd", String(list));
     headers.set("x-latency-ms", String(Math.max(0, now().getTime() - startedMs)));

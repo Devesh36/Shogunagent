@@ -163,11 +163,15 @@ impl Db {
     /// screen-text event under `withheld`, by id only, never its text.
     pub fn events_json(&self, ids: &[i64], max_chars: usize) -> Result<Value, String> {
         self.with_conn("memory.get_events", |c| {
-            let mut stmt = c.prepare(
+            // E2-T5 / E18: an id outside the call's read scope (another agent's scratch without a
+            // grant, any scratch under the default world-only scope) answers as missing — knowing
+            // a row id buys nothing (the MemClaw GET-by-id case).
+            let mut stmt = c.prepare(&format!(
                 "SELECT id, ts, source, app_bundle_id, window_title, substr(content, 1, ?2),
                         length(content)
-                 FROM event_log WHERE id = ?1",
-            )?;
+                 FROM event_log WHERE id = ?1 AND {}",
+                shogun_memory::actor::current_read().predicate("")
+            ))?;
             let (mut events, mut missing, mut withheld) = (Vec::new(), Vec::new(), Vec::new());
             for &id in ids {
                 let row = stmt
@@ -221,10 +225,11 @@ impl Db {
                 let mut stmt = c.prepare(&format!(
                     "SELECT id, ts, last_seen_at, app_bundle_id, window_title, substr(content, 1, ?4)
                      FROM event_log
-                     WHERE ts >= ?1 AND ts < ?2 AND {}
+                     WHERE ts >= ?1 AND ts < ?2 AND {} AND {}
                        AND (?3 IS NULL OR instr(lower(coalesce(app_bundle_id, '')), lower(?3)) > 0)
                      ORDER BY ts, id LIMIT ?5",
-                    capture_sources_sql()
+                    capture_sources_sql(),
+                    shogun_memory::actor::current_read().predicate("")
                 ))?;
                 let rows = stmt.query_map(
                     params![from_ms, to_ms, app, SESSION_TEXT_CHARS as i64, SESSION_ROW_CAP as i64 + 1],

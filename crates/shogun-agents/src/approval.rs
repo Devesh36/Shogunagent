@@ -390,6 +390,10 @@ pub enum ApprovalStatus {
     /// Crash/restart interrupted an in-flight send. Delivery is unknown — do not resubmit
     /// from this status alone (the destination may already have the message).
     OutcomeUnknown,
+    /// A human approved it on a remote surface (ShogunAgent E15: the gateway's approval page, its
+    /// Slack app, or the operator's CLI). Confirmed with the dedicated button's authority, and
+    /// left for the executor that owns the action; nothing has been sent by the approval itself.
+    Approved,
 }
 
 /// Body-free terminal ledger record. Previews remain only while an item is pending.
