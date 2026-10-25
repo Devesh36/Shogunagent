@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { allProviders } from "../connectors/index.js";
 import { CATEGORIES } from "../connectors/categories.js";
 import { CatalogCompileError, compileCatalog } from "../src/catalog.js";
+import { callerPrice } from "../src/take.js";
 import { run } from "../src/run.js";
 import { bearer, fullCatalog, makeDeps, synthEndpoint, synthProvider } from "./helpers.js";
 
@@ -82,7 +83,8 @@ describe("catalog compile (E8-T2)", () => {
           continue;
         }
         expect(out.status, `${entry.tool_id}/${fx.scenario}`).toBe(200);
-        if (fx.expect?.usage) expect(out.body.usage, `${entry.tool_id}/${fx.scenario}`).toMatchObject(fx.expect.usage);
+        // A fixture records the provider's price; the agent is shown (and charged) it plus one take.
+        if (fx.expect?.usage) expect(out.body.usage, `${entry.tool_id}/${fx.scenario}`).toMatchObject({ quantity: fx.expect.usage.quantity, cost_micro_usd: callerPrice(fx.expect.usage.cost_micro_usd, entry.first_party) });
         if (fx.expect?.output !== undefined && "result" in out.body) expect(out.body.result).toEqual(fx.expect.output);
       }
     }

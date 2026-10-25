@@ -30,7 +30,7 @@
           "scenario": "synthetic-basic",
           "input": { "query": "shogunagent state layer", "num_results": 2 },
           "response": { "run_id": "run_fx_1", "status": "succeeded", "output": { "results": [ { "title": "ShogunAgent", "url": "https://example.com/a", "snippet": "the state layer for agents" }, { "title": "Docs", "url": "https://example.com/b", "snippet": "three verbs" } ] }, "usage": { "quantity": 1, "cost_usd": 0.0013 } },
-          "expectUsage": { "quantity": 1, "cost_micro_usd": 1365 }
+          "expectUsage": { "quantity": 1, "cost_micro_usd": 1300 }
         },
         {
           "scenario": "synthetic-vendor-failure",
@@ -64,7 +64,7 @@
       "health": { "p50Ms": 1100, "p95Ms": 3500, "successRate": 0.987 },
       "verified": true,
       "fixtures": [
-        { "scenario": "synthetic-basic", "input": { "url": "https://example.com/a" }, "response": { "status": "succeeded", "output": { "markdown": "# ShogunAgent\n\nthe state layer for agents" } }, "expectUsage": { "quantity": 1, "cost_micro_usd": 945 } }
+        { "scenario": "synthetic-basic", "input": { "url": "https://example.com/a" }, "response": { "status": "succeeded", "output": { "markdown": "# ShogunAgent\n\nthe state layer for agents" } }, "expectUsage": { "quantity": 1, "cost_micro_usd": 900 } }
       ]
     },
     {
@@ -92,7 +92,7 @@
       "health": { "p50Ms": 800, "p95Ms": 2200, "successRate": 0.994 },
       "verified": true,
       "fixtures": [
-        { "scenario": "synthetic-two-results", "input": { "query": "agent state layer" }, "response": { "status": "succeeded", "output": { "results": [ { "url": "https://example.com/1" }, { "url": "https://example.com/2" } ] } }, "expectUsage": { "quantity": 2, "cost_micro_usd": 2100 } },
+        { "scenario": "synthetic-two-results", "input": { "query": "agent state layer" }, "response": { "status": "succeeded", "output": { "results": [ { "url": "https://example.com/1" }, { "url": "https://example.com/2" } ] } }, "expectUsage": { "quantity": 2, "cost_micro_usd": 2000 } },
         { "scenario": "synthetic-empty", "input": { "query": "zzzz no such thing" }, "response": { "status": "succeeded", "output": { "results": [] } }, "expectUsage": { "quantity": 0, "cost_micro_usd": 0 } }
       ]
     },
@@ -135,7 +135,7 @@
       "health": { "p50Ms": 1200, "p95Ms": 3800, "successRate": 0.99 },
       "verified": true,
       "fixtures": [
-        { "scenario": "synthetic-basic", "input": { "titles": ["CTO"], "company_domains": ["example.com"] }, "response": { "status": "succeeded", "output": { "results": [ { "name": "A" }, { "name": "B" }, { "name": "C" } ] } }, "expectUsage": { "quantity": 3, "cost_micro_usd": 6300 } }
+        { "scenario": "synthetic-basic", "input": { "titles": ["CTO"], "company_domains": ["example.com"] }, "response": { "status": "succeeded", "output": { "results": [ { "name": "A" }, { "name": "B" }, { "name": "C" } ] } }, "expectUsage": { "quantity": 3, "cost_micro_usd": 6000 } }
       ]
     },
     {
@@ -177,7 +177,7 @@
       "health": { "p50Ms": 9000, "p95Ms": 25000, "successRate": 0.975 },
       "verified": true,
       "fixtures": [
-        { "scenario": "synthetic-two-images", "input": { "prompt": "a sword", "n": 2 }, "response": { "status": "succeeded", "output": { "images": [ { "url": "https://example.com/1.png" }, { "url": "https://example.com/2.png" } ] }, "usage": { "quantity": 2, "cost_usd": 0.08 } }, "expectUsage": { "quantity": 2, "cost_micro_usd": 84000 } }
+        { "scenario": "synthetic-two-images", "input": { "prompt": "a sword", "n": 2 }, "response": { "status": "succeeded", "output": { "images": [ { "url": "https://example.com/1.png" }, { "url": "https://example.com/2.png" } ] }, "usage": { "quantity": 2, "cost_usd": 0.08 } }, "expectUsage": { "quantity": 2, "cost_micro_usd": 80000 } }
       ]
     },
     {

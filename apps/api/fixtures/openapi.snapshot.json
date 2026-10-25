@@ -4550,12 +4550,157 @@
         "x-served-by": "apps/router"
       }
     },
+    "/v1/internal/router/reserve": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "The router holds a run's price on the caller's wallet (E32): the caller's key in X-Caller-Authorization, the provider's price in the body; the gateway adds the take once (third-party only), applies caps and commits, and holds it as rcpt_run_<run_id> (idempotent). Not for agents.",
+        "operationId": "post_v1_internal_router_reserve",
+        "parameters": [
+          {
+            "name": "X-Caller-Authorization",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Bearer <the caller's agent key or OAuth token>, forwarded by the router; verified, never stored."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "run_id",
+                  "tool_id",
+                  "provider_micro_usd",
+                  "first_party"
+                ],
+                "properties": {
+                  "run_id": {
+                    "type": "string"
+                  },
+                  "tool_id": {
+                    "type": "string"
+                  },
+                  "provider_micro_usd": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "The provider's price for a typical run, before the take (integer micro-USD; 1 USD = 1000000)."
+                  },
+                  "first_party": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reservation_id": {
+                      "type": "string"
+                    },
+                    "list_micro_usd": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Provider price + one take (third-party) (integer micro-USD; 1 USD = 1000000)."
+                    },
+                    "charged_micro_usd": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Held; discounted under a commit (integer micro-USD; 1 USD = 1000000)."
+                    },
+                    "funding": {
+                      "type": "string"
+                    },
+                    "replayed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_reserve",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_token | invalid_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required | cap_exceeded, with payment (x402 shape)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "run_id_conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "wallet_unavailable | store_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-service-token": "ROUTER_SETTLEMENT_TOKEN"
+      }
+    },
     "/v1/internal/router/settlements": {
       "post": {
         "tags": [
           "providers"
         ],
-        "summary": "The router's run settlements (content-free; idempotent by run_id) → the provider's daily accrual. Not for agents.",
+        "summary": "The router's outbox delivers its run settlements (content-free; idempotent by run_id): each settles its run's wallet hold once (provider price + one take for third-party runs, $0 for failures and empty results) and accrues the provider. Not for agents.",
         "operationId": "post_v1_internal_router_settlements",
         "requestBody": {
           "content": {
@@ -4588,11 +4733,19 @@
                         "format": {
                           "type": "string",
                           "enum": [
+                            "shogunagent-run-settlement/2",
                             "shogunagent-run-settlement/1"
                           ]
                         },
                         "run_id": {
                           "type": "string"
+                        },
+                        "receipt_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "/2: rcpt_run_<run_id> when the run held money, else null"
                         },
                         "ts": {
                           "type": "integer"
@@ -4611,6 +4764,13 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "marketplace": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "/2: the marketplace an imported tool came from (monid), else null"
                         },
                         "outcome": {
                           "type": "string",
@@ -4650,6 +4810,16 @@
                     },
                     "duplicates": {
                       "type": "integer"
+                    },
+                    "wallet_settled": {
+                      "type": "integer"
+                    },
+                    "accrual": {
+                      "type": "string",
+                      "enum": [
+                        "on",
+                        "off"
+                      ]
                     }
                   }
                 }

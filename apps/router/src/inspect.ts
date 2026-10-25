@@ -2,6 +2,7 @@
  * `inspect(tool_id)` (E8-T4): schema, price, live health, examples, permission meaning and
  * `hints`. Free, no auth.
  */
+import { RUN_MARKUP_BPS } from "./take.js";
 import type { Json, JsonObject, OpClass } from "../connectors/types.js";
 import type { CatalogEntry, CompiledCatalog, PublicUsage } from "./catalog.js";
 import type { HealthStore } from "./health.js";
@@ -25,7 +26,9 @@ export const CLASS_MEANING: Record<OpClass, string> = {
 
 export interface InspectResultBody {
   tool: Omit<CatalogEntry, "hash"> & { catalog_entry_hash: string };
-  price: PublicUsage & { quote_micro_usd: number; failures_cost: 0; empty_results_cost: 0 };
+  /** `usage` is the provider's price; `quote_micro_usd` is what the caller pays for a typical run:
+   * `provider_quote_micro_usd` plus one take (`take_bps`, 0 for first-party tools). */
+  price: PublicUsage & { quote_micro_usd: number; provider_quote_micro_usd: number; take_bps: number; failures_cost: 0; empty_results_cost: 0 };
   permission: { class: OpClass; level: Level; meaning: string; class_meaning: string };
   health: { p50_ms: number; p95_ms: number; success_rate: number; source: "observed" | "declared" };
   run_example: { tool_id: string; input: Json; idempotency_key: string; dryRun: true };
@@ -47,7 +50,7 @@ export function inspect(catalog: CompiledCatalog, health: HealthStore, toolId: s
     body: {
       result: {
         tool: { ...tool, catalog_entry_hash: hash },
-        price: { ...entry.usage, quote_micro_usd: entry.quote_micro_usd, failures_cost: 0, empty_results_cost: 0 },
+        price: { ...entry.usage, quote_micro_usd: entry.quote_micro_usd, provider_quote_micro_usd: entry.provider_quote_micro_usd, take_bps: entry.first_party ? 0 : RUN_MARKUP_BPS, failures_cost: 0, empty_results_cost: 0 },
         permission: { ...entry.scope, meaning: LEVEL_MEANING[entry.scope.level], class_meaning: CLASS_MEANING[entry.scope.class] },
         health: { ...live, source: observed ? "observed" : "declared" },
         run_example: { tool_id: entry.tool_id, input: exampleInput, idempotency_key: "<a uuid you generate per attempt>", dryRun: true },

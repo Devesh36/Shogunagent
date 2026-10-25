@@ -118,9 +118,12 @@ import { FetchDeepgramGateway } from "./deepgram.js";
  *                              payouts are served (settlement seam, Connect onboarding,
  *                              statements, the monthly payout in the sweep). Needs
  *                              sql/provider-payouts.sql applied; Connect calls use STRIPE_SECRET_KEY.
- * - ROUTER_SETTLEMENT_TOKEN  — secret, optional (E29): the bearer the router presents to
- *                              POST /v1/internal/router/settlements (same value as the router's).
- *                              Unset = that route answers 503.
+ * - ROUTER_SETTLEMENT_TOKEN  — secret, optional (E29, E32): at least 32 characters, the bearer the
+ *                              router presents (same value as the router's). Set = the router's
+ *                              wallet is served: POST /v1/internal/router/reserve and
+ *                              /settlements (router-wallet.ts), each router run charged here once.
+ *                              Accrues to the provider ledger when PAYOUTS_STATE_SECRET is set too.
+ *                              Unset = the router cannot charge runs here.
  * - PAYOUT_MIN_USD           — optional (E29): the minimum transfer (default 10).
  * - X402_ENABLED             — optional (E30), default off (docs/decisions/0002-x402.md). `1` adds
  *                              the x402 rail to 402s and accepts X-PAYMENT; then X402_NETWORK,
@@ -320,6 +323,8 @@ export interface AgentConfig {
    * accepts the router's settlements; `PAYOUT_MIN_USD` is the minimum transfer. Connect calls use
    * `STRIPE_SECRET_KEY`. Absent = the provider routes are not served. */
   payouts?: { stateSecret: string; settlementToken?: string; minPayoutMicros: number };
+  /** The router's wallet (E32): `ROUTER_SETTLEMENT_TOKEN`, with or without payouts. */
+  routerWallet?: { token: string };
   /** x402 acceptance (E30, billing/x402.ts): only with `X402_ENABLED=1`. Absent = off. */
   x402?: X402Config;
   /** The enterprise lane (E26): `ENTERPRISE_ENABLED=1`, `ENTERPRISE_SECRET`, `SHOGUN_REGION`,
@@ -440,6 +445,8 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
   if (oauthSecret !== undefined && oauthSecret !== "" && oauthSecret.length < 32) throw new BootError("invalid AGENT_OAUTH_SECRET (at least 32 characters)");
   const approvals = approvalsConfigFromEnv(env);
   const payouts = payoutsConfigFromEnv(env);
+  const routerToken = env.ROUTER_SETTLEMENT_TOKEN?.trim();
+  if (routerToken !== undefined && routerToken !== "" && routerToken.length < 32) throw new BootError("invalid ROUTER_SETTLEMENT_TOKEN (at least 32 characters, the same value the router has)");
   let x402: X402Config | undefined;
   try {
     x402 = x402ConfigFromEnv(env);
@@ -460,6 +467,7 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
     ...(mcpUrl ? { mcpUrl } : {}),
     ...(approvals ? { approvals } : {}),
     ...(payouts ? { payouts } : {}),
+    ...(routerToken ? { routerWallet: { token: routerToken } } : {}),
     ...(x402 ? { x402 } : {}),
     ...(enterprise ? { enterprise } : {}),
   };
@@ -782,6 +790,8 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
             ...(config.agent.stripe ? { stripe: { secretKey: config.agent.stripe.secretKey } } : {}),
           },
         } : {}),
+        // E32: the router's wallet — reserve and settle every router run here, once.
+        ...(config.agent.routerWallet ? { routerWallet: config.agent.routerWallet } : {}),
         // E30: x402 acceptance, only with X402_ENABLED=1 (off by default; docs/decisions/0002-x402.md).
         ...(config.agent.x402 && store.x402 ? {
           x402: { config: config.agent.x402, facilitator: httpFacilitator(config.agent.x402.facilitatorUrl), store: store.x402 },

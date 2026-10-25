@@ -304,8 +304,8 @@
 
 | E | 内容 | 主な場所 |
 |---|---|---|
-| E32 | ルーターのウォレットを apps/api に配線する。run は apps/api の reserve → settle を一度だけ通し、ルーター側で別に上乗せしない（Monid 経由の二重マークアップを解消）。取り分は `RUN_MARKUP_BPS` の1か所 | `apps/router/src/wallet.ts`, `apps/api/src/billing/` |
-| E33 | 精算の永続アウトボックス。ルーターの精算は Postgres のアウトボックスに書いてから送り、再送は run_id で冪等。届かなかった精算は再送ジョブが拾う | `apps/router/src/settlement.ts`, `apps/api/sql/` |
+| E32 | ルーターのウォレットを apps/api に配線する。run は apps/api の reserve → settle を一度だけ通し、ルーター側で別に上乗せしない（Monid 経由の二重マークアップを解消）。取り分は `RUN_MARKUP_BPS` の1か所。実装済み（2026-10-25）: `ApiWalletClient`（`apps/router/src/wallet.ts`）→ `POST /v1/internal/router/reserve`・`/settlements`（`apps/api/src/router-wallet.ts`、呼び出し元の鍵を `X-Caller-Authorization` で転送、領収書 `rcpt_run_<run_id>` で冪等）。ルーターは提供者価格だけを送り、取り分は apps/api が一度だけ足す（first-party は無し）。値は `packages/config/pricing.json` の1か所。Monid 取り込みは Monid の価格そのまま（1300 µ$ → 呼び出し元 1365 µ$、以前は 1434 µ$ になり得た）、精算に `marketplace: "monid"` を付ける。精算形式は `/2`（`receipt_id`・`marketplace` を追加、`/1` も受理） | `apps/router/src/wallet.ts`, `apps/api/src/router-wallet.ts` |
+| E33 | 精算の永続アウトボックス。ルーターの精算は Postgres のアウトボックスに書いてから送り、再送は run_id で冪等。届かなかった精算は再送ジョブが拾う。実装済み（2026-10-25）: `router_settlement_outbox`（`apps/router/sql/settlement-outbox.sql`、Hyperdrive）、資金の保留前に $0 の下書き、送信前に最終精算を書く。cron（毎分）が 30 秒〜1 時間の指数バックオフで再送し、10 分放置された下書きは $0 で保留を解放。不正な行は `dead` で保持。テスト用の in-memory 版あり（`apps/router/src/outbox.ts`） | `apps/router/src/outbox.ts`, `apps/router/sql/` |
 | E34 | hosted `/mcp` を本物にする。`SHOGUN_SIDECAR_URL` があるとき apps/api は principal ごとにサイドカーの Streamable HTTP へ本文を保存せず中継する（不変条件 1・2）。`memory.ingest` / `append_note` のアノテーション不一致を直す（新名と非推奨エントリ。不変条件 11） | `apps/api/src/mcp-proxy.ts`, `crates/shogun-mcp` |
 | E35 | handoff を三面に出す（不変条件 4）。引き渡しオブジェクトの組み立てを Rust コアへ移し（`handoff.create` / `handoff.accept`）、apps/api はサイドカーへの中継だけにする。これで apps/api が recall 本文を解析する不変条件 1 の例外が要らなくなる | `crates/shogun-mcp`, `crates/shogun-cli`, `apps/api/src/handoff.ts` |
 | E36 | MCP 適合スイート（2026-07-28 仕様の初期化・ツール一覧・MRTR・エラー形）と、実フレームワーク（Vercel AI SDK、OpenAI Agents SDK、Claude Agent SDK、LangGraph）での SDK 結合テスト。モデルはモックで、CI で外部に出ない | `packages/conformance`, `packages/sdk-*/test/integration` |

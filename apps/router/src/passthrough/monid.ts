@@ -1,8 +1,14 @@
 /**
  * Monid passthrough (E8-T6; README §7 "borrow the cold start"). Imports a Monid-style catalog
  * JSON into one `ProviderDefinition` whose endpoints all execute through Monid's hosted
- * `POST /v1/run`, priced at Monid's price + 5% (README §7 pricing: provider price + 5%; failures
- * and empty results $0).
+ * `POST /v1/run`, priced at Monid's own price: the figure Monid invoices us for the run.
+ *
+ * E32, one take: the take is NOT baked in here. The catalog carries provider prices only; the
+ * caller pays Monid's price plus ONE take (`RUN_MARKUP_BPS`, src/take.ts), added by apps/api's
+ * wallet at reserve and settle. Monid bills our account (the router's `MONID_API_KEY`), never the
+ * caller, so whatever platform fee Monid includes in its price is part of the provider price and
+ * gets exactly one take on top. Before E32 this importer added 5% and the wallet would have added
+ * 5% again.
  *
  * Zero retention: the importer and the hooks below see inputs and vendor bodies only as values
  * passing through; nothing here logs, stores or formats them. The Monid credential is named
@@ -16,7 +22,6 @@ import { CATEGORIES, isCategory, type Category } from "../../connectors/categori
 import type { EndpointDefinition, Fixture, Json, JsonObject, OpClass, ProviderDefinition, RunResponse, UsageModel } from "../../connectors/types.js";
 import { jsonSchemaInput } from "../jsonschema.js";
 
-export const MONID_MARKUP = 0.05;
 export const MONID_BASE_URL = "https://api.monid.ai";
 export const MONID_CREDENTIAL_ENV = "MONID_API_KEY";
 
@@ -80,19 +85,20 @@ export interface MonidRunResponse {
   error?: { code: string };
 }
 
-export function toMicroUsd(usd: number, markup = MONID_MARKUP): number {
-  return Math.round(usd * 1_000_000 * (1 + markup));
+/** Monid's USD price in integer micro-USD, unchanged (no markup: the take is the wallet's). */
+export function toMicroUsd(usd: number): number {
+  return Math.round(usd * 1_000_000);
 }
 
-function usageFor(p: MonidPricing, markup: number): UsageModel {
+function usageFor(p: MonidPricing): UsageModel {
   switch (p.model) {
     case "PER_CALL":
-      return { model: "per_call", cost_micro_usd: toMicroUsd(p.priceUsd, markup) };
+      return { model: "per_call", cost_micro_usd: toMicroUsd(p.priceUsd) };
     case "PER_RESULT":
       return {
         model: "per_result",
-        cost_micro_usd_per_result: toMicroUsd(p.priceUsd, markup),
-        base_micro_usd: toMicroUsd(p.basePriceUsd ?? 0, markup),
+        cost_micro_usd_per_result: toMicroUsd(p.priceUsd),
+        base_micro_usd: toMicroUsd(p.basePriceUsd ?? 0),
         typical_results: p.typicalQuantity ?? 10,
         results: monidQuantity,
       };
@@ -100,7 +106,7 @@ function usageFor(p: MonidPricing, markup: number): UsageModel {
       return {
         model: "per_unit",
         unit: p.unit ?? "unit",
-        cost_micro_usd_per_unit: p.priceUsd * 1_000_000 * (1 + markup),
+        cost_micro_usd_per_unit: p.priceUsd * 1_000_000,
         typical_units: p.typicalQuantity ?? 1,
         units: ({ response }) => monidReportedQuantity(response),
       };
@@ -139,8 +145,7 @@ export function localId(monidId: string): string {
   return monidId.toLowerCase().replace(/^\/+/, "").replace(/[^a-z0-9._-]+/g, ".");
 }
 
-export function importMonidCatalog(catalog: MonidCatalog, opts: { markup?: number } = {}): ProviderDefinition {
-  const markup = opts.markup ?? MONID_MARKUP;
+export function importMonidCatalog(catalog: MonidCatalog): ProviderDefinition {
   const problems: string[] = [];
   const providerNames = new Map(catalog.providers.map((p) => [p.slug, p]));
 
@@ -158,7 +163,7 @@ export function importMonidCatalog(catalog: MonidCatalog, opts: { markup?: numbe
     });
     const meta: EndpointDefinition["meta"] = {
       summary: e.summary,
-      description: `${e.description} Via Monid (${upstream?.name ?? e.provider}); priced at Monid's price plus ${Math.round(markup * 100)}%.`,
+      description: `${e.description} Via Monid (${upstream?.name ?? e.provider}); priced at Monid's price plus the router's take, applied once.`,
       exclusions: "Not for the user's own state or memory (use the shogunagent tools).",
       categories,
       notes: [
@@ -181,7 +186,7 @@ export function importMonidCatalog(catalog: MonidCatalog, opts: { markup?: numbe
         fromResponse: ({ response }) => ((response.body as MonidRunResponse | null)?.output ?? null),
         isFailure: (response) => response.status >= 400 || (response.body as MonidRunResponse | null)?.status !== "succeeded",
       },
-      usage: usageFor(e.pricing, markup),
+      usage: usageFor(e.pricing),
       scope: { class: scopeClassFor(e) },
       health: { p50_ms: e.health.p50Ms, p95_ms: e.health.p95Ms, success_rate: e.health.successRate },
       fixtures,
@@ -195,7 +200,7 @@ export function importMonidCatalog(catalog: MonidCatalog, opts: { markup?: numbe
     name: "Monid (passthrough)",
     first_party: false,
     meta: {
-      description: "Third-party tools reached through Monid's hosted catalog. Prices are Monid's plus 5%; failures and empty results cost nothing.",
+      description: "Third-party tools reached through Monid's hosted catalog. Prices are Monid's plus the router's take, applied once; failures and empty results cost nothing.",
       docsUrl: "https://monid.ai/docs",
       homepage: "https://monid.ai",
     },

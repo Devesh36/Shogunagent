@@ -7,8 +7,11 @@
  *    the provider's price (failures and empty results at $0) and our take, computed here from
  *    the one rate table (`RUN_MARKUP_BPS`, 5%, pricing.ts).
  * 2. **Payee.** A first-party settlement is our own revenue (ledgered, never paid out). A
- *    settlement without a payout reference is an imported marketplace catalog (Monid), settled on
- *    that marketplace's invoice. Everything else is paid through Stripe Connect.
+ *    settlement tagged with a `marketplace` (or, in format /1, without a payout reference) is an
+ *    imported marketplace catalog (Monid), settled on that marketplace's invoice to us. Everything
+ *    else is paid through Stripe Connect. Since E32 the take is the same for both third-party
+ *    payees: the caller paid provider price + one take through the wallet
+ *    (router-wallet.ts), and the accrual records exactly that split.
  * 3. **Payout.** Monthly and cumulative: what a provider earned through the end of the month, less
  *    refunds and lost disputes, less everything already paid, in whole cents, once per
  *    provider-month (Stripe `Idempotency-Key: payout:<provider>:<YYYY-MM>`). Held while a
@@ -21,7 +24,10 @@
 import { monthBounds, monthClosed } from "./billing/ledger.js";
 import { RUN_MARKUP_BPS } from "./pricing.js";
 
-export const SETTLEMENT_FORMAT = "shogunagent-run-settlement/1";
+/** The router's current settlement format (E32): `/1` plus `receipt_id` and `marketplace`. */
+export const SETTLEMENT_FORMAT = "shogunagent-run-settlement/2";
+/** The E29 format, still accepted (accrual only; never settles a wallet). */
+export const SETTLEMENT_FORMAT_V1 = "shogunagent-run-settlement/1";
 /** The most settlements one POST may carry. */
 export const MAX_SETTLEMENTS_PER_POST = 100;
 /** Default minimum payout: $10. Below it the balance carries to the next month. */
@@ -37,8 +43,12 @@ export type HoldReason = "dispute_open" | "account_not_active" | "payout_ref_mis
 
 /** What the router posts (apps/router/src/settlement.ts `RunSettlement`). */
 export interface RunSettlementInput {
-  format: typeof SETTLEMENT_FORMAT;
+  format: typeof SETTLEMENT_FORMAT | typeof SETTLEMENT_FORMAT_V1;
   run_id: string;
+  /** /2: the wallet reservation this run settles (`rcpt_run_<run_id>`), or null. Absent in /1. */
+  receipt_id?: string | null;
+  /** /2: the marketplace an imported tool came from (`"monid"`), or null. Absent in /1. */
+  marketplace?: string | null;
   ts: number;
   tool_id: string;
   provider_id: string;
@@ -180,15 +190,17 @@ const ID_RE = /^[a-z0-9][a-z0-9_.-]{0,127}$/;
 const RUN_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 const REF_RE = /^[A-Za-z0-9_:.-]{3,128}$/;
 const OUTCOMES: readonly SettledOutcome[] = ["ok", "empty", "provider_error", "transport_error"];
+const V1_KEYS: ReadonlySet<string> = new Set(["format", "run_id", "ts", "tool_id", "provider_id", "first_party", "payout_account_ref", "outcome", "quantity", "provider_micro_usd"]);
+const V2_KEYS: ReadonlySet<string> = new Set([...V1_KEYS, "receipt_id", "marketplace"]);
 
-/** Our take on a provider price (5%, rounded up), the same figure `quoteCost("run")` adds. */
+/** Our take on a provider price (`RUN_MARKUP_BPS`, rounded up), the same figure `quoteCost("run")` adds. */
 export function takeOf(providerMicros: number): number {
   return Math.ceil((providerMicros * RUN_MARKUP_BPS) / 10_000);
 }
 
-export function payeeOf(s: Pick<RunSettlementInput, "first_party" | "payout_account_ref">): Payee {
+export function payeeOf(s: Pick<RunSettlementInput, "first_party" | "payout_account_ref" | "marketplace">): Payee {
   if (s.first_party || (s.payout_account_ref ?? "").startsWith("first-party:")) return "first_party";
-  if (s.payout_account_ref === null) return "passthrough";
+  if ((s.marketplace ?? null) !== null || s.payout_account_ref === null) return "passthrough";
   return "connect";
 }
 
@@ -200,10 +212,17 @@ export function utcDay(ms: number): string {
 export function parseSettlement(raw: unknown): { ok: true; value: RunSettlementInput } | { ok: false; error: string } {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { ok: false, error: "a settlement must be an object" };
   const r = raw as Record<string, unknown>;
-  const allowed = new Set(["format", "run_id", "ts", "tool_id", "provider_id", "first_party", "payout_account_ref", "outcome", "quantity", "provider_micro_usd"]);
+  if (r.format !== SETTLEMENT_FORMAT && r.format !== SETTLEMENT_FORMAT_V1) return { ok: false, error: `format must be ${SETTLEMENT_FORMAT}` };
+  const v2 = r.format === SETTLEMENT_FORMAT;
+  const allowed = v2 ? V2_KEYS : V1_KEYS;
   for (const k of Object.keys(r)) if (!allowed.has(k)) return { ok: false, error: `unknown field ${k.slice(0, 32)}` };
-  if (r.format !== SETTLEMENT_FORMAT) return { ok: false, error: `format must be ${SETTLEMENT_FORMAT}` };
   if (typeof r.run_id !== "string" || !RUN_ID_RE.test(r.run_id)) return { ok: false, error: "run_id is invalid" };
+  if (v2) {
+    // A settlement can settle only its own run's reservation: the id is derived from the run id.
+    if (r.receipt_id !== null && r.receipt_id !== routerReceiptId(r.run_id)) return { ok: false, error: "receipt_id must be null or rcpt_run_<run_id>" };
+    if (r.marketplace !== null && (typeof r.marketplace !== "string" || !ID_RE.test(r.marketplace))) return { ok: false, error: "marketplace must be null or a provider id" };
+    if (r.marketplace !== null && r.first_party === true) return { ok: false, error: "a first-party run has no marketplace" };
+  }
   if (typeof r.ts !== "number" || !Number.isSafeInteger(r.ts) || r.ts <= 0) return { ok: false, error: "ts must be ms since the epoch" };
   if (typeof r.provider_id !== "string" || !ID_RE.test(r.provider_id)) return { ok: false, error: "provider_id is invalid" };
   if (typeof r.tool_id !== "string" || !ID_RE.test(r.tool_id) || !r.tool_id.startsWith(`${r.provider_id}.`)) return { ok: false, error: "tool_id must be <provider_id>.<endpoint>" };
@@ -222,11 +241,24 @@ export function settlementRecord(s: RunSettlementInput): SettlementRecord {
     runId: s.run_id, providerId: s.provider_id, toolId: s.tool_id, day: utcDay(s.ts), outcome: s.outcome, payee,
     payoutAccountRef: s.payout_account_ref,
     providerMicros: s.provider_micro_usd,
-    // The take is ours on third-party runs only: first-party revenue is all ours, and a
-    // passthrough price already carries the markup it was imported with.
-    takeMicros: payee === "connect" ? takeOf(s.provider_micro_usd) : 0,
+    takeMicros: takeFor(s, payee),
     ts: s.ts,
   };
+}
+
+/** The take a settlement records. First-party revenue is all ours (no take). A third-party run
+ * (Connect-paid or a marketplace import) carries exactly one take on the provider price, the one
+ * the wallet charged the caller (E32). A format /1 passthrough came from the E29 importer, whose
+ * price already had the markup baked in: no second take is recorded for it. */
+export function takeFor(s: Pick<RunSettlementInput, "format" | "provider_micro_usd">, payee: Payee): number {
+  if (payee === "first_party") return 0;
+  if (payee === "passthrough" && s.format === SETTLEMENT_FORMAT_V1) return 0;
+  return takeOf(s.provider_micro_usd);
+}
+
+/** The receipt id apps/api gives a router run's reservation (router-wallet.ts). */
+export function routerReceiptId(runId: string): string {
+  return `rcpt_run_${runId}`;
 }
 
 export function payoutIdempotencyKey(providerId: string, month: string): string {

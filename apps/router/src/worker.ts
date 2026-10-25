@@ -1,12 +1,16 @@
 /**
  * Cloudflare Workers entry. Builds the production dependency set from the Worker environment:
  * the compiled catalog (first-party + Monid passthrough), the fetch transport over the env map
- * (the only place `env` secrets are read), and — until E9 wires the wallet and the state layer
- * wires `tool_runs` — in-memory metering, idempotency, health and run-log stubs.
+ * (the only place `env` secrets are read), and the wallet:
  *
- * NOTE: a Worker isolate's memory is per-isolate and short-lived, so the in-memory stores give
- * no cross-request guarantee in production. That is deliberate for the E8 skeleton: wrangler.jsonc
- * binds no route (`workers_dev: false`), so nothing serves real traffic from these stubs.
+ * - `ROUTER_WALLET_URL` + `HYPERDRIVE` (production, E32/E33): `ApiWalletClient`. Every metered run
+ *   is reserved and settled once by apps/api's wallet; every settlement goes through the durable
+ *   Postgres outbox, and the `scheduled` handler (cron, wrangler.jsonc) is its retry job.
+ * - `ROUTER_WALLET_URL` without `HYPERDRIVE`: misconfigured; metered runs are refused (503
+ *   wallet_unavailable) rather than charged without a durable settlement. $0 runs proceed.
+ * - neither (development): the in-memory wallet; nothing is forwarded.
+ *
+ * The idempotency, health, run-log and personal stores are still per-isolate stubs.
  */
 import { allProviders } from "../connectors/index.js";
 import { createApp } from "./app.js";
@@ -16,30 +20,51 @@ import { DEFAULTS } from "./env.js";
 import { InMemoryHealthStore } from "./health.js";
 import { InMemoryIdempotencyStore } from "./idempotency.js";
 import { consoleLogger } from "./logging.js";
-import { InMemoryMeteringClient } from "./metering.js";
+import { InMemoryMeteringClient, type MeteringClient } from "./metering.js";
+import { SettlementDelivery, SqlSettlementOutbox } from "./outbox.js";
 import { InMemoryPersonalStore, PersonalRanker } from "./personal.js";
 import { InMemoryRunLogSink } from "./runlog.js";
-import { HttpSettlementSink } from "./settlement.js";
-import { createFetchTransport, createSettlementPoster } from "./transport.js";
+import { createFetchTransport, createSettlementPoster, createWalletTransport, postgresConnector } from "./transport.js";
+import { ApiWalletClient, UnavailableWalletClient } from "./wallet.js";
 
 type App = ReturnType<typeof createApp>;
-let cached: { env: RouterEnv; app: App } | undefined;
+let cached: { env: RouterEnv; app: App; delivery: SettlementDelivery | undefined } | undefined;
 
-function appFor(env: RouterEnv): App {
-  if (cached && cached.env === env) return cached.app;
+/** The outbox delivery, when the wallet is wired with its database. */
+function deliveryFor(env: RouterEnv): SettlementDelivery | undefined {
+  if (!env.ROUTER_WALLET_URL || !env.HYPERDRIVE?.connectionString) return undefined;
+  const credentials = env as unknown as Record<string, string | undefined>;
+  const outbox = new SqlSettlementOutbox(postgresConnector(env.HYPERDRIVE.connectionString));
+  const url = `${env.ROUTER_WALLET_URL.replace(/\/+$/, "")}/v1/internal/router/settlements`;
+  return new SettlementDelivery(outbox, createSettlementPoster({ env: credentials, url }), consoleLogger);
+}
+
+function walletFor(env: RouterEnv, delivery: SettlementDelivery | undefined): MeteringClient {
+  if (!env.ROUTER_WALLET_URL) return new InMemoryMeteringClient({ topUpUrl: env.ROUTER_TOPUP_URL ?? DEFAULTS.ROUTER_TOPUP_URL });
+  if (!delivery || !env.HYPERDRIVE?.connectionString) {
+    consoleLogger.log({ kind: "metering", outcome: "outbox_not_configured" });
+    return new UnavailableWalletClient(consoleLogger);
+  }
+  const credentials = env as unknown as Record<string, string | undefined>;
+  return new ApiWalletClient({
+    wallet: createWalletTransport({ env: credentials, baseUrl: env.ROUTER_WALLET_URL }),
+    outbox: new SqlSettlementOutbox(postgresConnector(env.HYPERDRIVE.connectionString)),
+    delivery,
+    logger: consoleLogger,
+  });
+}
+
+function appFor(env: RouterEnv): { app: App; delivery: SettlementDelivery | undefined } {
+  if (cached && cached.env === env) return cached;
   const catalog = compileCatalog(allProviders());
   // E20: per-isolate stub, like the other stores. Production: the principal's tool_runs (V94) via the sidecar.
   const personal = new PersonalRanker(new InMemoryPersonalStore(), catalog.index);
-  const credentials = env as Record<string, string | undefined>;
-  // E29: every settled run is forwarded to apps/api's provider ledger when the URL is set. The
-  // token is read by the transport module at send time, never here.
-  const settlements = env.ROUTER_SETTLEMENT_URL
-    ? new HttpSettlementSink(createSettlementPoster({ env: credentials, url: env.ROUTER_SETTLEMENT_URL }))
-    : undefined;
+  const credentials = env as unknown as Record<string, string | undefined>;
+  const delivery = deliveryFor(env);
   const app = createApp({
     catalog,
     transport: createFetchTransport({ env: credentials }),
-    metering: new InMemoryMeteringClient({ topUpUrl: env.ROUTER_TOPUP_URL ?? DEFAULTS.ROUTER_TOPUP_URL, ...(settlements ? { settlements } : {}) }),
+    metering: walletFor(env, delivery),
     runLog: new InMemoryRunLogSink(),
     personal,
     idempotency: new InMemoryIdempotencyStore(),
@@ -48,12 +73,23 @@ function appFor(env: RouterEnv): App {
     approvalBaseUrl: env.APPROVAL_BASE_URL ?? DEFAULTS.APPROVAL_BASE_URL,
   });
   consoleLogger.log({ kind: "catalog", count: catalog.manifest.entry_count });
-  cached = { env, app };
-  return app;
+  cached = { env, app, delivery };
+  return cached;
+}
+
+/** The parts of the Workers `ExecutionContext` this entry uses. */
+interface WaitUntil {
+  waitUntil(promise: Promise<unknown>): void;
 }
 
 export default {
   fetch(request: Request, env: RouterEnv): Response | Promise<Response> {
-    return appFor(env).fetch(request);
+    return appFor(env).app.fetch(request);
+  },
+  /** The outbox retry job (E33): promote abandoned drafts, deliver due settlements with backoff,
+   * prune delivered rows. Logs counts only. */
+  scheduled(_controller: unknown, env: RouterEnv, ctx: WaitUntil): void {
+    const { delivery } = appFor(env);
+    if (delivery) ctx.waitUntil(delivery.flush());
   },
 };

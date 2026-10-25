@@ -51,6 +51,7 @@ import { HANDOFF_PATH, handleHandoff } from "./handoff.js";
 import { createApprovalsApp, type ApprovalsDeps } from "./approvals/app.js";
 import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
 import { registerPayoutRoutes, type PayoutDeps } from "./payouts-app.js";
+import { ROUTER_RESERVE_PATH, ROUTER_SETTLEMENTS_PATH, registerRouterWalletRoutes } from "./router-wallet.js";
 import { createEnterpriseApp, ssoConsentPolicy, type EnterpriseDeps } from "./enterprise/app.js";
 import { regionAdmission } from "./enterprise/region.js";
 
@@ -105,6 +106,10 @@ export interface AgentDeps extends MeteringDeps {
   /** Provider payouts (E29, payouts-app.ts): the settlement seam, Connect onboarding, provider
    * statements and the payout run. Absent = those routes do not exist on this gateway. */
   payouts?: PayoutDeps;
+  /** The router's wallet (E32, router-wallet.ts): `ROUTER_SETTLEMENT_TOKEN`. Set = the router
+   * reserves and settles its runs here (`/v1/internal/router/{reserve,settlements}`). Absent, a
+   * `payouts.settlementToken` serves the same routes. */
+  routerWallet?: { token: string };
   /** The enterprise lane (E26, enterprise/app.ts): tenants, SSO for tenant admins, SCIM, region
    * separation, the tenant audit export. Absent = none of those routes exist and every principal
    * is served here. */
@@ -540,10 +545,19 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     ...(deps.licensePublicKey ? { licensePublicKey: deps.licensePublicKey } : {}),
   });
 
-  // --- E29 provider payouts: the router's settlement seam, Connect onboarding, statements ---
+  // --- E29 provider payouts: Connect onboarding, statements, the payout run ---
   if (deps.payouts) {
-    for (const path of ["/v1/providers/*", "/v1/internal/router/settlements", "/v1/admin/providers", "/v1/admin/providers/*", "/v1/admin/payouts/*"]) app.use(path, wellknown.observe);
+    for (const path of ["/v1/providers/*", "/v1/admin/providers", "/v1/admin/providers/*", "/v1/admin/payouts/*"]) app.use(path, wellknown.observe);
     registerPayoutRoutes(app, { ...deps.payouts, log: deps.log, now, publicBaseUrl: deps.publicBaseUrl, requireKey, principalOf });
+  }
+
+  // --- E32 the router's wallet: every router run reserved and settled here, once ---
+  const routerToken = deps.routerWallet?.token ?? deps.payouts?.settlementToken;
+  if (routerToken) {
+    for (const path of [ROUTER_RESERVE_PATH, ROUTER_SETTLEMENTS_PATH]) app.use(path, wellknown.observe);
+    registerRouterWalletRoutes(app, { token: routerToken, metering: meteringDeps, ...(deps.payouts ? { payouts: deps.payouts.store } : {}) });
+  } else if (deps.payouts) {
+    app.post(ROUTER_SETTLEMENTS_PATH, (c) => agentError(c, 503, "settlements_unavailable", "Run settlements are not accepted on this gateway (ROUTER_SETTLEMENT_TOKEN unset).", "retry_after", { "retry-after": "3600" }));
   }
 
   // --- remote approvals (E15): the page, Slack, webhooks, and the notification hook ---

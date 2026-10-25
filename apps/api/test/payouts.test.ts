@@ -12,7 +12,7 @@ import { payoutsConfigFromEnv } from "../src/boot.js";
 import { signState, verifyState } from "../src/payouts-app.js";
 import { SqlPayoutStore } from "../src/payouts-pg-store.js";
 import {
-  DEFAULT_MIN_PAYOUT_MICROS, InMemoryPayoutStore, SETTLEMENT_FORMAT, decidePayout, parseSettlement, payeeOf, runProviderPayouts, settlementRecord, takeOf,
+  DEFAULT_MIN_PAYOUT_MICROS, InMemoryPayoutStore, SETTLEMENT_FORMAT, SETTLEMENT_FORMAT_V1, decidePayout, parseSettlement, payeeOf, runProviderPayouts, settlementRecord, takeOf,
   type PayoutStore, type RunSettlementInput, type TransferFn,
 } from "../src/payouts.js";
 import { BASE, TEST_KEY_ITERATIONS, authed, makeAgentRig, type AgentRig } from "./agent-helpers.js";
@@ -32,8 +32,8 @@ const backends: Array<[string, () => PayoutStore]> = [
 
 function settlement(over: Partial<RunSettlementInput> = {}): RunSettlementInput {
   return {
-    format: SETTLEMENT_FORMAT, run_id: `run_${Math.random().toString(36).slice(2)}`, ts: OCT_10, tool_id: "acme.lookup", provider_id: "acme",
-    first_party: false, payout_account_ref: "acct_1Acme", outcome: "ok", quantity: 1, provider_micro_usd: 1_000_000, ...over,
+    format: SETTLEMENT_FORMAT, run_id: `run_${Math.random().toString(36).slice(2)}`, receipt_id: null, ts: OCT_10, tool_id: "acme.lookup", provider_id: "acme",
+    first_party: false, payout_account_ref: "acct_1Acme", marketplace: null, outcome: "ok", quantity: 1, provider_micro_usd: 1_000_000, ...over,
   };
 }
 
@@ -93,14 +93,22 @@ describe("configuration", () => {
 });
 
 describe("rules", () => {
-  it("takes 5% rounded up on third-party runs only; first-party and passthrough take nothing", () => {
+  it("takes 5% rounded up once on every third-party run (Connect or marketplace); first-party takes nothing", () => {
     expect(takeOf(1_000)).toBe(50);
     expect(takeOf(1_001)).toBe(51);
     expect(payeeOf({ first_party: true, payout_account_ref: "first-party:select" })).toBe("first_party");
     expect(payeeOf({ first_party: false, payout_account_ref: null })).toBe("passthrough");
+    expect(payeeOf({ first_party: false, payout_account_ref: null, marketplace: "monid" })).toBe("passthrough");
     expect(payeeOf({ first_party: false, payout_account_ref: "acct_1" })).toBe("connect");
     expect(settlementRecord(settlement({ first_party: true, payout_account_ref: "first-party:select", provider_micro_usd: 2000 })).takeMicros).toBe(0);
     expect(settlementRecord(settlement({ provider_micro_usd: 2000 })).takeMicros).toBe(100);
+    // E32: a marketplace run's price is the marketplace's own (no markup baked in), so the one take is recorded here.
+    expect(settlementRecord(settlement({ provider_id: "monid", tool_id: "monid.exa.search", payout_account_ref: null, marketplace: "monid", provider_micro_usd: 1300 })).takeMicros).toBe(65);
+    // A format /1 passthrough (the E29 importer baked 5% into its price) records no second take.
+    const { receipt_id: _r, marketplace: _m, ...v1 } = settlement({ format: SETTLEMENT_FORMAT_V1, payout_account_ref: null, provider_micro_usd: 1365 });
+    const parsedV1 = parseSettlement(v1);
+    expect(parsedV1.ok).toBe(true);
+    if (parsedV1.ok) expect(settlementRecord(parsedV1.value).takeMicros).toBe(0);
   });
 
   it("validates a settlement strictly: content-free fields only, a price only on ok runs", () => {
@@ -109,6 +117,12 @@ describe("rules", () => {
     expect(parseSettlement(settlement({ outcome: "provider_error", provider_micro_usd: 5 })).ok).toBe(false);
     expect(parseSettlement(settlement({ tool_id: "other.lookup" })).ok).toBe(false);
     expect(parseSettlement(settlement({ payout_account_ref: "DE89 3704 0044" })).ok).toBe(false);
+    // /2: a settlement settles only its own run's reservation, and the new fields are required.
+    expect(parseSettlement(settlement({ run_id: "r1", receipt_id: "rcpt_run_r1" })).ok).toBe(true);
+    expect(parseSettlement(settlement({ run_id: "r1", receipt_id: "rcpt_run_r2" })).ok).toBe(false);
+    const { receipt_id: _drop, ...missing } = settlement();
+    expect(parseSettlement(missing).ok).toBe(false);
+    expect(parseSettlement(settlement({ first_party: true, marketplace: "monid" })).ok).toBe(false);
   });
 
   it("decides held / below_minimum / pending in that order", () => {
@@ -224,8 +238,8 @@ describe("settlement route", () => {
     expect(await store.accruals("acme", "2026-10-01", "2026-11-01")).toEqual([]);
     const s = settlement({ run_id: "same" });
     const first = await postSettlements(rig, [s]);
-    expect(await first.json()).toEqual({ recorded: 1, duplicates: 0 });
-    expect(await (await postSettlements(rig, [s])).json()).toEqual({ recorded: 0, duplicates: 1 });
+    expect(await first.json()).toEqual({ recorded: 1, duplicates: 0, wallet_settled: 0, accrual: "on" });
+    expect(await (await postSettlements(rig, [s])).json()).toEqual({ recorded: 0, duplicates: 1, wallet_settled: 0, accrual: "on" });
     expect(rig.logLines.join("\n")).not.toContain(TOKEN);
   });
 

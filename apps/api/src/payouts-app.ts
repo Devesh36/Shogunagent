@@ -2,7 +2,7 @@
  * The provider payout routes (E29), registered on the agent app (`agent-app.ts`) when
  * `deps.payouts` is set. Contract: docs/api/payouts.md.
  *
- *   POST /v1/internal/router/settlements          the router's run settlements      [ROUTER_SETTLEMENT_TOKEN]
+ *   (POST /v1/internal/router/settlements, the router's run settlements, is router-wallet.ts.)
  *   GET  /v1/providers/me                          the provider account, status, this month [read]
  *   POST /v1/providers/me/connect                  a Stripe Connect Express onboarding link [write, key only]
  *   GET  /v1/providers/connect/return?state=       where Stripe sends the provider back (HTML, no JS)
@@ -26,14 +26,16 @@ import { ACCOUNT_ID_RE, createAccountLink, createExpressAccount, createTransfer,
 import { monthBounds, monthClosed, monthOf } from "./billing/ledger.js";
 import { StripeError } from "./billing/stripe.js";
 import type { LogFn } from "./logging.js";
+import { RUN_MARKUP_BPS } from "./pricing.js";
 import {
-  DEFAULT_MIN_PAYOUT_MICROS, MAX_SETTLEMENTS_PER_POST, PROVIDER_ADJUSTMENT_REASONS, PayoutStoreUnavailable, monthEndDay, parseSettlement, runProviderPayouts, settlementRecord,
+  DEFAULT_MIN_PAYOUT_MICROS, PROVIDER_ADJUSTMENT_REASONS, PayoutStoreUnavailable, monthEndDay, runProviderPayouts,
   type PayoutStore, type ProviderAccount, type ProviderAdjustment, type TransferFn,
 } from "./payouts.js";
 
 export interface PayoutDeps {
   store: PayoutStore;
-  /** `ROUTER_SETTLEMENT_TOKEN`: the bearer the router presents. Absent = the route answers 503. */
+  /** `ROUTER_SETTLEMENT_TOKEN`: the bearer the router presents. Set = the router's wallet routes
+   * (router-wallet.ts) are served and accrue to this ledger. */
   settlementToken?: string;
   /** HMAC key of the onboarding return/refresh `state` (`PAYOUTS_STATE_SECRET`). */
   stateSecret: string;
@@ -162,7 +164,7 @@ export async function providerStatement(store: PayoutStore, providerId: string, 
       transfer_id: payout.transferId ?? null, decided_at: iso(payout.updatedAt),
     } : null,
     minimum_payout_micro_usd: minPayoutMicros,
-    take_bps: 500,
+    take_bps: RUN_MARKUP_BPS,
     notes: "Failures and empty results count as runs at $0. The take is ours on third-party runs only. A payout is cumulative: held or carried balances are paid by a later month, never twice.",
   };
   const { hash: _drop, ...rest } = body;
@@ -206,37 +208,8 @@ export function registerPayoutRoutes(app: Hono<{ Variables: AgentVars }>, deps: 
     return agentError(c, 404, "provider_not_found", "This key's principal is not bound to a listed provider. An operator binds it when the listing PR is merged.");
   };
 
-  // --- the settlement seam (router → ledger) ---
-  app.post("/v1/internal/router/settlements", bodyLimit({ maxSize: MAX_SETTLEMENT_BODY_BYTES, onError: (c) => agentError(c, 413, "body_too_large", `At most ${MAX_SETTLEMENTS_PER_POST} settlements per request.`) }), async (c) => {
-    if (!deps.settlementToken) return agentError(c, 503, "settlements_unavailable", "Run settlements are not accepted on this gateway (ROUTER_SETTLEMENT_TOKEN unset).", "retry_after", { "retry-after": "3600" });
-    if (!tokenMatches(c.req.header("authorization"), deps.settlementToken)) {
-      c.set("relayLogEvent", "settlement_rejected");
-      return agentError(c, 401, "invalid_token", "This route takes the router's settlement token.");
-    }
-    const body = await readJson(c);
-    const list = body?.settlements;
-    if (!Array.isArray(list) || list.length === 0 || list.length > MAX_SETTLEMENTS_PER_POST) return agentError(c, 400, "invalid_settlements", `The body must be {"settlements": [...]} with 1 to ${MAX_SETTLEMENTS_PER_POST} entries.`, "fix_input");
-    const parsed = list.map(parseSettlement);
-    const bad = parsed.findIndex((p) => !p.ok);
-    if (bad >= 0) {
-      const p = parsed[bad];
-      return agentError(c, 400, "invalid_settlement", `settlements[${bad}]: ${p && !p.ok ? p.error : "invalid"}. Nothing was recorded.`, "fix_input");
-    }
-    let recorded = 0;
-    let duplicates = 0;
-    try {
-      for (const p of parsed) {
-        if (!p.ok) continue;
-        const out = await store.recordSettlement(settlementRecord(p.value));
-        if (out === "recorded") recorded += 1; else duplicates += 1;
-      }
-    } catch {
-      // 503 makes the router retry; run ids keep the retry idempotent.
-      return unavailable(c);
-    }
-    c.set("relayLogEvent", "settlements_recorded");
-    return c.json({ recorded, duplicates }, 200, { "cache-control": "no-store" });
-  });
+  // The settlement seam (router → wallet + ledger) is router-wallet.ts: it exists whenever the
+  // router's token is configured, and accrues here when payouts are on.
 
   // --- the provider's own view ---
   app.get("/v1/providers/me", requireKey(["read"]), async (c) => {

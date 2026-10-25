@@ -17,7 +17,7 @@ An entry:
   "summary": "Find what the user committed to: promises, deliverables and deadlines they made to others.",
   "categories": ["state", "memory"],
   "permission": { "level": "L1", "class": "read", "meaning": "Runs immediately. Reads only; nothing leaves the user's data." },
-  "price": { "model": "per_call", "unit": "call", "cost_micro_usd": 0, "quote_micro_usd": 0, "quote_usd": "$0", "failures_cost": 0, "empty_results_cost": 0 },
+  "price": { "model": "per_call", "unit": "call", "cost_micro_usd": 0, "quote_micro_usd": 0, "quote_usd": "$0", "provider_quote_micro_usd": 0, "take_bps": 0, "failures_cost": 0, "empty_results_cost": 0 },
   "health": { "p50_ms": 40, "p95_ms": 120, "success_rate": 0.999, "source": "declared" },
   "data_handling": { "retention": "user_account", "retention_days": 0, "zero_retention": false, "regions": ["global"], "statement": "…" },
   "docs_url": "https://…", "entry_hash": "…",
@@ -25,6 +25,7 @@ An entry:
 }
 ```
 
+- `price`: the usage-model figures (`cost_micro_usd`, …) and `provider_quote_micro_usd` are the provider's own price (for a marketplace import such as Monid, the marketplace's price). `quote_micro_usd` is what the caller pays for a typical run: that price plus one take, `take_bps` (500 for third-party tools, 0 for first-party), charged once by the wallet (E32, `docs/api/payouts.md`).
 - `health.source` is `observed` once the router has seen 20 runs of the tool, `declared` (the provider's baseline) before that.
 - `data_handling` is `null` for passthrough entries (an imported marketplace catalog), which are handled under that marketplace's terms.
 - `ranking.formula` is the exact formula `router.discover` uses; `ranking.policy` states that first-party tools get no boost, no pinned slot and no hidden term (CLAUDE.md invariant 13).

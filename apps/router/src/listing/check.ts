@@ -220,7 +220,8 @@ export async function checkListing(provider: ProviderDefinition, dir: string): P
       tool_id: toolId(e),
       class: e.scope?.class ?? null,
       level: e.scope?.class ? levelFor(e.scope.class) : null,
-      quote_micro_usd: entry?.quote_micro_usd ?? null,
+      // The provider's own typical price (what its provider.json declares), before the router's take.
+      quote_micro_usd: entry?.provider_quote_micro_usd ?? null,
       fixtures: e.fixtures.length,
       fixtures_replayed: 0,
       description_chars: e.meta.description?.length ?? 0,

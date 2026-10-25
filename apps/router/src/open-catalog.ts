@@ -9,6 +9,7 @@
  * is not in the compiled catalog at all (src/catalog.ts publishes only `data_handling`), so it
  * cannot reach this surface; test/open-catalog.test.ts asserts it against every manifest.
  */
+import { RUN_MARKUP_BPS } from "./take.js";
 import type { Category } from "../connectors/categories.js";
 import type { JsonObject, OpClass } from "../connectors/types.js";
 import type { CatalogEntry, CompiledCatalog, PublicUsage } from "./catalog.js";
@@ -31,7 +32,7 @@ export interface OpenCatalogEntry {
   summary: string;
   categories: Category[];
   permission: { level: Level; class: OpClass; meaning: string };
-  price: PublicUsage & { quote_micro_usd: number; quote_usd: string; failures_cost: 0; empty_results_cost: 0 };
+  price: PublicUsage & { quote_micro_usd: number; quote_usd: string; provider_quote_micro_usd: number; take_bps: number; failures_cost: 0; empty_results_cost: 0 };
   health: { p50_ms: number; p95_ms: number; success_rate: number; source: "observed" | "declared" };
   data_handling: PublicDataHandling | null;
   docs_url: string | null;
@@ -58,7 +59,7 @@ export const NO_SELF_PREFERENCING =
   "First-party tools are ranked by the same published formula as third-party tools, labeled first_party, and carry their price inside the score breakdown. There is no boost, no pinned slot and no hidden term.";
 
 export const PRICING_NOTE =
-  "quote_micro_usd is what one typical run is quoted (1 USD = 1,000,000 micro-USD). Failures and empty results cost 0. Third-party runs settle at the provider's price plus a 5% take; first-party runs at their listed price. Reads of the user's own state are free.";
+  "quote_micro_usd is what one typical run is quoted (1 USD = 1,000,000 micro-USD). Failures and empty results cost 0. The usage figures are the provider's own price (for a marketplace import, the marketplace's price); third-party runs settle at that price plus one take (take_bps), charged once by the wallet; first-party runs at their listed price. Reads of the user's own state are free.";
 
 function usd(micro: number): string {
   if (micro === 0) return "$0";
@@ -77,7 +78,7 @@ export function openEntry(entry: CatalogEntry, health: HealthStore): OpenCatalog
     summary: entry.summary,
     categories: entry.categories,
     permission: { level: entry.scope.level, class: entry.scope.class, meaning: LEVEL_MEANING[entry.scope.level] },
-    price: { ...entry.usage, quote_micro_usd: entry.quote_micro_usd, quote_usd: usd(entry.quote_micro_usd), failures_cost: 0, empty_results_cost: 0 },
+    price: { ...entry.usage, quote_micro_usd: entry.quote_micro_usd, quote_usd: usd(entry.quote_micro_usd), provider_quote_micro_usd: entry.provider_quote_micro_usd, take_bps: entry.first_party ? 0 : RUN_MARKUP_BPS, failures_cost: 0, empty_results_cost: 0 },
     health: { p50_ms: live.p50_ms, p95_ms: live.p95_ms, success_rate: live.success_rate, source: live === entry.health ? "declared" : "observed" },
     data_handling: entry.data_handling,
     docs_url: entry.docs_url,

@@ -125,7 +125,11 @@ curl -s -X POST http://localhost:8787/v1/router/run \
 
 Each run emits one `ToolRunRecord { ts, actor, tool_id, task_hint, outcome, cost_micro_usd, latency_ms, hint_followed }` to the `RunLogSink` (no bodies; `actor` is a hash of the key).
 
-Each run that reserved also settles exactly once with a `RunSettlement { format, run_id, ts, tool_id, provider_id, first_party, payout_account_ref, outcome, quantity, provider_micro_usd }` (E29): `outcome` is `ok`, `empty`, `provider_error` or `transport_error`, and `provider_micro_usd` is the provider's price for an `ok` run and 0 otherwise. The settlement has no actor and no body; `run_id` is the receiver's idempotency key. apps/api turns it into the provider's daily accrual and computes our 5% take from its own rate table (docs/api/payouts.md).
+Each run that reserved also settles exactly once with a `RunSettlement { format, run_id, receipt_id, ts, tool_id, provider_id, first_party, payout_account_ref, marketplace, outcome, quantity, provider_micro_usd }` (E29, E32; format `shogunagent-run-settlement/2`): `outcome` is `ok`, `empty`, `provider_error` or `transport_error`, and `provider_micro_usd` is the provider's price for an `ok` run and 0 otherwise. The settlement has no actor and no body; `run_id` is the receiver's idempotency key.
+
+**One charge, one take (E32).** In production the router holds no balance: `ApiWalletClient` (`src/wallet.ts`) reserves each metered run on apps/api's wallet (`POST /v1/internal/router/reserve`, the caller's key forwarded in `X-Caller-Authorization`) and settles it through `POST /v1/internal/router/settlements`. Only the provider's price crosses the wire; apps/api adds the take (`RUN_MARKUP_BPS`, set once in `packages/config/pricing.json`, which `src/take.ts` reads for the prices discover / inspect / dryRun quote). Catalog `usage` figures are provider prices; `quote_micro_usd` is the caller's price (provider + one take, none for first-party), `provider_quote_micro_usd` the provider's. A $0 tool never calls the wallet.
+
+**Durable outbox (E33).** Every settlement is written to `router_settlement_outbox` (`sql/settlement-outbox.sql`, Postgres through the `HYPERDRIVE` binding; `src/outbox.ts`) before it is sent: a $0 draft before apps/api holds money, the final settlement before delivery. Delivery is idempotent by `run_id`; the cron `scheduled` handler retries due rows with exponential backoff (30 s → 1 h, never giving up on a retryable status), releases the hold of a run abandoned for 10 minutes at $0, and keeps malformed rows as `dead` for an operator. Details: docs/api/payouts.md "Delivery".
 
 ### MCP
 
@@ -155,7 +159,7 @@ Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the conte
   | `slack.messages.post` | `external_send` | L3 | `SLACK_TOKEN` |
 
   In the hosted router the transport resolves the calling principal's own OAuth token for these variables; the definitions only name them. `test/connectors.test.ts` asserts the levels, that no L3 run reaches the transport, that the draft asks once, header-injection safety for Gmail and credential injection at fetch time only.
-- `monid` (passthrough, `src/passthrough/monid.ts`): endpoints imported from a Monid-style catalog JSON, executed through Monid's `POST /v1/run` with the router's `MONID_API_KEY` injected at the transport, priced at Monid's price + 5%. The fixture catalog holds 12 endpoints from 11 upstream providers (search, scrape, enrichment, SEO, image generation, and one L3 `provision-numbers`).
+- `monid` (passthrough, `src/passthrough/monid.ts`): endpoints imported from a Monid-style catalog JSON, executed through Monid's `POST /v1/run` with the router's `MONID_API_KEY` injected at the transport, priced at Monid's own price; the caller pays it plus one take, added by the wallet (before E32 the importer baked 5% in, and the wallet would have added 5% again). The fixture catalog holds 12 endpoints from 11 upstream providers (search, scrape, enrichment, SEO, image generation, and one L3 `provision-numbers`).
 
 ## Listing pipeline (E21)
 
@@ -165,8 +169,8 @@ Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the conte
 
 | Interface | Default | Production home |
 |---|---|---|
-| `MeteringClient` (`identify`, `reserve`, `settle(reservation, cost, settlement?)`) | `InMemoryMeteringClient` — `sa_` keys, $1 default balance, 401 for anonymous metered runs, x402-shaped 402; forwards each run's settlement to its `settlements` sink | apps/api wallet (E9) |
-| `SettlementSink` (E29, `src/settlement.ts`) | none (development); `InMemorySettlementSink` in tests | `HttpSettlementSink` → apps/api `POST /v1/internal/router/settlements` (`ROUTER_SETTLEMENT_URL` + secret `ROUTER_SETTLEMENT_TOKEN`), the provider payout ledger (docs/api/payouts.md) |
+| `MeteringClient` (`identify`, `reserve(identity, quote, { runId, bearer, draft })`, `settle(reservation, charged, settlement)`) | `InMemoryMeteringClient` — `sa_` keys, $1 default balance, 401 for anonymous metered runs, x402-shaped 402; forwards each run's settlement to its `settlements` sink | `ApiWalletClient` (E32, `src/wallet.ts`): apps/api's wallet (`ROUTER_WALLET_URL` + secret `ROUTER_SETTLEMENT_TOKEN`) |
+| `SettlementOutbox` (E33, `src/outbox.ts`) | `InMemorySettlementOutbox` (tests) | `SqlSettlementOutbox` on `router_settlement_outbox` (`HYPERDRIVE`), delivered by `SettlementDelivery` inline and from the cron trigger |
 | `RunLogSink` | `InMemoryRunLogSink` | `tool_runs` (V94) in the principal's store |
 | `PersonalStore` (behind `PersonalRanker`, E20) | `InMemoryPersonalStore` | the principal's `tool_runs` (V94) via the sidecar — never a hosted shared DB |
 | `IdempotencyStore` | `InMemoryIdempotencyStore` (24 h TTL, bounded) | the principal's store — never a hosted DB (invariant 2) |

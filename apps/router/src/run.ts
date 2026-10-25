@@ -4,6 +4,8 @@
  *   lookup → scope (L1/L2/L3, deny unknown) → validate input → quote (dryRun stops here)
  *   → identify actor → idempotency replay → L2: input_required / L3: approval URL
  *   → reserve → execute through the transport → settle (failures and empty results cost 0)
+ *   (E32: in production the reservation and the settlement are apps/api's wallet, src/wallet.ts,
+ *   which charges the caller once: provider price + one take; the router adds no price of its own)
  *   → map output → hints → run record → store for idempotency → respond.
  *
  * The engine never sees a credential: the bearer is a `Secret` it forwards opaquely to metering
@@ -24,6 +26,7 @@ import { clampTaskHint, type RunLogSink, type RunOutcome } from "./runlog.js";
 import { authorize, type Level } from "./scope.js";
 import type { Secret } from "./secret.js";
 import { buildSettlement, type SettledOutcome } from "./settlement.js";
+import { callerPrice, RUN_MARKUP_BPS } from "./take.js";
 import { TransportError, type Transport } from "./transport.js";
 import { settleUsage, type Usage, ZERO_USAGE } from "./usage.js";
 import type { RunVerbInput } from "./verbs.js";
@@ -71,7 +74,9 @@ export interface RunOkBody extends Common {
 export interface DryRunBody extends Common {
   resultType: "quote";
   dryRun: true;
-  quote: { estimate_micro_usd: number; unit: string; model: string; failures_cost: 0; empty_results_cost: 0 };
+  /** `estimate_micro_usd` is what the caller pays for a typical run: `provider_micro_usd` plus one
+   * take (`take_bps`, 0 for first-party tools). */
+  quote: { estimate_micro_usd: number; provider_micro_usd: number; take_bps: number; unit: string; model: string; failures_cost: 0; empty_results_cost: 0 };
 }
 
 /** MCP "input required" shape (E4-T2 MRTR): the client answers with `inputResponses`. */
@@ -151,7 +156,7 @@ export async function run(deps: RunDeps, call: RunCall): Promise<RunResult> {
     return fail("invalid_input", `input does not match the schema of "${toolId}"; call inspect for the schema`, "fix_input", "invalid_input", { details: validated.errors });
   }
   const input = validated.value;
-  const quote = { tool_id: toolId, estimate_micro_usd: entry.quote_micro_usd, unit: entry.usage.unit };
+  const quote = { tool_id: toolId, estimate_micro_usd: entry.quote_micro_usd, provider_micro_usd: entry.provider_quote_micro_usd, first_party: entry.first_party, unit: entry.usage.unit };
 
   // 3. dryRun: the quote and the permission level, nothing else.
   if (verb.dryRun) {
@@ -160,7 +165,10 @@ export async function run(deps: RunDeps, call: RunCall): Promise<RunResult> {
       dryRun: true,
       tool_id: toolId,
       permission_level: level,
-      quote: { estimate_micro_usd: quote.estimate_micro_usd, unit: quote.unit, model: entry.usage.model, failures_cost: 0, empty_results_cost: 0 },
+      quote: {
+        estimate_micro_usd: quote.estimate_micro_usd, provider_micro_usd: quote.provider_micro_usd, take_bps: entry.first_party ? 0 : RUN_MARKUP_BPS,
+        unit: quote.unit, model: entry.usage.model, failures_cost: 0, empty_results_cost: 0,
+      },
       usage: ZERO_USAGE,
       latency_ms: 0,
       hints: hints(),
@@ -226,18 +234,24 @@ export async function run(deps: RunDeps, call: RunCall): Promise<RunResult> {
   if (def.provider.auth.kind === "caller_bearer" && !call.bearer) {
     return fail("authentication_required", "this tool reads the user's own state; send your agent key as the bearer", "authenticate", "authentication_required");
   }
-  const reservation = await deps.metering.reserve(identity, quote);
+  // The run id names the result and is the settlement's idempotency key (E29) and, through the
+  // receipt id derived from it, the wallet's (E32). The draft is what settles if the run is
+  // abandoned after the hold: $0, transport_error (src/outbox.ts).
+  const runId = randomId();
+  const settlementOf = (receiptId: string | null, outcome: SettledOutcome, cost: number, quantity: number) =>
+    buildSettlement({ runId, receiptId, ts: start, toolId, provider: def.provider, endpoint: def.endpoint, outcome, quantity, costMicroUsd: cost });
+  const reservation = await deps.metering.reserve(identity, quote, { runId, ...(call.bearer ? { bearer: call.bearer } : {}), draft: settlementOf(null, "transport_error", 0, 0) });
   if (!reservation.ok) {
-    if (reservation.status === 401) return fail("authentication_required", "this tool is metered; send an agent key as the bearer", "authenticate", "authentication_required");
+    if (reservation.status === 401) return fail("authentication_required", "this tool is metered; send a valid agent key with the run scope as the bearer", "authenticate", "authentication_required");
+    if (reservation.status === 503) return fail("provider_unavailable", "the wallet is unavailable; nothing was charged and the provider was not called", "retry_after", "denied");
+    if (reservation.error === "cap_exceeded") return fail("payment_required", "this run would cross a hard spending cap; wait for the period to reset", "retry_after", "payment_required", { payment: reservation.payment, hints: hints() });
     return fail("payment_required", "insufficient balance for this run", "top_up", "payment_required", { payment: reservation.payment, hints: hints() });
   }
 
-  // The run id is minted once the run is committed to: it names the result, and it is the
-  // settlement's idempotency key at the payout ledger (E29, src/settlement.ts). Every run that
-  // reserved settles once, failures and empty results at $0 included.
-  const runId = randomId();
+  // Every run that reserved settles once, failures and empty results at $0 included. `cost` is the
+  // provider's measured price; the caller is charged it plus one take (0 when not ok).
   const settle = (outcome: SettledOutcome, cost: number, quantity: number): Promise<void> =>
-    deps.metering.settle(reservation.reservation_id, cost, buildSettlement({ runId, ts: start, toolId, provider: def.provider, endpoint: def.endpoint, outcome, quantity, costMicroUsd: cost }));
+    deps.metering.settle(reservation.reservation_id, outcome === "ok" ? callerPrice(cost, def.provider.first_party) : 0, settlementOf(reservation.receipt_id, outcome, cost, quantity));
 
   // 8. execute. The transport injects the provider credential; the engine never holds it.
   const request = def.endpoint.input.toRequest ? def.endpoint.input.toRequest({ input, request: { method: def.endpoint.request.method, path: def.endpoint.request.path } }) : defaultRequest(def.endpoint, input);
@@ -268,8 +282,10 @@ export async function run(deps: RunDeps, call: RunCall): Promise<RunResult> {
 
   // 9. map, settle, record.
   const output: Json = def.endpoint.output.fromResponse ? def.endpoint.output.fromResponse({ input, response }) : response.body;
-  const usage = settleUsage(def.endpoint, { input, response, output });
-  await settle(usage.quantity === 0 ? "empty" : "ok", usage.cost_micro_usd, usage.quantity);
+  const measured = settleUsage(def.endpoint, { input, response, output });
+  await settle(measured.quantity === 0 ? "empty" : "ok", measured.cost_micro_usd, measured.quantity);
+  // What the agent sees is what it pays: the provider's measured price plus one take.
+  const usage: Usage = { ...measured, cost_micro_usd: measured.quantity === 0 ? 0 : callerPrice(measured.cost_micro_usd, def.provider.first_party) };
   deps.health.observe(toolId, { latency_ms: execLatency, ok: true });
   const body: RunOkBody = {
     resultType: "result",
