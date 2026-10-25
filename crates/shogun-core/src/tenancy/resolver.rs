@@ -22,6 +22,13 @@ pub trait PrincipalResolver: Send + Sync {
     /// Every token this resolver accepts, for the server's token registry (auth happens there
     /// first, so the registry and the resolver must agree).
     fn tokens(&self) -> Vec<String>;
+
+    /// Whether [`Self::resolve`] also accepts bearers [`Self::tokens`] does not list (the derived
+    /// `sgw1` bearers of [`super::DerivedBearers`]): the server's token registry then asks the
+    /// resolver about an unlisted bearer instead of refusing it.
+    fn verifies_unlisted(&self) -> bool {
+        false
+    }
 }
 
 /// A fixed map of tokens to principals.

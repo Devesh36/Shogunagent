@@ -455,8 +455,9 @@ fn the_mcp_face_keeps_principals_apart() {
 
     // No bearer, or one no principal owns: refused before any store is opened.
     for token in [None, Some("token-nobody-01")] {
-        let (status, _, body) = mcp_raw(port, token, Some("tools/list"), None, list);
-        assert_eq!(status, 200, "{body}");
+        let (status, head, body) = mcp_raw(port, token, Some("tools/list"), None, list);
+        assert_eq!(status, 401, "{body}");
+        assert!(head.contains("www-authenticate: bearer"), "{head}");
         assert_eq!(json(&body)["error"]["code"], shogun_mcp::mcp::TOKEN_INVALID_CODE, "{body}");
     }
     // The same header contract as the single-principal face.

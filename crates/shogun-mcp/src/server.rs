@@ -425,6 +425,9 @@ async fn handle_mcp(State(state): State<AppState>, req: Request) -> Response {
     if let Some(allow) = reply.allow {
         response = response.header(axum::http::header::ALLOW, allow);
     }
+    if let Some(challenge) = reply.www_authenticate {
+        response = response.header(axum::http::header::WWW_AUTHENTICATE, challenge);
+    }
     // E15: a call that queued an approval names its decision token in a header, so the gateway
     // can notify Slack and webhooks without reading the body (invariant 2).
     if let Some(token) = approval_token_in(&reply.body) {
@@ -1071,6 +1074,15 @@ pub async fn bind_local(port: u16) -> std::io::Result<TcpListener> {
     }
 }
 
+/// Bind the localhost listener on exactly `port` (`0` = an ephemeral port), with no fallback
+/// (threat model R3): the hosted sidecar answers on the port its gateway dials or not at all, so a
+/// process that took that port first never receives the gateway's bearers and bodies while this
+/// server sits elsewhere. `AddrInUse` is returned to the caller, which refuses to start. Never
+/// binds a non-loopback interface (NFR-SEC-03).
+pub async fn bind_exact(port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind(("127.0.0.1", port)).await
+}
+
 /// Serve on an already-bound listener until the process ends. The caller reads the actual port from
 /// the listener before handing it over (so it can report it via `shogun api status`).
 pub async fn serve_on(listener: TcpListener, state: AppState) -> std::io::Result<()> {
@@ -1130,6 +1142,18 @@ mod tests {
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).await.unwrap();
         String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// R3: the exact bind refuses a taken port instead of moving; the desktop's bind still moves.
+    #[tokio::test]
+    async fn the_exact_bind_refuses_a_taken_port_and_never_moves() {
+        let taken = bind_exact(0).await.unwrap();
+        let port = taken.local_addr().unwrap().port();
+        let refused = bind_exact(port).await.unwrap_err();
+        assert_eq!(refused.kind(), std::io::ErrorKind::AddrInUse);
+        let moved = bind_local(port).await.unwrap();
+        assert_ne!(moved.local_addr().unwrap().port(), port, "the desktop fallback is unchanged");
+        assert!(moved.local_addr().unwrap().ip().is_loopback());
     }
 
     async fn spawn_server(tokens: TokenRegistry) -> std::net::SocketAddr {
