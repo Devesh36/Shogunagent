@@ -196,7 +196,7 @@ pub fn freeze_full_cycle(
 pub fn frozen_inputs(conn: &Connection, cycle_id: &str) -> Result<FrozenInputs, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT i.event_id, i.content, i.source, i.disposition, i.event_ts,
-                COALESCE(e.kind, 'text'), e.app_bundle_id, e.window_title
+                COALESCE(e.kind, 'text'), e.app_bundle_id, e.window_title, e.thread_key
          FROM dream_cycle_inputs i
          LEFT JOIN event_log e ON e.id = i.event_id
          WHERE i.cycle_id = ?1
@@ -223,6 +223,7 @@ pub fn frozen_inputs(conn: &Connection, cycle_id: &str) -> Result<FrozenInputs, 
             kind: row.get(5)?,
             app_bundle_id: row.get(6)?,
             window_title: row.get(7)?,
+            thread_key: row.get(8)?,
         };
         push_partitioned_event(&mut out.partitioned, meta, content);
     }

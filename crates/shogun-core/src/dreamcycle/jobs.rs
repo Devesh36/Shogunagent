@@ -4908,6 +4908,7 @@ mod tests {
                 kind: kind.into(),
                 app_bundle_id: Some(format!("com.example.app{app}")),
                 window_title: Some(format!("Window {app} — App {app}")),
+                thread_key: None,
             });
         };
         for visit in 0..60 {
@@ -5078,6 +5079,7 @@ mod tests {
                 kind: "text".into(),
                 app_bundle_id: Some("com.example.notes".into()),
                 window_title: Some("Notes".into()),
+                thread_key: None,
             })
             .collect();
         let (sessions, t) = build_batch_sessions_with_stats(&events, &meta);

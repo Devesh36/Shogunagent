@@ -17,8 +17,11 @@
 //!   sidecar's own in-memory map (`SHOGUN_PRINCIPAL_TOKENS`); `apps/api` replaces it with real
 //!   agent keys in E3.
 //! - [`import`]: a ShogunAI single-user `memory.db` becomes a principal's file (E2-T6).
+//! - [`dream_tick`]: the hourly Dream Cycle per principal, only when new material exists (E5-T4;
+//!   `shogun-api --dream-tick`).
 //! - [`multi`] (feature `daemon-server`): the `shogun-api --multi` composition.
 
+pub mod dream_tick;
 pub mod import;
 pub mod key_provider;
 #[cfg(feature = "daemon-server")]

@@ -409,3 +409,82 @@ fn dump_session_lines() {
         }
     }
 }
+
+/// E5-T2: a 1,000-turn agent conversation handed over through `memory.ingest` (`turns[]`, one
+/// thread) is folded by the consolidation lane into one session per thread and hour — not one per
+/// role or per turn — and the local-rule path of the hourly review recovers at least
+/// `MIN_RECOVERED` of its ten planted promises as commitments in the store. No model is called:
+/// the classifier is `LocalRuleClassifier`, the same one the no-Batch review runs.
+#[test]
+fn a_thousand_turn_conversation_yields_its_commitments_through_the_local_rules() {
+    use extract_eval::conversation::{self, MIN_RECOVERED, PLANTED, TURNS};
+    use shogun_core::dreamcycle::jobs::{DbDreamRunner, LocalExtractiveSummarizer};
+    use shogun_core::dreamcycle::plan::JobKind;
+    use shogun_core::dreamcycle::run::DreamJobRunner;
+
+    let conv = conversation::generate(317);
+    assert_eq!((conv.turns.len(), conv.planted.len()), (TURNS, PLANTED));
+    let end = conv.turns.last().expect("turns").ts_ms + 1;
+    let db = Db::open_in_memory(Arc::new(move || end)).expect("in-memory db");
+
+    // 1. Ingest, in bounded requests, exactly as an agent would.
+    let mut rows = BTreeSet::new();
+    for (start, stop) in conv.chunks() {
+        let request = shogun_mcp::ingest_api::ingest_request(&conv.ingest_body(start, stop)).expect("valid body");
+        let outcome = db.agent_ingest(&request).expect("ingest");
+        assert_eq!(outcome.rejected, 0, "filler is never instruction-shaped");
+        rows.extend(outcome.event_ids);
+    }
+    assert!(rows.len() <= TURNS && rows.len() >= PLANTED, "{} rows", rows.len());
+
+    // 2. The review's window folds the conversation by thread and hour.
+    let window = db.try_events_in_range_partitioned(0, i64::MAX).expect("window");
+    assert_eq!(window.cloud.len(), rows.len(), "every ingested row is cloud-eligible");
+    let (sessions, _) = build_batch_sessions_with_stats(&window.cloud, &window.cloud_meta);
+    let hours: BTreeSet<i64> = window.cloud_meta.iter().map(|m| m.ts.div_euclid(3_600_000)).collect();
+    assert_eq!(sessions.len(), hours.len(), "one session per hour of the conversation, not per role");
+    let thread = format!("agent:{}", conv.thread_key);
+    assert!(sessions.iter().all(|s| s.key.app == thread), "every session is the conversation's thread");
+    let session_text = sessions
+        .iter()
+        .flat_map(|s| s.lines.iter().map(|l| l.raw.clone()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let in_sessions = conv.planted.iter().filter(|p| session_text.contains(&p.sentence)).count();
+    assert!(in_sessions >= MIN_RECOVERED, "the sessions the lane would send carry {in_sessions} of {PLANTED} promises");
+
+    // 3. The local rules over the window find the promises...
+    let events = db.try_events_in_range(0, i64::MAX).expect("events");
+    let classified = LocalRuleClassifier.classify(&events);
+    let found: BTreeSet<String> = classified
+        .iter()
+        .flat_map(|(_, candidates)| candidates.iter())
+        .filter_map(|c| match c {
+            shogun_memory::extract::Candidate::Commitment { description, .. } => Some(description.clone()),
+            _ => None,
+        })
+        .collect();
+    let recovered = conv
+        .planted
+        .iter()
+        .filter(|p| found.iter().any(|d| d.contains(p.sentence.trim_end_matches('.'))))
+        .count();
+    assert!(recovered >= MIN_RECOVERED, "local rules recovered {recovered} of {PLANTED}");
+
+    // 4. ...and the review's Consolidation job leaves them as commitments in the store.
+    let summarizer = LocalExtractiveSummarizer;
+    let runner = DbDreamRunner::new(&db, &LocalRuleClassifier, &summarizer, end);
+    runner.run(JobKind::Consolidation, 0, end).expect("local consolidation");
+    let model = db.world_model(true).expect("world model");
+    let stored = conv
+        .planted
+        .iter()
+        .filter(|p| model.commitments.iter().any(|row| row.title.contains(p.sentence.trim_end_matches('.'))))
+        .count();
+    println!(
+        "E5-T2 conversation: {} rows, {} sessions, {recovered}/{PLANTED} by local rules, {stored}/{PLANTED} stored",
+        rows.len(),
+        sessions.len()
+    );
+    assert!(stored >= MIN_RECOVERED, "the store holds {stored} of {PLANTED} planted commitments");
+}

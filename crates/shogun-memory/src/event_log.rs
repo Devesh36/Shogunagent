@@ -694,6 +694,10 @@ pub struct BatchEventMeta {
     pub kind: String,
     pub app_bundle_id: Option<String>,
     pub window_title: Option<String>,
+    /// `event_log.thread_key` (V50): the conversation an agent's turns belong to (`agent:<thread>`,
+    /// E5-T2), so the consolidation lane folds a conversation into one session per hour instead
+    /// of one per role. `None` for rows without a thread.
+    pub thread_key: Option<String>,
 }
 
 /// An event text cleared for the Batch lane. The type is the proof: only this module constructs it
@@ -767,7 +771,7 @@ pub fn events_in_range_partitioned(
     to_ts: i64,
 ) -> Result<PartitionedEvents, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, content, source, ts, kind, app_bundle_id, window_title
+        "SELECT id, content, source, ts, kind, app_bundle_id, window_title, thread_key
          FROM event_log WHERE ts >= ?1 AND ts < ?2 ORDER BY ts, id",
     )?;
     let mut rows = stmt.query(params![from_ts, to_ts])?;
@@ -787,6 +791,7 @@ pub fn events_in_range_partitioned(
                 kind: row.get(4)?,
                 app_bundle_id: row.get(5)?,
                 window_title: row.get(6)?,
+                thread_key: row.get(7)?,
             });
         }
     }

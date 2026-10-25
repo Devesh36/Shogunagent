@@ -58,6 +58,10 @@ pub const SESSION_MAX_CHARS: usize = 12_000;
 /// Width of the session key's time bucket.
 pub const SESSION_HOUR_MS: i64 = 3_600_000;
 
+/// The `event_log.source` of rows `memory.ingest` writes (`shogun_mcp::ingest_api::EVENT_SOURCE`,
+/// spelled here so the session lane does not depend on the MCP crate's feature set).
+pub const AGENT_SOURCE: &str = "agent";
+
 /// How many characters of the supporting line the model copies as the anchor. The resolver is
 /// lenient about a few more; the instruction asks for this.
 pub const ANCHOR_MAX_CHARS: usize = 40;
@@ -142,8 +146,21 @@ pub struct SessionKey {
 }
 
 impl SessionKey {
-    /// The key of a row, from its grouping metadata.
+    /// The key of a row, from its grouping metadata. An agent's conversation turns (E5-T2:
+    /// `source = agent`, one row per turn with the role as the title, the thread key naming the
+    /// conversation) fold by **thread and hour**, not by role: the model reads the exchange as
+    /// one window the way it reads a chat window's capture, and each line still remembers its
+    /// own event id for provenance.
     pub fn from_meta(meta: &BatchEventMeta) -> Self {
+        if meta.source == AGENT_SOURCE {
+            if let Some(thread) = meta.thread_key.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                return Self {
+                    app: thread.to_string(),
+                    title: String::new(),
+                    hour: meta.ts.div_euclid(SESSION_HOUR_MS),
+                };
+            }
+        }
         Self {
             app: meta
                 .app_bundle_id
@@ -768,6 +785,7 @@ mod tests {
             kind: kind.to_string(),
             app_bundle_id: app.map(str::to_string),
             window_title: title.map(str::to_string),
+            thread_key: None,
         }
     }
 
