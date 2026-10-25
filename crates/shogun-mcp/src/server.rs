@@ -1161,7 +1161,9 @@ mod tests {
         .await;
         assert!(call.starts_with("HTTP/1.1 200"), "{call}");
         assert_eq!(header(&call, "mcp-name"), Some("memory.ingest"));
-        assert_eq!(header(&call, "mcp-quantity"), Some("3"));
+        // The stub backend has no ingest, so the call is refused and settles nothing (E36a: the
+        // header carries what the core took; `mcp_http` tests cover a taken count).
+        assert_eq!(header(&call, "mcp-quantity"), Some("0"), "{call}");
 
         let unmetered = raw_request(
             addr,
