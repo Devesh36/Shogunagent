@@ -52,16 +52,19 @@ describe("run (E8-T5)", () => {
     expect(empty.runLog.records[0]?.outcome).toBe("empty");
   });
 
-  it("a repeated idempotency key returns the stored result without re-running; a different input conflicts", async () => {
+  it("a repeated idempotency key answers a replay marker without re-running or re-charging; a different input conflicts", async () => {
     let n = 0;
     const deps = makeDeps({ responder: () => { n++; return okResponse; } });
     const a = await run(deps, { input: { tool_id: SEARCH, input: { query: "x" }, idempotency_key: "same" }, bearer: bearer() });
     const b = await run(deps, { input: { tool_id: SEARCH, input: { query: "x" }, idempotency_key: "same" }, bearer: bearer() });
     expect(n).toBe(1);
-    if (a.body.resultType !== "result" || b.body.resultType !== "result") throw new Error("expected results");
-    expect(b.body.result).toEqual(a.body.result);
+    if (a.body.resultType !== "result" || b.body.resultType !== "replay") throw new Error("expected a result, then a replay");
+    // E48: the result body is never stored, so the replay names the run instead of repeating it.
+    expect(b.body).not.toHaveProperty("result");
     expect(b.body.run_id).toBe(a.body.run_id);
     expect(b.body.replayed).toBe(true);
+    expect(b.body.original.usage).toEqual(a.body.usage);
+    expect(b.body.original.outcome).toBe("ok");
     expect(b.body.usage.cost_micro_usd).toBe(0);
     expect(deps.metering.balanceOf(AGENT_KEY)).toBe(1_000_000 - 1365);
     const c = await run(deps, { input: { tool_id: SEARCH, input: { query: "different" }, idempotency_key: "same" }, bearer: bearer() });

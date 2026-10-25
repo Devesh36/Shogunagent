@@ -72,6 +72,12 @@ function errorCodeOf(body: Json): string | undefined {
   return undefined;
 }
 
+/** A `Retry-After` from apps/api, in whole seconds within [1, 3600], or the fallback. */
+export function boundedRetryAfter(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(3600, Math.max(1, Math.ceil(value)));
+}
+
 export class ApiWalletClient implements MeteringClient {
   readonly #wallet: WalletTransport;
   readonly #outbox: SettlementOutbox;
@@ -101,9 +107,11 @@ export class ApiWalletClient implements MeteringClient {
     if (quote.provider_micro_usd === 0) return { ok: true, reservation_id: `free:${ctx.runId}`, receipt_id: null };
     if (identity.anonymous || !ctx.bearer) return { ok: false, status: 401, error: "authentication_required" };
     const receiptId = receiptIdFor(ctx.runId);
-    const unavailable = (word: string): Reservation => {
+    // E48: apps/api's own `Retry-After` reaches the agent unchanged when it sent one (bounded so a
+    // bad header cannot park an agent for hours); otherwise 5 s.
+    const unavailable = (word: string, retryAfter?: number): Reservation => {
       this.#logger.log({ kind: "metering", outcome: word, tool_id: quote.tool_id });
-      return { ok: false, status: 503, error: "wallet_unavailable", retry_after: 5 };
+      return { ok: false, status: 503, error: "wallet_unavailable", retry_after: boundedRetryAfter(retryAfter, 5) };
     };
     // 1. Durable first: if the router dies after apps/api holds the money, the retry job finds this
     // draft and releases the hold at $0.
@@ -121,7 +129,13 @@ export class ApiWalletClient implements MeteringClient {
       return unavailable("wallet_unreachable");
     }
     if (res.status >= 200 && res.status < 300) return { ok: true, reservation_id: receiptId, receipt_id: receiptId };
-    if (res.status >= 500) return unavailable("wallet_unavailable");
+    if (res.status >= 500) return unavailable("wallet_unavailable", res.retryAfter);
+    if (res.status === 429) {
+      // Throttled before anything was held: nothing will settle.
+      await this.#outbox.discard(ctx.runId).catch(() => undefined);
+      this.#logger.log({ kind: "metering", outcome: "wallet_rate_limited", tool_id: quote.tool_id });
+      return { ok: false, status: 429, error: "rate_limited", retry_after: boundedRetryAfter(res.retryAfter, 1) };
+    }
     // A definite refusal: nothing is held, so nothing will settle.
     await this.#outbox.discard(ctx.runId).catch(() => undefined);
     if (res.status === 402) {

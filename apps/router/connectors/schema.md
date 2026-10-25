@@ -41,7 +41,7 @@ export const exampleProvider = defineProvider({
 });
 ```
 
-`auth.kind` is one of `none`, `bearer`, `header` (`header` name), `query` (`param` name) or `caller_bearer` (forward the calling agent's own key — used by the first-party connector so the state face scopes the read to that agent's principal). Endpoint fields override provider fields; `categories` and `health` are inherited when omitted.
+`auth.kind` is one of `none`, `bearer`, `header` (`header` name), `query` (`param` name), `caller_bearer` (forward the calling agent's own key — used by the first-party connector so the state face scopes the read to that agent's principal) or `caller_connector` (`slot`, `credential_env`: act as the calling principal's own account at the vendor; the transport fetches that principal's token for `slot` from apps/api at run time, `docs/api/connector-tokens.md`, and reads `credential_env` only in development behind `ROUTER_DEV_SHARED_CREDENTIALS=1`). Endpoint fields override provider fields; `categories` and `health` are inherited when omitted.
 
 ### 2.2 Endpoint (`endpoints/<name>.ts`)
 

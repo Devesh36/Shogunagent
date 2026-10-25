@@ -3,8 +3,10 @@
  * sends invitations and is L3 by type (invariant 3). Ranked by the same score as any other
  * provider and labeled `first_party` (invariant 13).
  *
- * Auth: the user's Google OAuth access token from `GOOGLE_OAUTH_ACCESS_TOKEN`, injected by the
- * transport only (invariant 7).
+ * Auth: the calling principal's own Google Calendar access token (slot `gcal-tokenset`), fetched
+ * from apps/api at run time and injected by the transport only (invariant 7; E48,
+ * docs/api/connector-tokens.md). `GOOGLE_OAUTH_ACCESS_TOKEN` is read in development only, behind
+ * `ROUTER_DEV_SHARED_CREDENTIALS=1`.
  */
 import { defineProvider } from "../define.js";
 import { calendarEventsCreate } from "./endpoints/events.create.js";
@@ -21,7 +23,7 @@ export const calendarProvider = defineProvider({
     homepage: "https://shogunai.si",
   },
   request: { baseUrl: "https://www.googleapis.com" },
-  auth: { kind: "bearer", credential_env: "GOOGLE_OAUTH_ACCESS_TOKEN" },
+  auth: { kind: "caller_connector", slot: "gcal-tokenset", credential_env: "GOOGLE_OAUTH_ACCESS_TOKEN" },
   manifest,
   categories: ["calendar"],
   health: { p50_ms: 250, p95_ms: 900, success_rate: 0.997 },

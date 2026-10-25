@@ -26,7 +26,7 @@ export const RunInputSchema = z
   .object({
     tool_id: z.string().min(1).describe("A tool_id returned by discover."),
     input: z.record(z.string(), z.unknown()).describe("Arguments matching the tool's input_schema from inspect."),
-    idempotency_key: z.string().min(1).max(200).describe("A key you generate per attempt; repeating it returns the stored result without re-running."),
+    idempotency_key: z.string().min(1).max(200).describe("A key you generate per attempt; repeating it never runs or charges again (a completed run answers a replay with its run_id and usage, not the result)."),
     dryRun: z.boolean().optional().describe("Return the quote and permission level only; nothing runs and nothing is charged."),
     task_hint: z.string().max(500).optional().describe("Optional: the task phrase you discovered with. Used for better-fit hints and the run log, never stored with the input."),
     hint_followed: z.boolean().optional().describe("Optional: true if you chose this tool because of a hint."),

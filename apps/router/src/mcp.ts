@@ -8,6 +8,7 @@
 import { z } from "zod";
 import type { Json, JsonObject } from "../connectors/types.js";
 import { callVerb, VERB_DESCRIPTIONS, type RouterDeps } from "./engine.js";
+import { retryAfterOf } from "./responses.js";
 import type { Secret } from "./secret.js";
 import { VERB_SCHEMAS, type VerbName } from "./verbs.js";
 
@@ -71,6 +72,8 @@ export async function handleMcp(deps: RouterDeps, raw: unknown, bearer?: Secret)
       if (typeof name !== "string" || !(name in VERB_SCHEMAS)) return rpcError(id, -32602, `unknown tool; one of ${Object.keys(VERB_SCHEMAS).join(", ")}`, method);
       headers["Mcp-Name"] = name;
       const out = await callVerb(deps, name as VerbName, params["arguments"] ?? {}, bearer);
+      const retryAfter = retryAfterOf(out.body);
+      if (retryAfter) headers["Retry-After"] = retryAfter;
       return ok({
         content: [{ type: "text", text: JSON.stringify(out.body) }],
         structuredContent: out.body,
