@@ -5,19 +5,22 @@
 //! one response envelope ([`render_ingest`] / [`render_recall`], plan §7.2: `result`, `usage`,
 //! `latency_ms`).
 //!
-//! What this epic implements, honestly:
+//! What the two tools do (E5-T1 / E5-T3):
 //! - **ingest** appends each item to the event log through the existing append path (hidden
-//!   characters stripped, secrets masked, exact duplicates collapsed per thread) under a required
-//!   `idempotency_key`; the same key replays the first outcome and appends nothing. `turns[]`
-//!   are stored one event per turn with the role as the title; sessionizing them for the review
-//!   (E5-T2), the near-duplicate (Dice ≥ 0.98) collapse and the instruction-shaped gate are later.
-//!   `namespace` and `actor` are validated and carried to the store; the per-row columns land
-//!   with E2 (V92), so until then `actor` is kept on the row's app column and `namespace` is
-//!   accepted but not yet stored.
+//!   characters stripped, secrets masked) under a required `idempotency_key`; the same key
+//!   replays the first outcome and appends nothing. An item whose body is shaped as an
+//!   instruction to the assistant is refused (`rejected`), an exact duplicate within the thread
+//!   collapses onto its row (`deduplicated`), and a body at or above the 98 % bigram-Dice
+//!   similarity of a recent row in the same thread collapses onto that row too
+//!   (`near_duplicates`, counted inside `deduplicated`). Every row records the request's `actor`
+//!   and lands in its `namespace` (`world`, or the actor's own `agent_scratch:<id>`). `turns[]`
+//!   are stored one event per turn with the role as the title; the review sessionizes them by
+//!   thread and hour (E5-T2).
 //! - **recall** runs the context-pack assembly (federated search + state facts) and cuts the
-//!   result to `budget_tokens` with the fusion crate's token estimator: High facts first, then
-//!   `possibly:` facts, then dated evidence. `include_scratch` is accepted; a scratch namespace
-//!   has nothing to add until E2-T5 lands.
+//!   result to `budget_tokens` with the fusion crate's token estimator: state items with their
+//!   confidence band and proving quote first (High before Medium), then High facts, then
+//!   `possibly:` facts, then dated evidence. `include_scratch` widens the read to the caller's
+//!   scratch namespace. `used_tokens` never exceeds `budget_tokens`.
 
 use serde_json::{json, Value};
 
@@ -114,8 +117,14 @@ pub struct IngestOutcome {
     pub event_ids: Vec<i64>,
     /// Items that became new rows.
     pub inserted: usize,
-    /// Items that collapsed onto an existing row.
+    /// Items that collapsed onto an existing row (exact and near duplicates together).
     pub deduplicated: usize,
+    /// Of `deduplicated`, the items that were near-duplicates (bigram Dice ≥ 0.98) of a recent
+    /// row in the same thread rather than the same text.
+    pub near_duplicates: usize,
+    /// Items refused by the instruction-shaped gate: text written as an instruction to the
+    /// assistant is not stored (P4). They have no event id.
+    pub rejected: usize,
     /// The key was seen before: this is the first outcome, nothing was appended now.
     pub replayed: bool,
     /// The event log's thread key for the items, when one was derived.
@@ -132,9 +141,29 @@ pub struct RecallEvidence {
     pub excerpt: String,
 }
 
+/// One state row a recall matched: a commitment, open loop, person or project with its
+/// confidence band and the quote that proves it (E5-T3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecallItem {
+    /// `commitment`, `open_loop`, `person` or `project`.
+    pub kind: &'static str,
+    pub id: i64,
+    /// The description (commitment / open loop) or the name (person / project).
+    pub text: String,
+    pub confidence: f64,
+    /// `high` or `medium`; Low rows are never returned.
+    pub band: &'static str,
+    /// The stored proving quote, when the row has one.
+    pub quote: Option<String>,
+    /// The event the quote comes from (or the row's first evidence event).
+    pub event_id: Option<i64>,
+}
+
 /// What a recall found, already cut to the budget.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct RecallOutcome {
+    /// Matching state rows with band and quote, High first.
+    pub items: Vec<RecallItem>,
     /// High-confidence facts, as facts.
     pub facts: Vec<String>,
     /// Medium-confidence facts, each already prefixed `possibly: `.
@@ -301,6 +330,8 @@ pub fn render_ingest(request: &IngestRequest, outcome: &IngestOutcome, latency_m
             "accepted": outcome.event_ids.len(),
             "inserted": outcome.inserted,
             "deduplicated": outcome.deduplicated,
+            "near_duplicates": outcome.near_duplicates,
+            "rejected": outcome.rejected,
             "replayed": outcome.replayed,
             "event_ids": outcome.event_ids,
             "thread_key": outcome.thread_key,
@@ -320,6 +351,15 @@ pub fn render_recall(request: &RecallRequest, outcome: &RecallOutcome, latency_m
     json!({
         "tool": Tool::MemoryRecall.wire_name(),
         "result": {
+            "items": outcome.items.iter().map(|item| json!({
+                "kind": item.kind,
+                "id": item.id,
+                "text": item.text,
+                "confidence": item.confidence,
+                "band": item.band,
+                "quote": item.quote,
+                "event_id": item.event_id,
+            })).collect::<Vec<_>>(),
             "facts": outcome.facts,
             "possibly": outcome.possibly,
             "evidence": outcome.evidence.iter().map(|e| json!({
@@ -488,7 +528,7 @@ mod tests {
     #[test]
     fn envelopes_carry_result_usage_and_latency() {
         let request = ingest_request(&ingest_args()).unwrap();
-        let outcome = IngestOutcome { event_ids: vec![7], inserted: 1, deduplicated: 0, replayed: false, thread_key: Some("agent:task-1".into()) };
+        let outcome = IngestOutcome { event_ids: vec![7], inserted: 1, thread_key: Some("agent:task-1".into()), ..Default::default() };
         let value: Value = serde_json::from_str(&render_ingest(&request, &outcome, 3)).unwrap();
         assert_eq!(value["tool"], "memory.ingest");
         assert_eq!(value["result"]["event_ids"], json!([7]));
