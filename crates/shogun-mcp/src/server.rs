@@ -94,6 +94,9 @@ pub struct AppState {
     /// Carries out an approved action once a human decided it (E15 follow-up). `None` in a build
     /// without the execution path: decided approvals stay `approved` (`execute_unavailable`).
     executor: Option<Arc<dyn crate::approval_exec::ApprovalExecutor>>,
+    /// The principals' connector credentials (E50, `connector_vault`): the gateway's internal
+    /// token and connect routes. `None` answers 404 there.
+    connectors: Option<Arc<dyn crate::connector_vault::ConnectorVault>>,
 }
 
 /// Multi-principal mode (E2-T2): which store and which writer a bearer token names. `apps/api`
@@ -184,6 +187,7 @@ impl AppState {
             remote: crate::remote_approvals::RemoteApprovals::from_env(),
             admin_digest: std::env::var("SHOGUN_ADMIN_TOKEN").ok().and_then(|t| admin_digest(&t)),
             executor: None,
+            connectors: None,
         }
     }
 
@@ -210,6 +214,14 @@ impl AppState {
     #[must_use]
     pub fn with_approval_executor(mut self, executor: Arc<dyn crate::approval_exec::ApprovalExecutor>) -> Self {
         self.executor = Some(executor);
+        self
+    }
+
+    /// Serve the principals' connector credentials (E50): `POST /v1/internal/connectors/*`, for the
+    /// gateway with the admin credential and the principal's own bearer (multi-principal only).
+    #[must_use]
+    pub fn with_connector_vault(mut self, vault: Arc<dyn crate::connector_vault::ConnectorVault>) -> Self {
+        self.connectors = Some(vault);
         self
     }
 
@@ -596,6 +608,12 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     let request_id = crate::governance_api::request_id(
         req.headers().get("x-request-id").and_then(|v| v.to_str().ok()),
     );
+    // E50: the principal a connector route acts for, from its own sidecar bearer (never the body).
+    let principal_bearer = rest::bearer(
+        req.headers()
+            .get(crate::connector_vault::PRINCIPAL_HEADER)
+            .and_then(|v| v.to_str().ok()),
+    );
     // E39: `DELETE /v1/principals/<id>`, the operator's purge. The only DELETE this server answers.
     if *req.method() == axum::http::Method::DELETE {
         let (status, body) = governance::purge_principal(&state, token.as_deref(), &path, &request_id);
@@ -674,6 +692,12 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()).filter(|s| !s.is_empty()),
         Err(_) => return render(413, r#"{"error":"payload_too_large"}"#.to_string()),
     };
+
+    // E50: the gateway's connector routes (a vendor access token, the hosted connect flow). Before
+    // the agent routing: no agent bearer reaches them.
+    if path.starts_with(crate::connector_vault::PREFIX) {
+        return connectors_route(&state, method, &path, (token.as_deref(), principal_bearer.as_deref()), body, &request_id).await;
+    }
 
     // The operator's and the hosted surfaces' routes (E15 decide, E18 grants and teams) answer
     // before the agent routing: none of them is a tool an agent's bearer can reach.
@@ -1063,6 +1087,45 @@ fn render_with(status: u16, body: String, request_id: &str, approval_token: Opti
         builder = builder.header(crate::remote_approvals::TOKEN_HEADER, token);
     }
     builder.body(Body::from(body)).unwrap_or_default()
+}
+
+/// `POST /v1/internal/connectors/*` (E50): the admin credential and the principal's bearer first,
+/// then the vault, off the async workers (a refresh or a code exchange is a blocking network call
+/// through the core's egress). Every answer is `no-store`: a 200 carries a vendor access token.
+async fn connectors_route(
+    state: &AppState,
+    method: Option<Method>,
+    path: &str,
+    (admin, principal_bearer): (Option<&str>, Option<&str>),
+    body: Option<String>,
+    request_id: &str,
+) -> Response {
+    let answer = |(status, body): (u16, String)| {
+        let mut response = render_with(status, body, request_id, None);
+        response.headers_mut().insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+        response
+    };
+    if method != Some(Method::Post) {
+        return answer((405, r#"{"error":"method_not_allowed"}"#.to_string()));
+    }
+    let principal = match governance::connector_principal(state, admin, principal_bearer) {
+        Ok(principal) => principal,
+        Err(refused) => return answer(refused),
+    };
+    let Some(vault) = state.connectors.clone() else {
+        return answer((404, r#"{"error":"connectors_unavailable","message":"This sidecar serves no connector credentials.","next_action":null}"#.to_string()));
+    };
+    if body.as_ref().is_some_and(|b| b.len() > crate::connector_vault::MAX_BODY_BYTES) {
+        return answer((413, r#"{"error":"payload_too_large"}"#.to_string()));
+    }
+    let now = (state.clock)();
+    let path = path.to_string();
+    let reply = tokio::task::spawn_blocking(move || crate::connector_vault::respond(vault.as_ref(), &path, &principal, body.as_deref(), now)).await;
+    match reply {
+        Ok(Some(reply)) => answer(reply),
+        Ok(None) => answer((404, r#"{"error":"not_found"}"#.to_string())),
+        Err(_) => answer((500, r#"{"error":"internal"}"#.to_string())),
+    }
 }
 
 /// The one place a JSON response is built, so every exit from `handle` is shaped the same.

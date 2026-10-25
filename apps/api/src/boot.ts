@@ -171,6 +171,16 @@ import { FetchDeepgramGateway } from "./deepgram.js";
  *                              sync, the audit export and purges (with SHOGUN_SIDECAR_URL). Unset =
  *                              those answer 503 and purges stay due.
  *
+ * Hosted connector credentials (E50; connector-tokens.ts, connector-connect.ts). The router's
+ * connector-token route asks the principal's sidecar when the `/mcp` relay's transport and bearer
+ * source are set and SHOGUN_SIDECAR_ADMIN_TOKEN is too (≥ 16 characters, the sidecar's
+ * `SHOGUN_ADMIN_TOKEN`); otherwise it answers every caller `404 connector_not_connected`:
+ * - CONNECTOR_CONNECT_SECRET — secret, optional, ≥ 32 characters: seals the hosted connect flow's
+ *                              links and OAuth states. Set (with the sidecar vault) = the connect
+ *                              routes are served (`POST /v1/connectors/{provider}/connect`, the
+ *                              human's page and `/v1/connectors/callback`, which the sidecar's
+ *                              `SHOGUN_CONNECT_REDIRECT_URI` must name).
+ *
  * Node-only settings (PORT, RELAY_DATABASE_URL, METRICS_LOG_INTERVAL_SEC) are documented and
  * parsed in `index.ts`; the Worker's store comes from its `HYPERDRIVE` binding.
  */
@@ -180,7 +190,7 @@ import { REGISTER_PER_HOUR, REGISTER_WINDOW_MS } from "./agent-app.js";
 import { DEFAULT_PBKDF2_ITERATIONS, MAX_PBKDF2_ITERATIONS } from "./agent-keys.js";
 import { parseSigningKey } from "./wellknown/agent-card.js";
 import { SqlAgentStore } from "./agent-pg-store.js";
-import { KmsSealer, SqlConnectorRows, type ConnectorRefresher, type ConnectorRowStore, type KeyWrapper } from "./connector-tokens.js";
+import { sidecarConnectorVault, type SidecarVaultConfig } from "./connector-tokens.js";
 import { httpSidecarClient } from "./approvals/sidecar-client.js";
 import { InMemoryWebhookStore, SqlWebhookStore, type WebhookStore } from "./approvals/webhooks.js";
 import type { AgentStore } from "./agent-store.js";
@@ -371,6 +381,9 @@ export interface AgentConfig {
    * on; `INGEST_HOOKS_GMAIL_AUDIENCE` + `INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT` add Gmail's Pub/Sub
    * pushes. Absent = the `/v1/ingest-hooks` routes do not exist. */
   ingestHooks?: IngestHooksConfig;
+  /** E50: the sidecar's connector vault (the relay's transport + `SHOGUN_SIDECAR_ADMIN_TOKEN`) and
+   * `CONNECTOR_CONNECT_SECRET`. Absent vault = the connector-token route answers 404. */
+  connectors?: { vault: SidecarVaultConfig; connectSecret?: string };
 }
 
 /** The validated ingest-hook settings (E44). */
@@ -394,6 +407,21 @@ export function ingestHooksConfigFromEnv(env: EnvRecord): IngestHooksConfig | un
   if (audience && !/^https:\/\/[^\s]{1,512}$/.test(audience)) throw new BootError("invalid INGEST_HOOKS_GMAIL_AUDIENCE (the push subscription's audience, an https URL)");
   if (serviceAccount && !/^[^\s@]{1,64}@[a-z0-9.-]{1,255}$/.test(serviceAccount)) throw new BootError("invalid INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT (the push service account's email)");
   return { secret, ...(audience && serviceAccount ? { gmail: { audience, serviceAccount } } : {}) };
+}
+
+
+/** Parse the hosted connector settings (E50), or `undefined` when the sidecar vault is not
+ * configured. Throws `BootError` naming the variable, never echoing a value. */
+export function connectorsConfigFromEnv(env: EnvRecord, relay: McpRelayConfig | undefined): AgentConfig["connectors"] {
+  const adminToken = env.SHOGUN_SIDECAR_ADMIN_TOKEN?.trim();
+  const connectSecret = env.CONNECTOR_CONNECT_SECRET?.trim();
+  if (adminToken && adminToken.length < 16) throw new BootError("invalid SHOGUN_SIDECAR_ADMIN_TOKEN (at least 16 characters, the sidecar's SHOGUN_ADMIN_TOKEN)");
+  if (connectSecret && connectSecret.length < 32) throw new BootError("invalid CONNECTOR_CONNECT_SECRET (at least 32 characters)");
+  if (!relay || !adminToken) {
+    if (connectSecret) throw new BootError("CONNECTOR_CONNECT_SECRET needs the sidecar vault: SHOGUN_SIDECAR_URL (or SHOGUN_SIDECAR_BINDING), a sidecar bearer source and SHOGUN_SIDECAR_ADMIN_TOKEN");
+    return undefined;
+  }
+  return { vault: { relay, adminToken }, ...(connectSecret ? { connectSecret } : {}) };
 }
 
 /** Parse the `/mcp` relay settings, or `undefined` when no bearer source is set. Throws
@@ -554,6 +582,7 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
   const enterprise = enterpriseConfigFromEnv(env);
   const mcpRelay = mcpRelayConfigFromEnv(env);
   const ingestHooks = ingestHooksConfigFromEnv(env);
+  const connectors = connectorsConfigFromEnv(env, mcpRelay);
   return {
     powSecret,
     powBits: intFromEnv(env, "AGENT_POW_BITS", DEFAULT_POW_BITS, 0, MAX_POW_BITS),
@@ -572,6 +601,7 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
     ...(enterprise ? { enterprise } : {}),
     ...(mcpRelay ? { mcpRelay } : {}),
     ...(ingestHooks ? { ingestHooks } : {}),
+    ...(connectors ? { connectors } : {}),
   };
 }
 
@@ -603,7 +633,7 @@ export async function billingJobs(config: Pick<RelayConfig, "agent">, store: Pic
 /** Whether the agent API is served; one boot-log line, so a 404 on `/v1/agents` is not a mystery. */
 export function agentLaneLine(config: Pick<RelayConfig, "agent">): string {
   if (!config.agent) return "agent_api closed (AGENT_API_ENABLED unset)";
-  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"}; provider payouts ${config.agent.payouts ? "on" : "off: PAYOUTS_STATE_SECRET unset"}; x402 ${config.agent.x402 ? "on" : "off"}; ingest hooks ${config.agent.ingestHooks ? `on (gmail ${config.agent.ingestHooks.gmail ? "on" : "off"})` : "off"}; mcp relay ${config.agent.mcpRelay ? `on${config.agent.mcpRelay.binding ? " (binding)" : ""}${config.agent.mcpRelay.shard ? ` (shard ${config.agent.mcpRelay.shard.index}/${config.agent.mcpRelay.shard.count})` : ""}` : "off: SHOGUN_SIDECAR_URL or its bearer source unset"}; enterprise ${config.agent.enterprise ? `on (region ${config.agent.enterprise.region.served}; sidecar ops ${config.agent.enterprise.sidecar ? "on" : "off"})` : "off"})`;
+  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"}; provider payouts ${config.agent.payouts ? "on" : "off: PAYOUTS_STATE_SECRET unset"}; x402 ${config.agent.x402 ? "on" : "off"}; mcp relay ${config.agent.mcpRelay ? `on${config.agent.mcpRelay.binding ? " (binding)" : ""}${config.agent.mcpRelay.shard ? ` (shard ${config.agent.mcpRelay.shard.index}/${config.agent.mcpRelay.shard.count})` : ""}` : "off: SHOGUN_SIDECAR_URL or its bearer source unset"}; ingest hooks ${config.agent.ingestHooks ? `on (gmail ${config.agent.ingestHooks.gmail ? "on" : "off"})` : "off"}; connector vault ${config.agent.connectors ? `on (connect flow ${config.agent.connectors.connectSecret ? "on" : "off: CONNECTOR_CONNECT_SECRET unset"})` : "off: the relay or SHOGUN_SIDECAR_ADMIN_TOKEN unset"}; enterprise ${config.agent.enterprise ? `on (region ${config.agent.enterprise.region.served}; sidecar ops ${config.agent.enterprise.sidecar ? "on" : "off"})` : "off"})`;
 }
 
 /** The Batch price table in force: the override, or the shipped defaults. */
@@ -762,9 +792,6 @@ export interface RelayStore {
   x402?: X402Store;
   /** The enterprise directory (E26). Absent = the enterprise lane is not served even when configured. */
   enterprise?: EnterpriseStore;
-  /** E48: the sealed connector credentials (`connector_tokens`). Read only when the runtime also
-   * supplies a KMS key wrapper (`RelayShared.connectorKeyWrapper`). */
-  connectorRows?: ConnectorRowStore;
   /** E44: the ingest hook registrations and the shared failed-delivery budget. Absent = an
    * in-process store (development). */
   ingestHooks?: HookStore;
@@ -793,7 +820,6 @@ export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurs
     registerLimiter: new SqlWindowLimiter(db, config.agent?.registerPerHour ?? REGISTER_PER_HOUR, REGISTER_WINDOW_MS, () => warn("ratelimit_unavailable (failing open)")),
     webhooks: new SqlWebhookStore(db),
     enterprise: new SqlEnterpriseStore(db),
-    connectorRows: new SqlConnectorRows(db),
     ingestHooks: new SqlHookStore(db),
     ingestHookFailures: new SqlWindowLimiter(db, FAILURES_PER_WINDOW, FAILURE_WINDOW_MS, () => warn("ratelimit_unavailable (failing open)")),
     close: () => db.close(),
@@ -816,12 +842,6 @@ export interface RelayShared {
   /** E34: how the /mcp relay reaches the sidecar. Default: global `fetch` to `SHOGUN_SIDECAR_URL`;
    * the Worker passes its `SHOGUN_SIDECAR_BINDING` binding's `fetch` (mcp-proxy.ts `bindingFetch`). */
   sidecarFetch?: FetchFn;
-  /** E48: the KMS key wrapper that opens `connector_tokens` rows (connector-tokens.ts). No entry
-   * supplies one yet: without it the connector-token route answers `404 connector_not_connected`
-   * and logs `connector_vault_unconfigured`. */
-  connectorKeyWrapper?: KeyWrapper;
-  /** E48: the OAuth broker's refresh path for expiring connector tokens. Absent = no refresh. */
-  connectorRefresher?: ConnectorRefresher;
 }
 
 export interface Relay {
@@ -878,6 +898,11 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
   const relayConfig = config.agent?.mcpRelay;
   const mcpRelay = relayConfig && (!relayConfig.binding || shared.sidecarFetch)
     ? createMcpRelay(relayConfig, shared.sidecarFetch)
+    : undefined;
+  // E50: the connector vault is the principal's sidecar, over the same transport as the relay.
+  const vaultConfig = config.agent?.connectors?.vault;
+  const connectorVault = vaultConfig && (!vaultConfig.relay.binding || shared.sidecarFetch)
+    ? sidecarConnectorVault(vaultConfig, shared.sidecarFetch)
     : undefined;
   const deps: RelayDeps = {
     gateway,
@@ -939,11 +964,11 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
         } : {}),
         // E32: the router's wallet — reserve and settle every router run here, once.
         ...(config.agent.routerWallet ? { routerWallet: config.agent.routerWallet } : {}),
-        // E48: the router's per-caller connector tokens, served with the wallet. The rows are read
-        // only when this runtime has a KMS key wrapper to open them.
+        // E48 / E50: the router's per-caller connector tokens, served with the wallet, from the
+        // principal's sidecar; the hosted connect flow with CONNECTOR_CONNECT_SECRET.
         connectorTokens: {
-          ...(store.connectorRows && shared.connectorKeyWrapper ? { rows: store.connectorRows, sealer: new KmsSealer(shared.connectorKeyWrapper) } : {}),
-          ...(shared.connectorRefresher ? { refresher: shared.connectorRefresher } : {}),
+          ...(connectorVault ? { vault: connectorVault } : {}),
+          ...(connectorVault && config.agent.connectors?.connectSecret ? { connectSecret: config.agent.connectors.connectSecret } : {}),
         },
         // E30: x402 acceptance, only with X402_ENABLED=1 (off by default; docs/decisions/0002-x402.md).
         ...(config.agent.x402 && store.x402 ? {

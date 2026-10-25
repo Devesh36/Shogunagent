@@ -5662,7 +5662,7 @@
         "tags": [
           "providers"
         ],
-        "summary": "The router fetches the calling principal's access token for one first-party connector run (E48, docs/api/connector-tokens.md): the principal comes from the caller's key in X-Caller-Authorization (run scope), never from the body; the token is used for one vendor request and dropped. Free. Not for agents.",
+        "summary": "The router fetches the calling principal's access token for one first-party connector run (E48/E50, docs/api/connector-tokens.md): the principal comes from the caller's key in X-Caller-Authorization (run scope), never from the body; the principal's sidecar opens and, when it expires within 60 s, refreshes the grant; the token is used for one vendor request and dropped. Free. Not for agents.",
         "operationId": "post_v1_internal_router_connector_token",
         "parameters": [
           {
@@ -5765,7 +5765,7 @@
             }
           },
           "403": {
-            "description": "insufficient_scope",
+            "description": "insufficient_scope | principal_unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -5797,6 +5797,279 @@
         },
         "security": [],
         "x-service-token": "ROUTER_SETTLEMENT_TOKEN"
+      }
+    },
+    "/v1/connectors/{provider}/connect": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Ask for a link a human opens to connect their own account for a first-party connector (gmail, calendar, slack, linear). An agent cannot connect an account: it hands connect_url to its human (next_action ask_human), who signs in at the provider; the token goes into the principal's own store, never to the agent. Free.",
+        "operationId": "post_v1_connectors_provider_connect",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "gmail",
+                "calendar",
+                "slack",
+                "linear"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending_human"
+                      ]
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "slot": {
+                      "type": "string"
+                    },
+                    "connect_url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "next_action": {
+                      "type": "string",
+                      "enum": [
+                        "ask_human"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_key | invalid_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown_connector",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "run"
+            ]
+          },
+          {
+            "oauth": [
+              "run"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/connectors/connect/{link}": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "The human's connect page (sealed link, 15 minutes): what will be connected and for which principal, and a Continue button. HTML, no JavaScript. Not for agents.",
+        "operationId": "get_v1_connectors_connect_link",
+        "parameters": [
+          {
+            "name": "link",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      },
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "The human's Continue (CSRF-bound form) → 303 to the provider's consent page; the PKCE verifier stays in the principal's sidecar. Not for agents.",
+        "operationId": "post_v1_connectors_connect_link",
+        "parameters": [
+          {
+            "name": "link",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "To the provider's consent page"
+          },
+          "403": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/connectors/callback": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Where the provider returns the human (sealed state, same browser). The code goes to the principal's sidecar, which exchanges it through the core's egress and stores the tokenset; nothing is kept here. HTML. Not for agents.",
+        "operationId": "get_v1_connectors_callback",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
       }
     },
     "/v1/internal/router/settlements": {

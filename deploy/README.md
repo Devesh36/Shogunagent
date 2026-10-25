@@ -85,8 +85,9 @@ wins; default `env`). It applies to the multi-principal server (`--multi`), the 
 - **Traceability without bodies.** Every KMS call goes through the single HTTP egress
   (`shogun-core` `llm::transport`) and is logged as one line: provider, operation, destination host,
   request size, status, latency. Never a body (which holds key material), a token or a principal id.
-- The hosted gateway's credential store (`RemoteTokenStore`) seals connector tokens with the same
-  providers (`KmsSealer`: one data key per row, bound to principal and slot).
+- Connector credentials (E50) live in the sidecar's token store (`SHOGUN_TOKEN_STORE_DIR`), each
+  file sealed under a key derived from its principal's KMS-unwrapped store key, so they are as
+  recoverable, and as revocable, as the store itself (§3.3).
 
 ### 3.2 Variables
 
@@ -105,7 +106,11 @@ Common (sidecar):
 | `SHOGUN_APPROVAL_SIGNING_KEY` | Approval token key shared with the gateway, >= 32 characters (secret) |
 | `SHOGUN_APPROVAL_BASE_URL` | Where a human approves an L3 request |
 | `SHOGUN_API_PORT` | Loopback port (default 7464) |
-| `SHOGUN_TOKEN_STORE_DIR` | Local sealed credential files (default `<root>/.tokens`) |
+| `SHOGUN_TOKEN_STORE_DIR` | Local sealed credential files (default `<root>/.tokens`): the Batch relay bearer and the connector grants (§3.3) |
+| `SHOGUN_CONNECT_REDIRECT_URI` | The hosted connect flow's callback, `https://<gateway>/v1/connectors/callback` (§3.3) |
+| `SHOGUN_CONNECT_GOOGLE_CLIENT_ID` / `SHOGUN_CONNECT_GOOGLE_CLIENT_SECRET` | Google "Web application" OAuth client for Gmail and Calendar (secret: the client secret) |
+| `SHOGUN_CONNECT_SLACK_CLIENT_ID` / `SHOGUN_CONNECT_SLACK_CLIENT_SECRET` | Slack app (user scopes); the secret is optional for a PKCE-enabled app (secret) |
+| `SHOGUN_CONNECT_LINEAR_CLIENT_ID` / `SHOGUN_CONNECT_LINEAR_CLIENT_SECRET` | Linear OAuth app; the secret is optional (secret) |
 
 `env` (evaluation only): `SHOGUN_DB_KEY` (64 hex) for every principal, `SHOGUN_DB_KEY_<PRINCIPAL>`
 for one.
@@ -149,6 +154,32 @@ IAM: `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key for the workload's 
 
 Policy: `update` on `<mount>/encrypt/<key>` and `<mount>/decrypt/<key>`, `read` on
 `<mount>/keys/<key>` (without it rotation is not detected, nothing else breaks).
+
+### 3.3 Hosted connector credentials (E50)
+
+The router's first-party tools (Gmail, Calendar, Slack, Linear, GitHub) act as the calling
+principal's own account. The sidecar keeps each principal's grants in its token store and serves
+them to the gateway only (`docs/api/connector-tokens.md`):
+
+- `POST /v1/internal/connectors/token`: the gateway, with `SHOGUN_ADMIN_TOKEN` and the principal's
+  own `sgw1` bearer, gets one slot's access token. The sidecar refreshes it first when it expires
+  within 60 seconds, under a per-(principal, slot) lock, and writes the new tokenset back. The
+  refresh token never leaves the sidecar.
+- `POST /v1/internal/connectors/connect/{start,finish}`: the hosted connect flow (authorization
+  code + PKCE). The verifier stays in the sidecar's memory for ten minutes; the code is exchanged
+  here and the tokenset goes straight into the principal's store.
+
+Settings: `SHOGUN_ADMIN_TOKEN` (the gateway's `SHOGUN_SIDECAR_ADMIN_TOKEN`), and for the connect
+flow `SHOGUN_CONNECT_REDIRECT_URI` plus one client per vendor (`SHOGUN_CONNECT_*`, §3.2). A
+malformed one stops the sidecar at start-up naming the variable; an unset vendor cannot be
+connected or refreshed (its stored tokens are still served while valid). The start-up line says
+which providers can be connected. GitHub is served for stored tokens only (the core connects it
+with the device flow, which has no web callback).
+
+Egress: the vendors' token endpoints are reached from the sidecar (`oauth2.googleapis.com`,
+`slack.com`, `api.linear.app`), through the core's single HTTP client; add them to the
+NetworkPolicy (§5.4) with `egress.extraRules`. Moving a principal's store between replicas moves
+its grants only if `SHOGUN_TOKEN_STORE_DIR` moves with it (keep it on the PVC, the default).
 
 ## 4. Regions
 
@@ -223,7 +254,8 @@ read by both containers); `secrets.create` exists for evaluation clusters only.
 Ingress: the gateway port only, from `networkPolicy.ingressFrom` (default: pods in the namespace).
 Egress: DNS, plus the CIDRs in `networkPolicy.egress.llmRelayCidrs` / `kmsCidrs` on
 `networkPolicy.egress.ports` and `databaseCidrs` on 5432; the metadata server when the provider is
-`gcp-kms`. Standard NetworkPolicy matches addresses, not host names: use your provider's published
+`gcp-kms`. With the hosted connector credentials (§3.3), the vendors' OAuth token endpoints too
+(`egress.extraRules`). Standard NetworkPolicy matches addresses, not host names: use your provider's published
 ranges or a VPC/private endpoint, or a CNI with FQDN policies through `egress.extraRules`.
 
 ### 5.5 Probes and resources

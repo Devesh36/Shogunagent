@@ -39,7 +39,7 @@ fn token_failure_message(reason: &str) -> String {
 }
 
 /// Explicit read, draft, label and send scopes; Gmail deletion remains unavailable.
-pub const GMAIL_SCOPES: &[&str] = &["https://www.googleapis.com/auth/gmail.modify"];
+pub const GMAIL_SCOPES: &[&str] = shogun_integrations::hosted_connect::GMAIL_SCOPES;
 
 /// Gmail uses REST directly; it does not require Google's MCP developer preview.
 pub struct GmailDirectRpc<P> {

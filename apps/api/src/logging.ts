@@ -67,8 +67,11 @@ export interface LogVars {
     // E29 provider payouts (payouts-app.ts): fixed words, never an amount, a provider id or a reference.
     | "payout_store_unavailable" | "settlement_rejected" | "settlements_recorded" | "router_reserved" | "router_reserve_replayed" | "connect_link_created" | "payouts_run"
     // E48 connector tokens for the router (connector-tokens.ts): fixed words, never a token, a slot value or a principal.
-    | "connector_token_served" | "connector_token_refreshed" | "connector_token_rejected" | "connector_not_connected" | "connector_token_unreadable"
-    | "connector_token_expired" | "connector_token_revoked" | "connector_token_unavailable" | "connector_vault_unconfigured"
+    | "connector_token_served" | "connector_token_rejected" | "connector_not_connected" | "connector_token_unreadable"
+    | "connector_token_expired" | "connector_token_unavailable" | "connector_vault_unconfigured"
+    // E50: the sidecar vault and the hosted connect flow (connector-tokens.ts, connector-connect.ts).
+    | "connector_vault_rejected_gateway" | "connector_vault_not_provisioned" | "connector_principal_refused"
+    | "connector_connect_link_created" | "connector_connect_page" | "connector_connect_started" | "connector_connected" | "connector_connect_refused"
     // E30 x402 (billing/x402.ts): fixed words, never a payment payload.
     | "x402_rejected" | "x402_replayed" | "x402_verified" | "x402_settled" | "x402_settle_failed"
     // E26 enterprise (enterprise/*.ts): fixed words, never a token, an assertion, a claim or a SCIM body.
@@ -104,6 +107,11 @@ export function routeTemplate(pathname: string): string {
   // E32: the router's internal wallet routes (fixed paths).
   // E48: the router's connector-token route (connector-tokens.ts, a fixed path).
   if (["/v1/internal/router/reserve", "/v1/internal/router/settlements", "/v1/internal/router/connector-token"].includes(pathname)) return pathname;
+  // E50: the hosted connect flow. The link is collapsed to its template, never logged; the
+  // callback's query (state, code) is never part of a template.
+  if (pathname === "/v1/connectors/callback") return pathname;
+  if (/^\/v1\/connectors\/connect\/[^/]+$/.test(pathname)) return "/v1/connectors/connect/:link";
+  if (/^\/v1\/connectors\/[^/]+\/connect$/.test(pathname)) return "/v1/connectors/:provider/connect";
   if (["/v1/statements", "/v1/commit", "/v1/agents/me/licence", "/v1/admin/commits", "/v1/admin/adjustments",
     "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server",
     "/oauth/authorize", "/oauth/token", "/oauth/revoke"].includes(pathname)) return pathname;

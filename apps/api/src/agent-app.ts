@@ -16,6 +16,8 @@
  *   GET  /v1/receipts?since=             per-call receipts                         [read]
  *   POST /v1/receipts/:id/dispute        open a dispute                            [write]
  *   POST /v1/internal/router/connector-token  a caller's connector token for one router run (connector-tokens.ts) [router token + caller key]
+ *   POST /v1/connectors/:provider/connect   a link a human opens to connect their account (connector-connect.ts) [run]
+ *   GET|POST /v1/connectors/connect/:link, GET /v1/connectors/callback  the human's connect pages, no key
  *   POST /v1/handoff                     an A2A state-of-work handoff, relayed to the core (handoff.ts) [read]
  *   /v1/ingest-hooks…                    provider webhooks into memory (ingest-hooks/app.ts, E44) [write / signed]
  *   ALL  /mcp                            the metered MCP proxy (metering.ts)       [by unit]
@@ -54,7 +56,8 @@ import { createApprovalsApp, type ApprovalsDeps } from "./approvals/app.js";
 import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
 import { registerPayoutRoutes, type PayoutDeps } from "./payouts-app.js";
 import { ROUTER_RESERVE_PATH, ROUTER_SETTLEMENTS_PATH, registerRouterWalletRoutes } from "./router-wallet.js";
-import { CONNECTOR_TOKEN_PATH, registerConnectorTokenRoute, type ConnectorRefresher, type ConnectorRowStore, type KmsSealer } from "./connector-tokens.js";
+import { registerConnectorConnectRoutes } from "./connector-connect.js";
+import { CONNECTOR_TOKEN_PATH, registerConnectorTokenRoute, type ConnectorVault } from "./connector-tokens.js";
 import { createEnterpriseApp, ssoConsentPolicy, type EnterpriseDeps } from "./enterprise/app.js";
 import { registerIngestHookRoutes, type IngestHookDeps } from "./ingest-hooks/app.js";
 import { regionAdmission } from "./enterprise/region.js";
@@ -114,10 +117,12 @@ export interface AgentDeps extends MeteringDeps {
    * reserves and settles its runs here (`/v1/internal/router/{reserve,settlements}`). Absent, a
    * `payouts.settlementToken` serves the same routes. */
   routerWallet?: { token: string };
-  /** E48: where the router's per-caller connector tokens come from (connector-tokens.ts). Served
-   * with the router's wallet (same `ROUTER_SETTLEMENT_TOKEN`); without `rows` and `sealer` the
-   * route answers every caller `404 connector_not_connected`. */
-  connectorTokens?: { rows?: ConnectorRowStore; sealer?: KmsSealer; refresher?: ConnectorRefresher };
+  /** E48 / E50: where the router's per-caller connector tokens come from (connector-tokens.ts):
+   * the principal's sidecar (`sidecarConnectorVault`). The token route is served with the router's
+   * wallet (same `ROUTER_SETTLEMENT_TOKEN`); without a vault it answers every caller
+   * `404 connector_not_connected`. With `connectSecret` (`CONNECTOR_CONNECT_SECRET`) and a vault,
+   * the hosted connect flow is served too (connector-connect.ts). */
+  connectorTokens?: { vault?: ConnectorVault; connectSecret?: string };
   /** The enterprise lane (E26, enterprise/app.ts): tenants, SSO for tenant admins, SCIM, region
    * separation, the tenant audit export. Absent = none of those routes exist and every principal
    * is served here. */
@@ -565,9 +570,15 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     for (const path of [ROUTER_RESERVE_PATH, ROUTER_SETTLEMENTS_PATH, CONNECTOR_TOKEN_PATH]) app.use(path, wellknown.observe);
     registerRouterWalletRoutes(app, { token: routerToken, metering: meteringDeps, ...(deps.payouts ? { payouts: deps.payouts.store } : {}) });
     // E48: the calling principal's connector token for one router run (docs/api/connector-tokens.md).
-    registerConnectorTokenRoute(app, { token: routerToken, keyLookup: meteringDeps.keyLookup, log: deps.log, now, ...(deps.connectorTokens ?? {}) });
+    registerConnectorTokenRoute(app, { token: routerToken, keyLookup: meteringDeps.keyLookup, log: deps.log, now, ...(deps.connectorTokens?.vault ? { vault: deps.connectorTokens.vault } : {}) });
   } else if (deps.payouts) {
     app.post(ROUTER_SETTLEMENTS_PATH, (c) => agentError(c, 503, "settlements_unavailable", "Run settlements are not accepted on this gateway (ROUTER_SETTLEMENT_TOKEN unset).", "retry_after", { "retry-after": "3600" }));
+  }
+
+  // --- E50: the hosted connect flow (a human connects their own account; the agent gets a link) ---
+  if (deps.connectorTokens?.vault && deps.connectorTokens.connectSecret) {
+    app.use("/v1/connectors/*", wellknown.observe);
+    registerConnectorConnectRoutes(app, { secret: deps.connectorTokens.connectSecret, vault: deps.connectorTokens.vault, publicBaseUrl: deps.publicBaseUrl, requireKey, now });
   }
 
   // --- remote approvals (E15): the page, Slack, webhooks, and the notification hook ---

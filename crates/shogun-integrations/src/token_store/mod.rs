@@ -9,7 +9,8 @@
 //! |---|---|---|
 //! | ShogunAI Mac app (feature `desktop`) | `keychain::KeychainTokenStore` | the macOS Keychain |
 //! | Local Linux server (`shogun-api --multi`) | [`FileSealedTokenStore`] | ChaCha20-Poly1305 under a key derived from the principal's store key, files 0600 |
-//! | Hosted gateway / BYOC | [`RemoteTokenStore`] | KMS envelope over Postgres rows: [`KmsSealer`] over a customer KMS key ([`KeyWrapper`], implemented in the core for AWS KMS, GCP Cloud KMS and Vault Transit) |
+//! | Hosted sidecar (`shogun-api --multi`, E50) | [`FileSealedTokenStore`] | as the local server, under each principal's key from the configured key provider (KMS envelope when it is one); the gateway reads a token only through the sidecar (`crate::hosted_connect`) |
+//! | BYOC with remote rows (interface) | [`RemoteTokenStore`] | KMS envelope over database rows: [`KmsSealer`] over a customer KMS key ([`KeyWrapper`], implemented in the core for AWS KMS, GCP Cloud KMS and Vault Transit) |
 //!
 //! Connector sync never sees which one it has: [`PrincipalGrants`] adapts any store to the
 //! per-service [`crate::token::GrantStore`] the [`crate::token::TokenManager`] /

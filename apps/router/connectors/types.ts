@@ -148,7 +148,7 @@ export interface EndpointDefinition {
 }
 
 /**
- * The connector-token slots apps/api keeps per principal (`connector_tokens.account`, the
+ * The connector-token slots each principal's token store keeps (on its sidecar, E50; the
  * `<source>-tokenset` names of `shogun_integrations::token_store::CredentialSlot`).
  */
 export type ConnectorSlot = "gmail-tokenset" | "gcal-tokenset" | "github-tokenset" | "linear-tokenset" | "slack-tokenset";

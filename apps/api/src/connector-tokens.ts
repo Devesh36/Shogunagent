@@ -1,5 +1,5 @@
 /**
- * Connector tokens for the router (docs/implementation-plan.md E48; contract:
+ * Connector tokens for the router (docs/implementation-plan.md E48, E50; contract:
  * docs/api/connector-tokens.md). The router's first-party connectors (Gmail, Google Calendar,
  * GitHub, Linear, Slack) act as the CALLING principal's own account; per run the router asks this
  * route for that principal's access token and drops it after the one vendor request.
@@ -8,39 +8,35 @@
  *        Authorization: Bearer <router token>; X-Caller-Authorization: Bearer <the caller's key>
  *        { slot, provider_id, run_id? }
  *        → 200 { access_token, token_type: "Bearer", expires_at }   Cache-Control: no-store
- *        → 404 connector_not_connected (no row, a row that does not open, an expired grant)
- *        → 401 / 403 the service token or the caller's key; 400 a malformed body; 503 the store or
- *          the KMS did not answer
+ *        → 404 connector_not_connected (no grant, a revoked or expired one, no vault configured)
+ *        → 401 / 403 the service token or the caller's key; 400 a malformed body; 503 the vault did
+ *          not answer
  *
  * The principal comes from the caller's key, never from the body, so the router cannot ask for
- * another principal's token. The stored value is the connector's tokenset sealed exactly as
- * `shogun_integrations::token_store::KmsSealer` seals it (`connector_tokens`, one row per
- * principal × slot): a per-row data key wrapped by the KMS under the context
- * `shogun/token/v1/<principal>/<slot>`, the value under ChaCha20-Poly1305 with the associated data
- * `shogun-token-kms/v1|<principal>|<slot>`, the row `[1][u16 wrapped len][wrapped][nonce][ct‖tag]`.
- * `KmsSealer` here is that format; the KMS itself is a `KeyWrapper` the runtime supplies. No
- * runtime ships one yet (the AWS / GCP / Vault clients live in the Rust core, behind its single
- * egress), so a deployment without it answers every request `404 connector_not_connected` and logs
- * `connector_vault_unconfigured`: the same answer an unconnected principal gets, never a token.
+ * another principal's token.
  *
- * Refresh: a token expiring within `REFRESH_SKEW_MS` is refreshed through a `ConnectorRefresher`
- * (the OAuth broker's refresh path, #1101 D6) and written back sealed before answering. No
- * refresher is wired in any runtime yet: an expiring token that is still valid is returned as is
- * (`expires_at` tells the router), an expired one is `404` (the user reconnects).
+ * Where the token comes from (E50): the principal's sidecar (`shogun-api --multi`), which owns the
+ * principal's token store, opens the grant there, refreshes it through the core's single egress
+ * under a per-(principal, slot) lock and writes the refreshed tokenset back
+ * (`POST /v1/internal/connectors/token`, `crates/shogun-mcp/src/connector_vault.rs`). The gateway
+ * reaches it through the same transport as the `/mcp` relay (`SHOGUN_SIDECAR_URL` or the Workers
+ * binding, mcp-proxy.ts), presents `SHOGUN_SIDECAR_ADMIN_TOKEN` as its own credential and names
+ * the principal with the principal's sidecar bearer (`sgw1` derived, or listed) in
+ * `X-Shogun-Principal-Authorization`. The gateway holds no row, no KMS client and no refresh
+ * token: the refresh token never leaves the sidecar, and the access token passes through this
+ * route's response only.
  *
- * What never happens: the token, the tokenset, the body or the caller's key in a log line, a metric,
- * an error message or a stored row other than the sealed one. Logs carry fixed words only. The
- * route is internal and free (no reservation: it is part of a run the router already reserved).
+ * What never happens: the token, the body or the caller's key in a log line, a metric, an error
+ * message or a store. Logs carry fixed words only. The route is internal and free (no reservation:
+ * it is part of a run the router already reserved).
  */
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 
-import { admitPrincipal, admitRefusalResponse, agentError, hasScopes, resolveAgentKey, type AgentKeyLookup, type AgentVars } from "./agent-keys.js";
+import { admitPrincipal, admitRefusalResponse, agentError, hasScopes, resolveAgentKey, type AgentKeyLookup, type AgentPrincipal, type AgentVars } from "./agent-keys.js";
 import type { LogFn } from "./logging.js";
+import { derivedSidecarBearer, shardOf, type FetchFn, type McpRelayConfig } from "./mcp-proxy.js";
 import { tokenMatches } from "./payouts-app.js";
-import type { Row, SqlClient } from "./sql.js";
 
 export const CONNECTOR_TOKEN_PATH = "/v1/internal/router/connector-token";
 
@@ -55,8 +51,6 @@ export const CONNECTOR_SLOT_BY_PROVIDER = Object.freeze({
 export type ConnectorProviderId = keyof typeof CONNECTOR_SLOT_BY_PROVIDER;
 export type ConnectorSlot = (typeof CONNECTOR_SLOT_BY_PROVIDER)[ConnectorProviderId];
 
-/** A token expiring within this window is refreshed before it is handed out. */
-export const REFRESH_SKEW_MS = 60_000;
 const MAX_BODY_BYTES = 1024;
 const RUN_ID_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
 /** What the router accepts as a vendor token (apps/router/src/transport.ts `TOKEN_RE`). */
@@ -68,235 +62,146 @@ export function validPrincipal(principal: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/.test(principal);
 }
 
-// --- the KMS envelope (byte-compatible with shogun_integrations::token_store::KmsSealer) ---
+// --- the vault: the principal's sidecar (E50) ---
 
-/** One stored envelope: opaque bytes and the KMS key version that wrapped its data key. */
-export interface SealedRow {
-  keyId: string;
-  ciphertext: Uint8Array;
+/** The sidecar's connector routes (`shogun_mcp::connector_vault`). */
+export const SIDECAR_CONNECTOR_TOKEN_PATH = "/v1/internal/connectors/token";
+export const SIDECAR_CONNECT_START_PATH = "/v1/internal/connectors/connect/start";
+export const SIDECAR_CONNECT_FINISH_PATH = "/v1/internal/connectors/connect/finish";
+/** The header naming the principal to the sidecar, by the principal's own sidecar bearer. */
+export const SIDECAR_PRINCIPAL_HEADER = "x-shogun-principal-authorization";
+/** The router gives this route 5 s; the sidecar's answer (a refresh included) must fit inside. */
+export const VAULT_TOKEN_TIMEOUT_MS = 4_500;
+/** A code exchange is one vendor round trip; a human is waiting on the callback page. */
+export const VAULT_CONNECT_TIMEOUT_MS = 15_000;
+
+/** Why the vault did not answer with a value. `gateway_rejected` = the sidecar refused the
+ * gateway's own credential (an operator fault), `transport` = nothing came back, `upstream` =
+ * the sidecar answered an error. */
+export type VaultUnavailable = { kind: "unavailable"; reason: "gateway_rejected" | "transport" | "upstream" | "not_provisioned" };
+
+export type VaultTokenAnswer =
+  | { kind: "token"; accessToken: string; expiresAt: number }
+  | { kind: "not_connected" }
+  /** The core refuses this principal (purged): a 403 to the router. */
+  | { kind: "refused" }
+  | VaultUnavailable;
+
+export type ConnectStartAnswer =
+  | { kind: "started"; authorizeUrl: string; expiresAt: number }
+  | { kind: "not_configured" }
+  | { kind: "refused" }
+  | VaultUnavailable;
+
+export type ConnectFinishAnswer =
+  | { kind: "connected"; provider: string; slot: string }
+  /** The flow is unknown, used, expired or another principal's. */
+  | { kind: "flow_unknown" }
+  /** The provider refused the code or did not grant the scopes the connector needs. */
+  | { kind: "rejected" }
+  | { kind: "refused" }
+  | VaultUnavailable;
+
+/** The principal as the sidecar needs it: its id and the key whose derived bearer names it. */
+export type VaultPrincipal = Pick<AgentPrincipal, "principalId" | "keyId">;
+
+/** Where connector credentials live, seen from the gateway. The default (and only production)
+ * implementation is `sidecarConnectorVault`; tests inject fakes. */
+export interface ConnectorVault {
+  accessToken(principal: VaultPrincipal, slot: ConnectorSlot): Promise<VaultTokenAnswer>;
+  connectStart(principal: VaultPrincipal, provider: string, state: string): Promise<ConnectStartAnswer>;
+  connectFinish(principal: VaultPrincipal, state: string, code: string): Promise<ConnectFinishAnswer>;
 }
 
-export interface WrappedDataKey {
-  keyVersion: string;
-  blob: Uint8Array;
+/** The sidecar vault's settings: the `/mcp` relay's transport and bearer source, and the
+ * sidecar's admin credential (`SHOGUN_SIDECAR_ADMIN_TOKEN`). */
+export interface SidecarVaultConfig {
+  relay: McpRelayConfig;
+  adminToken: string;
 }
 
-/** The KMS did not answer (unreachable, throttled): nothing was opened, retry later (503). */
-export class KmsUnavailable extends Error {
-  constructor() {
-    super("the KMS is unavailable");
-  }
+interface SidecarReply {
+  status: number;
+  body: Record<string, unknown>;
 }
 
-/** A row that does not open: wrong binding, altered bytes, a wrapped key the KMS refuses. Treated
- * as absent (404) and logged `connector_token_unreadable`. */
-export class RowUnreadable extends Error {
-  constructor() {
-    super("the stored connector credential does not open");
-  }
-}
-
-/**
- * The customer's KMS key as a wrapper of data keys (the TypeScript side of the Rust `KeyWrapper`).
- * `unwrap` throws `KmsUnavailable` for a transient failure; any other throw means the wrapped key
- * does not open here (a wrong context, a disabled key). Returned key bytes are zeroed by the caller.
- */
-export interface KeyWrapper {
-  readonly provider: string;
-  generate(context: string): Promise<{ key: Uint8Array; wrapped: WrappedDataKey }>;
-  unwrap(wrapped: WrappedDataKey, context: string): Promise<Uint8Array>;
-}
-
-const ROW_VERSION = 1;
-const NONCE_LEN = 12;
-const TAG_LEN = 16;
-
-/** The KMS context a credential's data key is bound to (Rust `token_context`). */
-export function tokenContext(principal: string, account: string): string {
-  return `shogun/token/v1/${principal}/${account}`;
-}
-
-function rowAad(principal: string, account: string): Buffer {
-  return Buffer.from(`shogun-token-kms/v1|${principal}|${account}`, "utf8");
-}
-
-/** `KmsEnvelope` over a `KeyWrapper`: one data key per row, bound at the KMS (context) and in the
- * AEAD (associated data). */
-export class KmsSealer {
-  constructor(private readonly wrapper: KeyWrapper) {}
-
-  get provider(): string {
-    return this.wrapper.provider;
-  }
-
-  async seal(principal: string, account: string, value: string): Promise<SealedRow> {
-    const { key, wrapped } = await this.wrapper.generate(tokenContext(principal, account));
-    try {
-      if (key.length !== 32 || wrapped.blob.length > 0xffff) throw new RowUnreadable();
-      const nonce = randomBytes(NONCE_LEN);
-      const plain = Buffer.from(value, "utf8");
-      const cipher = createCipheriv("chacha20-poly1305", key, nonce, { authTagLength: TAG_LEN });
-      cipher.setAAD(rowAad(principal, account), { plaintextLength: plain.length });
-      const sealed = Buffer.concat([cipher.update(plain), cipher.final(), cipher.getAuthTag()]);
-      plain.fill(0);
-      const out = Buffer.alloc(3 + wrapped.blob.length + NONCE_LEN + sealed.length);
-      out[0] = ROW_VERSION;
-      out.writeUInt16BE(wrapped.blob.length, 1);
-      Buffer.from(wrapped.blob).copy(out, 3);
-      nonce.copy(out, 3 + wrapped.blob.length);
-      sealed.copy(out, 3 + wrapped.blob.length + NONCE_LEN);
-      return { keyId: wrapped.keyVersion, ciphertext: new Uint8Array(out) };
-    } finally {
-      key.fill(0);
-    }
-  }
-
-  /** Open a row, or throw `RowUnreadable` / `KmsUnavailable`. */
-  async open(principal: string, account: string, row: SealedRow): Promise<string> {
-    const bytes = Buffer.from(row.ciphertext);
-    if (bytes.length < 3 || bytes[0] !== ROW_VERSION) throw new RowUnreadable();
-    const len = bytes.readUInt16BE(1);
-    const rest = bytes.subarray(3);
-    if (rest.length <= len + NONCE_LEN + TAG_LEN - 1) throw new RowUnreadable();
-    const wrapped: WrappedDataKey = { keyVersion: row.keyId, blob: new Uint8Array(rest.subarray(0, len)) };
-    const body = rest.subarray(len);
-    let key: Uint8Array;
-    try {
-      key = await this.wrapper.unwrap(wrapped, tokenContext(principal, account));
-    } catch (e) {
-      if (e instanceof KmsUnavailable) throw e;
-      throw new RowUnreadable();
-    }
-    try {
-      if (key.length !== 32) throw new RowUnreadable();
-      const nonce = body.subarray(0, NONCE_LEN);
-      const sealed = body.subarray(NONCE_LEN, body.length - TAG_LEN);
-      const tag = body.subarray(body.length - TAG_LEN);
-      const decipher = createDecipheriv("chacha20-poly1305", key, nonce, { authTagLength: TAG_LEN });
-      decipher.setAAD(rowAad(principal, account), { plaintextLength: sealed.length });
-      decipher.setAuthTag(tag);
-      let plain: Buffer;
-      try {
-        plain = Buffer.concat([decipher.update(sealed), decipher.final()]);
-      } catch {
-        throw new RowUnreadable();
-      }
-      const text = new TextDecoder("utf-8", { fatal: true }).decode(plain);
-      plain.fill(0);
-      return text;
-    } catch (e) {
-      if (e instanceof RowUnreadable) throw e;
-      throw new RowUnreadable();
-    } finally {
-      key.fill(0);
-    }
-  }
-}
-
-// --- the rows (connector_tokens, apps/api/sql/connector-tokens.sql) ---
-
-/** The row storage: principal, slot and the sealed row, never a value. Throws on a store error. */
-export interface ConnectorRowStore {
-  fetch(principal: string, account: string): Promise<SealedRow | undefined>;
-  upsert(principal: string, account: string, row: SealedRow, at: number): Promise<void>;
-}
-
-export class InMemoryConnectorRows implements ConnectorRowStore {
-  readonly rows = new Map<string, SealedRow & { updatedAt: number }>();
-
-  fetch(principal: string, account: string): Promise<SealedRow | undefined> {
-    const r = this.rows.get(`${principal}\u0000${account}`);
-    return Promise.resolve(r ? { keyId: r.keyId, ciphertext: new Uint8Array(r.ciphertext) } : undefined);
-  }
-
-  upsert(principal: string, account: string, row: SealedRow, at: number): Promise<void> {
-    this.rows.set(`${principal}\u0000${account}`, { keyId: row.keyId, ciphertext: new Uint8Array(row.ciphertext), updatedAt: at });
-    return Promise.resolve();
-  }
-}
-
-function bytesOf(v: unknown): Uint8Array | undefined {
-  if (v instanceof Uint8Array) return new Uint8Array(v);
-  return undefined;
-}
-
-/** `connector_tokens` over Postgres. Errors carry fixed words only (a driver error can quote
- * parameters). */
-export class SqlConnectorRows implements ConnectorRowStore {
-  constructor(private readonly db: SqlClient) {}
-
-  async checkSchema(): Promise<void> {
-    try {
-      await this.db.query("SELECT principal_id,account,key_id,ciphertext,updated_at FROM connector_tokens LIMIT 1");
-    } catch {
-      throw new Error("connector token table missing or unreadable: connector_tokens (apply sql/connector-tokens.sql)");
-    }
-  }
-
-  async fetch(principal: string, account: string): Promise<SealedRow | undefined> {
-    let rows: Row[];
-    try {
-      rows = await this.db.query("SELECT key_id,ciphertext FROM connector_tokens WHERE principal_id=$1::text AND account=$2::text", [principal, account]);
-    } catch {
-      throw new Error("connector token store unavailable");
-    }
-    const r = rows[0];
-    if (!r) return undefined;
-    const ciphertext = bytesOf(r.ciphertext);
-    // A row the driver did not hand back as bytes cannot be an envelope: treat it as unreadable.
-    return { keyId: String(r.key_id), ciphertext: ciphertext ?? new Uint8Array() };
-  }
-
-  async upsert(principal: string, account: string, row: SealedRow, at: number): Promise<void> {
-    try {
-      await this.db.query(`INSERT INTO connector_tokens(principal_id,account,key_id,ciphertext,updated_at) VALUES($1::text,$2::text,$3::text,$4::bytea,$5::bigint)
-        ON CONFLICT(principal_id,account) DO UPDATE SET key_id=excluded.key_id,ciphertext=excluded.ciphertext,updated_at=excluded.updated_at`,
-      [principal, account, row.keyId, Buffer.from(row.ciphertext), at]);
-    } catch {
-      throw new Error("connector token store unavailable");
-    }
-  }
-}
-
-// --- the stored tokenset (the JSON of shogun_integrations::token::serialize) ---
-
-export interface StoredTokenset {
-  accessToken: string;
-  refreshToken: string | null;
-  expiresAtMs: number;
-  accountLabel: string | null;
-}
-
-export function parseTokenset(text: string): StoredTokenset | undefined {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
-  const o = raw as Record<string, unknown>;
-  if (typeof o.access_token !== "string") return undefined;
-  if (o.refresh_token !== undefined && o.refresh_token !== null && typeof o.refresh_token !== "string") return undefined;
-  if (typeof o.expires_at_ms !== "number" || !Number.isFinite(o.expires_at_ms)) return undefined;
-  return {
-    accessToken: o.access_token,
-    refreshToken: typeof o.refresh_token === "string" ? o.refresh_token : null,
-    expiresAtMs: o.expires_at_ms,
-    accountLabel: typeof o.account_label === "string" ? o.account_label : null,
+/** The vault over the principal's sidecar, through the relay's transport (`fetchFn`: global
+ * `fetch` to `SHOGUN_SIDECAR_URL`, or the Workers binding's `fetch`). */
+export function sidecarConnectorVault(config: SidecarVaultConfig, fetchFn: FetchFn = (input, init) => fetch(input, init)): ConnectorVault {
+  const base = config.relay.url.replace(/\/+$/, "");
+  const bearerFor = (p: VaultPrincipal): string | undefined => {
+    if (config.relay.shard && shardOf(p.principalId, config.relay.shard.count) !== config.relay.shard.index) return undefined;
+    return config.relay.tokens?.get(p.principalId) ?? (config.relay.bearerSecret ? derivedSidecarBearer(config.relay.bearerSecret, p) : undefined);
   };
-}
 
-export function serializeTokenset(t: StoredTokenset): string {
-  return JSON.stringify({ access_token: t.accessToken, refresh_token: t.refreshToken, expires_at_ms: t.expiresAtMs, account_label: t.accountLabel });
-}
+  const post = async (path: string, principal: VaultPrincipal, payload: Record<string, string>, timeoutMs: number): Promise<SidecarReply | VaultUnavailable> => {
+    const bearer = bearerFor(principal);
+    if (!bearer) return { kind: "unavailable", reason: "not_provisioned" };
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    try {
+      const res = await fetchFn(`${base}${path}`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${config.adminToken}`,
+          [SIDECAR_PRINCIPAL_HEADER]: `Bearer ${bearer}`,
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: abort.signal,
+        redirect: "manual",
+      });
+      let body: unknown;
+      try {
+        body = await res.json();
+      } catch {
+        body = undefined;
+      }
+      if (res.status === 401 || res.status === 403) return { kind: "unavailable", reason: "gateway_rejected" };
+      return { status: res.status, body: typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : {} };
+    } catch {
+      return { kind: "unavailable", reason: "transport" };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const upstream: VaultUnavailable = { kind: "unavailable", reason: "upstream" };
+  const isReply = (r: SidecarReply | VaultUnavailable): r is SidecarReply => !("kind" in r);
 
-/** The OAuth broker's refresh path (#1101 D6). `revoked` = the grant is gone (the user must
- * reconnect); `unavailable` = try again later. Never logs the tokens it handles. */
-export type RefreshOutcome = { kind: "refreshed"; tokenset: StoredTokenset } | { kind: "revoked" } | { kind: "unavailable" };
-
-export interface ConnectorRefresher {
-  refresh(slot: ConnectorSlot, current: StoredTokenset, nowMs: number): Promise<RefreshOutcome>;
+  return {
+    async accessToken(principal, slot) {
+      const r = await post(SIDECAR_CONNECTOR_TOKEN_PATH, principal, { slot }, VAULT_TOKEN_TIMEOUT_MS);
+      if (!isReply(r)) return r;
+      if (r.status === 200 && typeof r.body.access_token === "string" && typeof r.body.expires_at === "number") {
+        return { kind: "token", accessToken: r.body.access_token, expiresAt: r.body.expires_at };
+      }
+      if (r.status === 404 && r.body.error === "connector_not_connected") return { kind: "not_connected" };
+      if (r.status === 410) return { kind: "refused" };
+      return upstream;
+    },
+    async connectStart(principal, provider, state) {
+      const r = await post(SIDECAR_CONNECT_START_PATH, principal, { provider, state }, VAULT_CONNECT_TIMEOUT_MS);
+      if (!isReply(r)) return r;
+      if (r.status === 200 && typeof r.body.authorize_url === "string" && /^https:\/\//.test(r.body.authorize_url) && typeof r.body.expires_at === "number") {
+        return { kind: "started", authorizeUrl: r.body.authorize_url, expiresAt: r.body.expires_at };
+      }
+      if (r.body.error === "connect_not_configured" || r.body.error === "unknown_connector") return { kind: "not_configured" };
+      if (r.status === 410) return { kind: "refused" };
+      return upstream;
+    },
+    async connectFinish(principal, state, code) {
+      const r = await post(SIDECAR_CONNECT_FINISH_PATH, principal, { state, code }, VAULT_CONNECT_TIMEOUT_MS);
+      if (!isReply(r)) return r;
+      if (r.status === 200 && r.body.connected === true && typeof r.body.provider === "string" && typeof r.body.slot === "string") {
+        return { kind: "connected", provider: r.body.provider, slot: r.body.slot };
+      }
+      if (r.body.error === "connect_flow_unknown") return { kind: "flow_unknown" };
+      if (r.body.error === "connect_rejected" || r.body.error === "invalid_request") return { kind: "rejected" };
+      if (r.status === 410) return { kind: "refused" };
+      return upstream;
+    },
+  };
 }
 
 // --- the route ---
@@ -306,10 +211,8 @@ export interface ConnectorTokenDeps {
   token: string;
   /** How the caller's key resolves (the agent store, plus OAuth access tokens when served). */
   keyLookup: AgentKeyLookup;
-  /** The sealed rows. Absent, or `sealer` absent = no vault in this runtime: every answer is 404. */
-  rows?: ConnectorRowStore;
-  sealer?: KmsSealer;
-  refresher?: ConnectorRefresher;
+  /** The sidecar vault. Absent = no vault on this gateway: every answer is 404. */
+  vault?: ConnectorVault;
   /** Operational lines (fixed words). */
   log: LogFn;
   now: () => Date;
@@ -329,13 +232,20 @@ function parseRequest(raw: unknown): ParsedRequest | undefined {
   return { slot: expected, providerId: providerId as ConnectorProviderId };
 }
 
+const UNAVAILABLE_EVENT = {
+  gateway_rejected: "connector_vault_rejected_gateway",
+  transport: "connector_token_unavailable",
+  upstream: "connector_token_unavailable",
+  not_provisioned: "connector_vault_not_provisioned",
+} as const;
+
 export function registerConnectorTokenRoute(app: Hono<{ Variables: AgentVars }>, deps: ConnectorTokenDeps): void {
   const notConnected = (c: Context<{ Variables: AgentVars }>, event: NonNullable<AgentVars["relayLogEvent"]>): Response => {
     c.set("relayLogEvent", event);
-    return agentError(c, 404, "connector_not_connected", "No account is connected for this connector. Connect it in ShogunAgent, then retry the run.", "authenticate");
+    return agentError(c, 404, "connector_not_connected", "No account is connected for this connector. A human connects it with POST /v1/connectors/{provider}/connect, then the run is retried.", "authenticate");
   };
-  const unavailable = (c: Context<{ Variables: AgentVars }>): Response => {
-    c.set("relayLogEvent", "connector_token_unavailable");
+  const unavailable = (c: Context<{ Variables: AgentVars }>, event: NonNullable<AgentVars["relayLogEvent"]>): Response => {
+    c.set("relayLogEvent", event);
     return agentError(c, 503, "connector_token_unavailable", "The connector credential store did not answer. Retry shortly.", "retry_after", { "retry-after": "5" });
   };
 
@@ -368,54 +278,31 @@ export function registerConnectorTokenRoute(app: Hono<{ Variables: AgentVars }>,
     if (admit) return admitRefusalResponse(c, admit);
     if (!hasScopes(principal.scopes, ["run"])) return agentError(c, 403, "insufficient_scope", "This key lacks the run scope.");
 
-    if (!deps.rows || !deps.sealer) return notConnected(c, "connector_vault_unconfigured");
+    if (!deps.vault) return notConnected(c, "connector_vault_unconfigured");
     if (!validPrincipal(principal.principalId)) return notConnected(c, "connector_not_connected");
-    const account = req.slot;
-    let row: SealedRow | undefined;
+    let answer: VaultTokenAnswer;
     try {
-      row = await deps.rows.fetch(principal.principalId, account);
+      answer = await deps.vault.accessToken(principal, req.slot);
     } catch {
-      return unavailable(c);
+      answer = { kind: "unavailable", reason: "transport" };
     }
-    if (!row) return notConnected(c, "connector_not_connected");
-    let tokenset: StoredTokenset | undefined;
-    try {
-      tokenset = parseTokenset(await deps.sealer.open(principal.principalId, account, row));
-    } catch (e) {
-      if (e instanceof KmsUnavailable) return unavailable(c);
-      return notConnected(c, "connector_token_unreadable");
+    switch (answer.kind) {
+      case "not_connected":
+        return notConnected(c, "connector_not_connected");
+      case "refused":
+        c.set("relayLogEvent", "connector_principal_refused");
+        return agentError(c, 403, "principal_unavailable", "This principal's store is closed on this deployment. Ask the operator.", "contact_operator");
+      case "unavailable":
+        return unavailable(c, UNAVAILABLE_EVENT[answer.reason]);
+      case "token":
+        break;
     }
-    if (!tokenset) return notConnected(c, "connector_token_unreadable");
-
-    let event: NonNullable<AgentVars["relayLogEvent"]> = "connector_token_served";
-    if (tokenset.expiresAtMs - nowMs <= REFRESH_SKEW_MS && deps.refresher && tokenset.refreshToken) {
-      let outcome: RefreshOutcome;
-      try {
-        outcome = await deps.refresher.refresh(req.slot, tokenset, nowMs);
-      } catch {
-        outcome = { kind: "unavailable" };
-      }
-      if (outcome.kind === "revoked") return notConnected(c, "connector_token_revoked");
-      if (outcome.kind === "refreshed") {
-        // A refresh response may omit the refresh token: the existing one stays valid.
-        const next: StoredTokenset = { ...outcome.tokenset, refreshToken: outcome.tokenset.refreshToken ?? tokenset.refreshToken, accountLabel: outcome.tokenset.accountLabel ?? tokenset.accountLabel };
-        try {
-          await deps.rows.upsert(principal.principalId, account, await deps.sealer.seal(principal.principalId, account, serializeTokenset(next)), nowMs);
-        } catch {
-          // The new access token is valid either way; the next run refreshes again.
-          deps.log("connector_token_writeback_failed");
-        }
-        tokenset = next;
-        event = "connector_token_refreshed";
-      } else if (tokenset.expiresAtMs <= nowMs) {
-        return unavailable(c);
-      }
-    }
-    if (tokenset.expiresAtMs <= nowMs) return notConnected(c, "connector_token_expired");
-    if (!TOKEN_RE.test(tokenset.accessToken)) return notConnected(c, "connector_token_unreadable");
-    c.set("relayLogEvent", event);
+    // The router refuses a token it could not send, and one already expired: never hand one out.
+    if (!TOKEN_RE.test(answer.accessToken)) return notConnected(c, "connector_token_unreadable");
+    if (answer.expiresAt <= nowMs) return notConnected(c, "connector_token_expired");
+    c.set("relayLogEvent", "connector_token_served");
     return c.json(
-      { access_token: tokenset.accessToken, token_type: "Bearer", expires_at: Math.min(Math.trunc(tokenset.expiresAtMs), Number.MAX_SAFE_INTEGER) },
+      { access_token: answer.accessToken, token_type: "Bearer", expires_at: Math.min(Math.trunc(answer.expiresAt), Number.MAX_SAFE_INTEGER) },
       200,
       { "cache-control": "no-store", pragma: "no-cache" },
     );
