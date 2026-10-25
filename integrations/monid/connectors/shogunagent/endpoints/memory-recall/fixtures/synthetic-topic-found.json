@@ -1,0 +1,16 @@
+{
+  "scenario": "synthetic-topic-found",
+  "input": { "query": "venue for the offsite", "max_chars": 1200 },
+  "response": {
+    "status": 200,
+    "body": {
+      "excerpts": [
+        { "ts": "2026-10-24T09:12:00Z", "source": "slack", "text": "Mika: I'll confirm the venue tomorrow", "people": ["Mika"], "projects": ["Offsite"] }
+      ],
+      "people": ["Mika"],
+      "projects": ["Offsite"],
+      "chars": 60
+    }
+  },
+  "expect": { "usage": { "units": 1, "costUsd": 0 } }
+}

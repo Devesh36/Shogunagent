@@ -1,0 +1,14 @@
+{
+  "scenario": "synthetic-pending-with-person",
+  "input": { "person": "Mika" },
+  "response": {
+    "status": 200,
+    "body": {
+      "items": [
+        { "id": "l_7", "text": "Mika to confirm the venue", "kind": "followup", "person": "Mika", "last_seen": "2026-10-24T09:12:00Z", "confidence": 0.88, "provenance": { "event_id": "e_9003", "quote": "I'll confirm the venue tomorrow" } }
+      ],
+      "next_cursor": null
+    }
+  },
+  "expect": { "usage": { "units": 1, "costUsd": 0 } }
+}
