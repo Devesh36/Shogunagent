@@ -20,9 +20,12 @@
 //! | `google_calendar` | nothing: a typed `changed` notice (a push carries only the channel) | `changed` (headers the gateway lifted) |
 //! | `gmail` | nothing: a typed `changed` notice (a Pub/Sub push carries a history id) | `changed` |
 //!
-//! A `changed` notice settles at 0 events (free): fetching the content is the core's connector
-//! read-sync with the principal's own credentials (`crate::sync`, E50), which ingests what it
-//! fetches and is billed then. Anything else a provider sends (other event types, bot messages,
+//! A `changed` notice settles at 0 events (free) and is queued in the principal's own store for
+//! the connector read-sync (`shogun_integrations::read_sync`, E44): the background tick
+//! (`shogun-api --dream-tick`) fetches the content with the principal's own connector credentials
+//! (the E50 vault), stores it as text events with provenance through the same ingest path, and is
+//! billed then. The receipt's `fetch` says what happened: `queued`, `unsupported` (a Notion
+//! database or comment), `not_configured` (no connector vault behind this store) or `unavailable`. Anything else a provider sends (other event types, bot messages,
 //! edits) is acknowledged as `ignored` and stores nothing.
 //!
 //! Provenance on every row (invariant 5): the row's `actor` is the caller (the hook), its kind is
@@ -600,8 +603,21 @@ fn notion(p: &Value) -> Normalized {
 
 // --- serve --------------------------------------------------------------------------------------
 
+/// What became of a change notice: queued for the read-sync, or why not.
+fn fetch_word(queued: &Result<crate::connector_vault::SyncQueued, crate::connector_vault::VaultError>) -> &'static str {
+    use crate::connector_vault::VaultError;
+    match queued {
+        Ok(_) => "queued",
+        // A Notion database or comment change: the read-sync fetches pages only.
+        Err(VaultError::UnknownSlot) => "unsupported",
+        // No connector vault behind this store (a desktop or single-principal server).
+        Err(VaultError::NotConfigured) => "not_configured",
+        Err(_) => "unavailable",
+    }
+}
+
 /// The envelope of a delivery that stored nothing (a change notice, or ignored).
-fn render_unstored(req: &WebhookRequest, outcome: &str, changed: Option<&ChangedNotice>, reason: Option<&str>, latency_ms: u64) -> String {
+fn render_unstored(req: &WebhookRequest, outcome: &str, changed: Option<(&ChangedNotice, &'static str)>, reason: Option<&str>, latency_ms: u64) -> String {
     json!({
         "tool": Tool::MemoryIngestWebhook.wire_name(),
         "result": {
@@ -610,9 +626,9 @@ fn render_unstored(req: &WebhookRequest, outcome: &str, changed: Option<&Changed
             "outcome": outcome,
             "accepted": 0,
             "inserted": 0,
-            "changed": changed.map(|c| json!({ "resource": c.resource, "detail": c.detail })),
+            "changed": changed.map(|(c, _)| json!({ "resource": c.resource, "detail": c.detail })),
             "ignored_reason": reason,
-            "fetch": changed.map(|_| "connector_sync"),
+            "fetch": changed.map(|(_, fetch)| fetch),
             "idempotency_key": req.idempotency_key,
         },
         "usage": { "unit": "events", "quantity": 0 },
@@ -638,7 +654,12 @@ pub fn serve<B: crate::backend::MemoryBackend + ?Sized>(args: &Value, backend: &
             value["result"]["outcome"] = Value::String("ingested".into());
             Ok(value.to_string())
         }
-        Normalized::Changed(notice) => Ok(render_unstored(&req, "changed", Some(&notice), None, elapsed())),
+        // E44 read-sync: the notice is queued in the principal's store; the background tick fetches
+        // the content with the principal's own credentials and stores it (billed then).
+        Normalized::Changed(notice) => {
+            let queued = backend.enqueue_connector_sync(req.provider.as_str(), &notice.detail);
+            Ok(render_unstored(&req, "changed", Some((&notice, fetch_word(&queued))), None, elapsed()))
+        }
         Normalized::Ignored(reason) => Ok(render_unstored(&req, "ignored", None, Some(reason), elapsed())),
     }
 }
@@ -897,7 +918,7 @@ mod tests {
         let gmail = json!({ "provider": "gmail", "delivery_id": "m-1", "idempotency_key": "hook:gmail:m-1", "changed": { "history_id": "12345" } });
         let changed: Value = serde_json::from_str(&serve(&gmail, &backend).unwrap()).unwrap();
         assert_eq!(changed["result"]["outcome"], "changed");
-        assert_eq!(changed["result"]["fetch"], "connector_sync");
+        assert_eq!(changed["result"]["fetch"], "not_configured", "the stub has no connector vault");
         assert_eq!(changed["usage"]["quantity"], 0);
     }
 }

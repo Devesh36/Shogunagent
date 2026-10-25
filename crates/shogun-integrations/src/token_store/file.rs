@@ -146,6 +146,50 @@ fn create_private_file(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new().write(true).create_new(true).open(path)
 }
 
+/// How old a slot lock may be before it is taken to be a crashed holder's. A read-modify-write
+/// holds it for milliseconds.
+pub const STALE_LOCK_MS: u64 = 30_000;
+
+/// An exclusive lock on one slot: `<file>.lock`, created with `create_new` and removed on drop.
+struct SlotLock {
+    path: PathBuf,
+}
+
+impl SlotLock {
+    fn take(slot_file: &Path) -> Result<Self, TokenStoreError> {
+        let mut name = slot_file.as_os_str().to_owned();
+        name.push(".lock");
+        let path = PathBuf::from(name);
+        let dir = path.parent().ok_or(TokenStoreError::Write)?;
+        create_private_dir(dir).map_err(|_| TokenStoreError::Write)?;
+        for _ in 0..200 {
+            match create_private_file(&path) {
+                Ok(_) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let stale = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|at| at.elapsed().ok())
+                        .is_some_and(|age| age.as_millis() > u128::from(STALE_LOCK_MS));
+                    if stale {
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(_) => return Err(TokenStoreError::Write),
+            }
+        }
+        Err(TokenStoreError::Locked)
+    }
+}
+
+impl Drop for SlotLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Write `text` to `path` through a 0600 temporary in the same directory, then rename over it.
 fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
@@ -191,6 +235,21 @@ impl<K: SealKeySource> TokenStore for FileSealedTokenStore<K> {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(_) => Err(TokenStoreError::Write),
+        }
+    }
+
+    /// Under `<slot>.lock` beside the sealed file, taken with an exclusive create (no `flock`
+    /// needed, so it holds across processes and threads alike). A lock older than
+    /// [`STALE_LOCK_MS`] is a crashed holder's and is broken; a live one is waited for up to two
+    /// seconds, then the call answers [`TokenStoreError::Locked`].
+    fn modify(&self, principal: &str, slot: CredentialSlot, f: &mut dyn FnMut(Option<Secret>) -> super::Modify) -> Result<(), TokenStoreError> {
+        let path = self.path(principal, slot)?;
+        let _lock = SlotLock::take(&path)?;
+        let current = self.get(principal, slot)?;
+        match f(current) {
+            super::Modify::Keep => Ok(()),
+            super::Modify::Put(value) => self.put(principal, slot, &value),
+            super::Modify::Delete => self.delete(principal, slot),
         }
     }
 
@@ -246,6 +305,45 @@ mod tests {
     }
 
     const RELAY: CredentialSlot = CredentialSlot::BatchRelay;
+
+    /// E44 / E50: `modify` is one read-modify-write under the slot's lock file, so writers in two
+    /// stores over one directory (two processes) never lose each other's change, and a lock left
+    /// by a crashed holder is broken once stale.
+    #[test]
+    fn modify_serializes_writers_across_store_instances() {
+        let dir = TempDir::new("modify");
+        let slot = CredentialSlot::SyncQueue;
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let root = dir.0.clone();
+                std::thread::spawn(move || {
+                    let store = FileSealedTokenStore::new(root, keys(3));
+                    for _ in 0..5 {
+                        store
+                            .modify("alice", slot, &mut |current| {
+                                let n: u32 = current.map_or(0, |v| v.expose().parse().unwrap());
+                                super::super::Modify::Put(Secret::new((n + 1).to_string()))
+                            })
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let store = FileSealedTokenStore::new(&dir.0, keys(3));
+        assert_eq!(store.get("alice", slot).unwrap(), Some(Secret::new("40")));
+        assert!(!dir.0.join("alice").join("connector-sync-queue.sealed.lock").exists(), "the lock goes with its holder");
+        // A crashed holder's lock: fresh, the writer waits and gives up; stale, it is broken.
+        let lock = dir.0.join("alice").join("connector-sync-queue.sealed.lock");
+        std::fs::write(&lock, b"").unwrap();
+        assert_eq!(store.modify("alice", slot, &mut |_| super::super::Modify::Delete), Err(TokenStoreError::Locked));
+        let old = std::time::SystemTime::now() - std::time::Duration::from_millis(STALE_LOCK_MS + 5_000);
+        std::fs::File::options().write(true).open(&lock).unwrap().set_modified(old).unwrap();
+        store.modify("alice", slot, &mut |_| super::super::Modify::Delete).unwrap();
+        assert_eq!(store.get("alice", slot).unwrap(), None);
+    }
 
     #[test]
     fn round_trips_and_never_writes_the_value_in_clear() {

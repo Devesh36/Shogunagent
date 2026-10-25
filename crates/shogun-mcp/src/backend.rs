@@ -686,6 +686,14 @@ pub trait MemoryBackend: Send + Sync {
         Err("ingest_unavailable".to_string())
     }
 
+    /// E44: queue a provider "changed" notice (`provider` as `memory.ingest_webhook` names it,
+    /// `detail` the ids it carried) for the connector read-sync, which fetches the content with the
+    /// principal's own credentials in the background. Only a hosted sidecar's backend has a queue
+    /// (the principal's connector vault); everywhere else this is `NotConfigured`.
+    fn enqueue_connector_sync(&self, _provider: &str, _detail: &serde_json::Value) -> Result<crate::connector_vault::SyncQueued, crate::connector_vault::VaultError> {
+        Err(crate::connector_vault::VaultError::NotConfigured)
+    }
+
     /// `memory.recall` (E4-T3): the context-pack assembly cut to the request's token budget.
     fn recall(&self, _request: &crate::ingest_api::RecallRequest) -> Result<crate::ingest_api::RecallOutcome, String> {
         Err("recall_unavailable".to_string())
@@ -807,6 +815,9 @@ impl<T: MemoryBackend + ?Sized> MemoryBackend for std::sync::Arc<T> {
     }
     fn ingest(&self, request: &crate::ingest_api::IngestRequest) -> Result<crate::ingest_api::IngestOutcome, String> {
         (**self).ingest(request)
+    }
+    fn enqueue_connector_sync(&self, provider: &str, detail: &serde_json::Value) -> Result<crate::connector_vault::SyncQueued, crate::connector_vault::VaultError> {
+        (**self).enqueue_connector_sync(provider, detail)
     }
     fn recall(&self, request: &crate::ingest_api::RecallRequest) -> Result<crate::ingest_api::RecallOutcome, String> {
         (**self).recall(request)

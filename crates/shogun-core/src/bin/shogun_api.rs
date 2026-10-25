@@ -272,21 +272,31 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
     let (embedder, line) = shogun_core::embed_models::load_configured();
     eprintln!("{FACE}: {line}");
     let keys: Arc<dyn shogun_core::tenancy::KeyProvider> = keys;
-    let store = Arc::new(
-        PrincipalStore::new(root.clone(), keys.clone(), clock.clone(), max_open).with_embedder(embedder),
-    );
     // One connector token store (`SHOGUN_TOKEN_STORE_DIR`, else `<root>/.tokens`) for the
     // executor's sends and the operator's purge (E39), which removes a principal's entries with
     // its store.
     let credentials = principal_credentials(&root, keys.clone());
-    let executor = approval_executor(credentials.clone(), store.clone());
     // E50: the gateway's connector routes over the same store (a vendor token per router run, the
-    // hosted connect flow), behind SHOGUN_ADMIN_TOKEN and the principal's own bearer.
+    // hosted connect flow, status and disconnect), behind SHOGUN_ADMIN_TOKEN and the principal's
+    // own bearer. Every connect, refresh and disconnect is a traceability row in the principal's
+    // own store (threat model R10); the sink finds the store once it exists.
     let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
-    let connectors = shogun_core::tenancy::multi::hosted_connectors(credentials.clone(), &vars).unwrap_or_else(|var| {
+    let audit_store: Arc<std::sync::OnceLock<std::sync::Weak<PrincipalStore>>> = Arc::default();
+    let audit = shogun_core::tenancy::multi::connector_audit_sink(audit_store.clone());
+    let connectors = shogun_core::tenancy::multi::hosted_connectors(credentials.clone(), &vars, Some(audit)).unwrap_or_else(|var| {
         eprintln!("{FACE}: {var} is malformed (see deploy/README.md, hosted connector credentials)");
         std::process::exit(1);
     });
+    // Each principal's backend serves connections.list / connections.disconnect from the vault and
+    // queues provider change notices for the read-sync (E44).
+    let vault: Arc<dyn shogun_mcp::connector_vault::ConnectorVault> = connectors.clone();
+    let store = Arc::new(
+        PrincipalStore::new(root.clone(), keys.clone(), clock.clone(), max_open)
+            .with_embedder(embedder)
+            .with_connectors(Some(vault)),
+    );
+    let _ = audit_store.set(Arc::downgrade(&store));
+    let executor = approval_executor(credentials.clone(), store.clone());
     let connectable = connectors.clients().connectable();
     eprintln!(
         "{FACE}: connector credentials served to the gateway (connect flow: {})",
@@ -387,6 +397,11 @@ fn attach_local_embedder(db: Db) -> Db {
 /// (`SHOGUN_TOKEN_STORE_DIR`, else `<root>/.tokens`, sealed with the principal's own key) holds a
 /// Batch relay credential is reviewed through the relay with it; every other principal with the
 /// on-device local rules (no model, no egress). Prints one line of counts, never content.
+///
+/// Before the review, the tick drains each principal's connector read-sync queue (E44): the
+/// Gmail, Calendar and Notion change notices `memory.ingest_webhook` queued are fetched with the
+/// principal's own connector credentials (refreshed through the vault with the hosted clients of
+/// `SHOGUN_CONNECT_*`) and stored in the principal's file, so the same tick reviews them.
 async fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
     use shogun_core::llm::relay::{ModelClass, RelayBatchClient, RelayConfig};
     use shogun_core::llm::transport::ReqwestTransport;
@@ -407,13 +422,33 @@ async fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
     // The tick also embeds each visited principal's backlog when a local model is installed (E24).
     let (embedder, line) = shogun_core::embed_models::load_configured();
     eprintln!("{FACE}: {line}");
-    let store = PrincipalStore::new(root, keys, clock, 1).with_embedder(embedder);
+    let store = Arc::new(PrincipalStore::new(root, keys, clock, 1).with_embedder(embedder));
     let principals = dream_tick::principals_on_disk(&store);
+    // E44 read-sync, before the review: one store read per principal when nothing is queued.
+    let tokens: Arc<dyn shogun_integrations::TokenStore> = Arc::new(tokens);
+    let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let audit_store: Arc<std::sync::OnceLock<std::sync::Weak<PrincipalStore>>> = Arc::default();
+    let _ = audit_store.set(Arc::downgrade(&store));
+    match shogun_core::tenancy::multi::hosted_connectors(tokens.clone(), &vars, Some(shogun_core::tenancy::multi::connector_audit_sink(audit_store))) {
+        Ok(vault) => match shogun_core::provider_fetch::HttpProviderFetch::new() {
+            Ok(http) => {
+                let (store, principals) = (store.clone(), principals.clone());
+                let sync = tokio::task::spawn_blocking(move || {
+                    shogun_core::tenancy::connector_sync::drain_tick(&store, &vault, &http, &principals, now)
+                })
+                .await
+                .map_err(std::io::Error::other)?;
+                println!("{FACE}: connector read-sync: {}", shogun_core::tenancy::connector_sync::summary(&sync));
+            }
+            Err(_) => eprintln!("{FACE}: connector read-sync skipped (http client unavailable)"),
+        },
+        Err(var) => eprintln!("{FACE}: connector read-sync skipped ({var} is malformed)"),
+    }
     let report = dream_tick::hourly_tick_routed(
         &store,
         &principals,
         |principal, db| {
-            let bearer = relay_bearer(&tokens, principal)?;
+            let bearer = relay_bearer(tokens.as_ref(), principal)?;
             let transport = transport.get_or_init(|| ReqwestTransport::shared().ok()).clone()?;
             Some(RelayBatchClient::new(
                 transport,

@@ -30,6 +30,7 @@
 //!   `world` state in its own file (`principal_grants`, V101); the sidecar checks both before it
 //!   opens that file for the teammate.
 
+pub mod connector_sync;
 pub mod credentials;
 pub mod derived_bearer;
 pub mod dream_tick;

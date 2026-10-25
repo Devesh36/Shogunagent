@@ -263,12 +263,38 @@ pub fn app_state_with_credentials(
 /// approval executor sends with), refreshed and connected through the core's HTTP token exchange,
 /// the single egress. The hosted OAuth clients and the callback come from `vars`
 /// (`SHOGUN_CONNECT_*`, `deploy/README.md`); `Err` names the malformed variable, never its value.
-/// The exchange's client is built on first use, on a blocking thread.
+/// The exchange's client is built on first use, on a blocking thread. `audit` receives every
+/// connect, refresh, disconnect, revocation and read-sync fetch ([`connector_audit_sink`]).
 pub fn hosted_connectors(
     tokens: Arc<dyn TokenStore>,
     vars: &std::collections::HashMap<String, String>,
+    audit: Option<shogun_integrations::hosted_connect::AuditSink>,
 ) -> Result<Arc<shogun_integrations::hosted_connect::HostedConnectors<crate::mcp_http::HttpTokenExchange>>, &'static str> {
     use shogun_integrations::hosted_connect::{HostedClients, HostedConnectors};
     let clients = HostedClients::from_vars(vars)?;
-    Ok(Arc::new(HostedConnectors::new(tokens, clients, crate::mcp_http::HttpTokenExchange::new)))
+    let vault = HostedConnectors::new(tokens, clients, crate::mcp_http::HttpTokenExchange::new);
+    Ok(Arc::new(match audit {
+        Some(sink) => vault.with_audit(sink),
+        None => vault,
+    }))
+}
+
+/// Where the vault's audit events go (E50, threat model R10): one traceability row per event in
+/// the principal's own store (`route = mcp`, `purpose = connector.<action>.<provider>.<outcome>`,
+/// the vendor host as destination, zero bytes, the digest of nothing). No token, code, body or
+/// account identity can reach it: the event carries fixed words only. `store` is set once the
+/// store exists (the vault is built before it); until then, and for a principal whose store cannot
+/// be opened, the event is dropped (an audit fault never fails a connector call).
+pub fn connector_audit_sink(store: Arc<std::sync::OnceLock<std::sync::Weak<PrincipalStore>>>) -> shogun_integrations::hosted_connect::AuditSink {
+    Arc::new(move |principal: &str, event: &shogun_integrations::hosted_connect::AuditEvent| {
+        let Some(store) = store.get().and_then(std::sync::Weak::upgrade) else {
+            return;
+        };
+        let Ok(id) = PrincipalId::parse(principal) else {
+            return;
+        };
+        if let Ok(handle) = store.open(&id) {
+            super::connector_sync::record_audit(handle.db(), event);
+        }
+    })
 }

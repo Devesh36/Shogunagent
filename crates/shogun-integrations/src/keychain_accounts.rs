@@ -33,6 +33,10 @@ pub const USER_SECRET_ACCOUNTS: &[&str] = &[
     "memory-api-tokens",
     // The Batch relay bearer a principal's hourly Dream Cycle presents (`token_store`, E5-T5).
     "batch-relay-bearer",
+    // The hosted sidecar's pending connect flows and read-sync queue (`token_store`, E50 / E44).
+    // A Mac never writes them; listed so "Delete everything" covers every slot account.
+    "connector-connect-flows",
+    "connector-sync-queue",
     // Legacy: the background-service key a development build could hold.
     "select-kk-batch",
 ];

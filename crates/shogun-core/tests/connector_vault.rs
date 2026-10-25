@@ -4,6 +4,13 @@
 //! the one that bearer names (a body naming another is refused); one principal never reads
 //! another's grant; an agent bearer alone reaches nothing; the connect flow writes the tokenset into
 //! the principal that started it and the token route then serves it; every answer is `no-store`.
+//!
+//! E50 follow-ups and E44 read-sync: a pending flow survives a sidecar restart (it is sealed in the
+//! principal's store); connects, refreshes, revocations and disconnects are traceability rows in
+//! the principal's own store with no token in them; `connections.list` and
+//! `connections.disconnect` answer from the vault on the REST and MCP faces as on the internal
+//! routes; a Gmail change notice through `memory.ingest_webhook` is queued and the background tick
+//! fetches it into the principal's store, once.
 #![cfg(feature = "daemon-server")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -16,6 +23,7 @@ use shogun_core::daemon::Clock;
 use shogun_core::llm::Secret;
 use shogun_core::tenancy::{ChainedResolver, DerivedBearers, EnvKeyProvider, PrincipalId, PrincipalStore, TokenPrincipalMap};
 use shogun_integrations::hosted_connect::{HostedClients, HostedConnectors, OAuthClient, Vendor};
+use shogun_integrations::read_sync::{FetchError, ProviderHttp};
 use shogun_integrations::oauth::{TokenExchange, TokenSet};
 use shogun_integrations::token::GrantStore;
 use shogun_integrations::token_store::{MemorySecretStore, PrincipalGrants};
@@ -63,8 +71,11 @@ struct FakeVendor {
 }
 
 impl TokenExchange for FakeVendor {
-    fn post_form(&self, _endpoint: &str, form: &[(String, String)]) -> Result<String, String> {
+    fn post_form(&self, endpoint: &str, form: &[(String, String)]) -> Result<String, String> {
         self.forms.lock().unwrap().push(form.to_vec());
+        if endpoint == "https://oauth2.googleapis.com/revoke" {
+            return Ok("{}".into());
+        }
         if form.iter().any(|(k, v)| k == "code" && v == "vendor-code-1") {
             return Ok(r#"{"access_token":"ya29.connected-by-flow","expires_in":3599,"refresh_token":"1//flow-refresh","scope":"https://www.googleapis.com/auth/calendar.events"}"#.into());
         }
@@ -77,7 +88,15 @@ fn bearer(principal: &str, key: &str) -> String {
 }
 
 fn boot(root: PathBuf, tokens: Arc<MemorySecretStore>, vendor: FakeVendor) -> u16 {
-    let store = Arc::new(PrincipalStore::new(root, Arc::new(EnvKeyProvider::with_default(DbKey::new([0x5e; 32]))), wall_clock(), 8));
+    boot_with(root, tokens, vendor).0
+}
+
+type Vault = Arc<HostedConnectors<FakeVendor>>;
+
+/// The `shogun-api --multi` composition: the vault audits into each principal's own store, and
+/// each principal's backend serves `connections.*` from it.
+fn boot_with(root: PathBuf, tokens: Arc<MemorySecretStore>, vendor: FakeVendor) -> (u16, Arc<PrincipalStore>, Vault) {
+    let audit_store: Arc<std::sync::OnceLock<std::sync::Weak<PrincipalStore>>> = Arc::default();
     let resolver = ChainedResolver {
         listed: TokenPrincipalMap::parse("carol:token-listed-carol-1").unwrap(),
         derived: Some(DerivedBearers::new(Secret::new(SECRET)).unwrap()),
@@ -85,14 +104,23 @@ fn boot(root: PathBuf, tokens: Arc<MemorySecretStore>, vendor: FakeVendor) -> u1
     let clients = HostedClients::default()
         .with_redirect_uri("https://api.example.test/v1/connectors/callback")
         .with_client(Vendor::Google, OAuthClient::new("123-abc.apps.googleusercontent.com", Some(Secret::new("web-secret"))));
-    let vault = Arc::new(HostedConnectors::new(tokens, clients, move || Ok(vendor.clone())));
+    let vault = Arc::new(
+        HostedConnectors::new(tokens, clients, move || Ok(vendor.clone()))
+            .with_audit(shogun_core::tenancy::multi::connector_audit_sink(audit_store.clone())),
+    );
+    let dyn_vault: Arc<dyn shogun_mcp::connector_vault::ConnectorVault> = vault.clone();
+    let store = Arc::new(
+        PrincipalStore::new(root, Arc::new(EnvKeyProvider::with_default(DbKey::new([0x5e; 32]))), wall_clock(), 8).with_connectors(Some(dyn_vault)),
+    );
+    let _ = audit_store.set(Arc::downgrade(&store));
+    let (served_store, served_vault) = (store.clone(), vault.clone());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
-            let state = shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), wall_clock())
+            let state = shogun_core::tenancy::multi::app_state(served_store, Arc::new(resolver), wall_clock())
                 .with_admin_token(Some(ADMIN))
-                .with_connector_vault(vault);
+                .with_connector_vault(served_vault);
             let listener = bind_exact(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
             tx.send(port).unwrap();
@@ -101,7 +129,7 @@ fn boot(root: PathBuf, tokens: Arc<MemorySecretStore>, vendor: FakeVendor) -> u1
     });
     let port = rx.recv().unwrap();
     std::thread::sleep(Duration::from_millis(300));
-    port
+    (port, store, vault)
 }
 
 struct Reply {
@@ -196,18 +224,16 @@ fn the_connect_flow_writes_into_the_principal_that_started_it() {
     assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"), "{url}");
     assert!(url.contains("code_challenge_method=S256") && !url.contains("web-secret"));
 
-    // Another principal's bearer cannot finish it (and burns it).
+    // Another principal's bearer cannot finish it: its own store holds no such flow.
     let finish = |who: &str| call(port, "POST", "/v1/internal/connectors/connect/finish", Some(ADMIN), Some(who), &format!(r#"{{"state":"{state}","code":"vendor-code-1"}}"#));
     assert_eq!(finish(&other).status, 404);
-    assert_eq!(finish(&alice).status, 404, "single use");
-
-    let started = call(port, "POST", "/v1/internal/connectors/connect/start", Some(ADMIN), Some(&alice), &format!(r#"{{"provider":"calendar","state":"{state}"}}"#));
-    assert_eq!(started.status, 200);
+    assert!(vendor.forms.lock().unwrap().is_empty(), "no vendor call for another principal");
     let done = finish(&alice);
     assert_eq!(done.status, 200, "{}", done.body);
     assert_eq!(done.body, serde_json::json!({ "connected": true, "provider": "calendar", "slot": "gcal-tokenset" }));
     // The code and the token never come back to the gateway; the token route serves the grant.
     assert!(!done.body.to_string().contains("ya29") && !done.body.to_string().contains("vendor-code-1"));
+    assert_eq!(finish(&alice).status, 404, "single use");
     let served = call(port, "POST", TOKEN, Some(ADMIN), Some(&alice), r#"{"slot":"gcal-tokenset"}"#);
     assert_eq!(served.body["access_token"], "ya29.connected-by-flow");
     assert!(PrincipalGrants::new(tokens.as_ref(), "prn_dan").load(Service::GoogleCalendar).unwrap().is_none());
@@ -216,4 +242,198 @@ fn the_connect_flow_writes_into_the_principal_that_started_it() {
     let last = forms.last().unwrap();
     assert!(last.iter().any(|(k, _)| k == "code_verifier"));
     assert!(last.contains(&("redirect_uri".into(), "https://api.example.test/v1/connectors/callback".into())));
+}
+
+fn rest(port: u16, method: &str, path: &str, token: &str, body: &str) -> Reply {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let req = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(req.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    stream.read_to_end(&mut out).unwrap();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+    let status = head.lines().next().and_then(|l| l.split_whitespace().nth(1)).and_then(|c| c.parse().ok()).unwrap_or(0);
+    Reply { status, head: head.to_ascii_lowercase(), body: serde_json::from_str(body).unwrap_or(serde_json::Value::Null) }
+}
+
+fn mcp_tool(port: u16, token: &str, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+    let body = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } }).to_string();
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let req = format!(
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nMcp-Method: tools/call\r\nMcp-Name: {name}\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(req.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    stream.read_to_end(&mut out).unwrap();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let reply: serde_json::Value = serde_json::from_str(text.split_once("\r\n\r\n").map_or("", |(_, b)| b)).unwrap();
+    let block = reply["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("{reply}"));
+    serde_json::from_str(block).unwrap()
+}
+
+/// The connector rows of a principal's traceability log: (purpose, destination, bytes).
+fn audit_rows(store: &PrincipalStore, principal: &str) -> Vec<(String, String, i64)> {
+    let handle = store.open(&PrincipalId::parse(principal).unwrap()).unwrap();
+    handle
+        .db()
+        .trace_rows(&Default::default())
+        .into_iter()
+        .filter(|r| r.purpose.starts_with("connector."))
+        .map(|r| (r.purpose, r.destination, r.chunk_bytes))
+        .collect()
+}
+
+fn service_row(list: &serde_json::Value, service: &str) -> serde_json::Value {
+    list["services"].as_array().unwrap().iter().find(|r| r["service"] == service).unwrap().clone()
+}
+
+#[test]
+fn connects_and_disconnects_are_audited_and_listed_on_every_face() {
+    let root = TempRoot::new("faces");
+    let tokens = Arc::new(MemorySecretStore::new());
+    let vendor = FakeVendor::default();
+    let (port, store, _) = boot_with(root.0.clone(), tokens.clone(), vendor.clone());
+    let erin = bearer("prn_erin", "key_02");
+    let frank = bearer("prn_frank", "key_02");
+    let state = "gateway-sealed-state-erin-0123456789";
+    call(port, "POST", "/v1/internal/connectors/connect/start", Some(ADMIN), Some(&erin), &format!(r#"{{"provider":"calendar","state":"{state}"}}"#));
+    let done = call(port, "POST", "/v1/internal/connectors/connect/finish", Some(ADMIN), Some(&erin), &format!(r#"{{"state":"{state}","code":"vendor-code-1"}}"#));
+    assert_eq!(done.status, 200, "{}", done.body);
+
+    // Status: the internal route, REST and MCP agree; the agent's own bearer reads its own.
+    let status = call(port, "POST", "/v1/internal/connectors/status", Some(ADMIN), Some(&erin), "{}");
+    assert_eq!(status.status, 200, "{}", status.body);
+    let gcal = status.body["connectors"].as_array().unwrap().iter().find(|r| r["service"] == "gcal").unwrap().clone();
+    assert_eq!((gcal["state"].as_str(), gcal["provider"].as_str()), (Some("connected"), Some("calendar")));
+    let listed = rest(port, "GET", "/v1/connections", &erin, "");
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    let listed = if listed.body.get("result").is_some() { listed.body["result"].clone() } else { listed.body.clone() };
+    assert_eq!(listed["hosted"], true, "{listed}");
+    assert_eq!(service_row(&listed, "gcal")["state"], "connected");
+    assert_eq!(service_row(&listed, "gmail")["state"], "disconnected");
+    assert_eq!(service_row(&listed, "gdrive")["state"], "coming_soon");
+    let over_mcp = mcp_tool(port, &erin, "connections.list", serde_json::json!({}));
+    let over_mcp = if over_mcp.get("result").is_some() { over_mcp["result"].clone() } else { over_mcp };
+    assert_eq!(service_row(&over_mcp, "gcal")["state"], "connected");
+    // Another principal sees nothing of it.
+    let theirs = rest(port, "GET", "/v1/connections", &frank, "");
+    let theirs = if theirs.body.get("result").is_some() { theirs.body["result"].clone() } else { theirs.body.clone() };
+    assert_eq!(service_row(&theirs, "gcal")["state"], "disconnected");
+    assert!(!listed.to_string().contains("ya29") && !over_mcp.to_string().contains("ya29"));
+
+    // Disconnect from the REST face: revoked at Google, deleted from the store.
+    let gone = rest(port, "POST", "/v1/connections/disconnect", &erin, r#"{"service":"gcal"}"#);
+    assert!(gone.status == 200 || gone.status == 202, "{} {}", gone.status, gone.body);
+    assert!(PrincipalGrants::new(tokens.as_ref(), "prn_erin").load(Service::GoogleCalendar).unwrap().is_none());
+    let revoke = vendor.forms.lock().unwrap().last().unwrap().clone();
+    assert_eq!(revoke, vec![("token".to_string(), "1//flow-refresh".to_string())]);
+    let after = mcp_tool(port, &erin, "connections.list", serde_json::json!({}));
+    let after = if after.get("result").is_some() { after["result"].clone() } else { after };
+    assert_eq!(service_row(&after, "gcal")["state"], "disconnected");
+    // The internal route disconnects too (idempotent: nothing stored any more).
+    let again = call(port, "POST", "/v1/internal/connectors/disconnect", Some(ADMIN), Some(&erin), r#"{"provider":"calendar"}"#);
+    assert_eq!((again.status, again.body["removed"].as_bool(), again.body["vendor_revoke"].as_str()), (200, Some(false), Some("nothing_stored")));
+
+    // The audit rows are in Erin's own store, name the action and the vendor host, carry no bytes
+    // and no value; Frank's store has none.
+    let rows = audit_rows(&store, "prn_erin");
+    for expected in ["connector.connect.calendar.ok", "connector.revoke.calendar.ok", "connector.disconnect.calendar.ok"] {
+        assert!(rows.iter().any(|(p, _, _)| p == expected), "{expected} in {rows:?}");
+    }
+    assert!(rows.iter().any(|(p, d, _)| p == "connector.connect.calendar.ok" && d == "oauth2.googleapis.com"));
+    assert!(rows.iter().all(|(_, _, bytes)| *bytes == 0));
+    assert!(!format!("{rows:?}").contains("ya29") && !format!("{rows:?}").contains("1//flow-refresh") && !format!("{rows:?}").contains("vendor-code-1"));
+    assert!(audit_rows(&store, "prn_frank").is_empty());
+}
+
+#[test]
+fn a_pending_flow_survives_a_sidecar_restart() {
+    let root = TempRoot::new("restart");
+    let tokens = Arc::new(MemorySecretStore::new());
+    let gina = bearer("prn_gina", "key_03");
+    let state = "gateway-sealed-state-gina-0123456789";
+    let first = boot(root.0.clone(), tokens.clone(), FakeVendor::default());
+    let started = call(first, "POST", "/v1/internal/connectors/connect/start", Some(ADMIN), Some(&gina), &format!(r#"{{"provider":"calendar","state":"{state}"}}"#));
+    assert_eq!(started.status, 200);
+    // A new sidecar process over the same principal store finishes it.
+    let second = boot(root.0.clone(), tokens.clone(), FakeVendor::default());
+    let done = call(second, "POST", "/v1/internal/connectors/connect/finish", Some(ADMIN), Some(&gina), &format!(r#"{{"state":"{state}","code":"vendor-code-1"}}"#));
+    assert_eq!(done.status, 200, "{}", done.body);
+    assert!(PrincipalGrants::new(tokens.as_ref(), "prn_gina").load(Service::GoogleCalendar).unwrap().is_some());
+}
+
+/// Gmail behind the read-sync seam: two messages, one with an attachment that is never read.
+struct FakeGmail {
+    calls: Mutex<Vec<String>>,
+}
+
+impl ProviderHttp for FakeGmail {
+    fn get(&self, url: &str, bearer: &Secret, _headers: &[(&'static str, &'static str)]) -> Result<String, FetchError> {
+        self.calls.lock().unwrap().push(url.to_string());
+        if *bearer != Secret::new("ya29.hana-gmail-token") {
+            return Err(FetchError::Unauthorized);
+        }
+        let base = url.split('?').next().unwrap_or(url);
+        Ok(match base.rsplit('/').next().unwrap_or("") {
+            "messages" => r#"{"messages":[{"id":"m1"}]}"#.to_string(),
+            "m1" => serde_json::json!({
+                "id": "m1", "threadId": "t1", "historyId": "77", "labelIds": ["INBOX"],
+                "payload": { "headers": [{ "name": "Subject", "value": "Contract draft" }, { "name": "From", "value": "legal@example.com" }],
+                    "parts": [{ "mimeType": "text/plain", "body": { "data": "UGxlYXNlIHJldmlldyBieSBUaHVyc2RheS4" } },
+                              { "mimeType": "application/pdf", "filename": "contract.pdf", "body": { "attachmentId": "a1" } }] }
+            })
+            .to_string(),
+            _ => return Err(FetchError::NotFound),
+        })
+    }
+}
+
+#[test]
+fn a_gmail_notice_is_queued_and_the_tick_fetches_it_into_the_principals_store_once() {
+    let root = TempRoot::new("readsync");
+    let tokens = Arc::new(MemorySecretStore::new());
+    let (port, store, vault) = boot_with(root.0.clone(), tokens.clone(), FakeVendor::default());
+    let hana = bearer("prn_hana", "key_04");
+    let far = wall_clock()() + 3_600_000;
+    PrincipalGrants::new(tokens.as_ref(), "prn_hana")
+        .save(Service::Gmail, &TokenSet { access_token: "ya29.hana-gmail-token".into(), refresh_token: Some("r".into()), expires_at_ms: far, account_label: None })
+        .unwrap();
+    let notice = r#"{"provider":"gmail","delivery_id":"psm-1","idempotency_key":"hook:gmail:psm-1","changed":{"history_id":"77"}}"#;
+    let queued = rest(port, "POST", "/v1/memory/ingest-webhook", &hana, notice);
+    assert_eq!(queued.status, 200, "{}", queued.body);
+    assert_eq!(queued.body["result"]["outcome"], "changed");
+    assert_eq!(queued.body["result"]["fetch"], "queued");
+    assert_eq!(queued.body["usage"]["quantity"], 0);
+
+    let principals = vec![PrincipalId::parse("prn_hana").unwrap(), PrincipalId::parse("prn_ivan").unwrap()];
+    let http = FakeGmail { calls: Mutex::new(Vec::new()) };
+    let now = wall_clock()();
+    let tick = shogun_core::tenancy::connector_sync::drain_tick(&store, &vault, &http, &principals, now);
+    let hana_line = tick[0].outcome.clone().unwrap().unwrap();
+    assert_eq!((hana_line.jobs, hana_line.objects, hana_line.stored), (1, 1, 1), "{hana_line:?}");
+    assert_eq!(tick[1].outcome, None, "nothing queued for Ivan: no store opened, no call");
+    let calls = http.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 2);
+    assert!(calls.iter().all(|u| !u.contains("attachments")));
+    let summary = shogun_core::tenancy::connector_sync::summary(&tick);
+    assert!(summary.contains("stored=1"), "{summary}");
+    // The fetch is on Hana's traceability log; the stored event is searchable in her store only.
+    assert!(audit_rows(&store, "prn_hana").iter().any(|(p, d, _)| p == "connector.sync.gmail.ok" && d == "gmail.googleapis.com"));
+    let found = mcp_tool(port, &hana, "memory.search", serde_json::json!({ "query": "review by Thursday" }));
+    assert!(found.to_string().contains("Contract draft") || found.to_string().contains("Thursday"), "{found}");
+    let ivan = bearer("prn_ivan", "key_04");
+    let not_found = mcp_tool(port, &ivan, "memory.search", serde_json::json!({ "query": "review by Thursday" }));
+    assert!(!not_found.to_string().contains("Thursday"), "{not_found}");
+
+    // The same notice again: the same message at the same version is not stored twice.
+    rest(port, "POST", "/v1/memory/ingest-webhook", &hana, &notice.replace("psm-1", "psm-2"));
+    let tick = shogun_core::tenancy::connector_sync::drain_tick(&store, &vault, &http, &principals, now + 1);
+    let again = tick[0].outcome.clone().unwrap().unwrap();
+    assert_eq!((again.objects, again.stored), (1, 0));
 }
