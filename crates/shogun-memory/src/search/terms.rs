@@ -325,6 +325,31 @@ fn gram_set(text: &str) -> HashSet<String> {
     grams.into_iter().collect()
 }
 
+/// Every gram the V81 index would store for a title and body (the set [`floor_units`] are
+/// looked up in).
+pub(crate) fn text_grams(title: &str, body: &str) -> HashSet<String> {
+    let mut set = gram_set(title);
+    set.extend(gram_set(body));
+    set
+}
+
+/// The units the relevance floor counts a CJK concept as: the grams the V81 index holds for it.
+///
+/// A Japanese or Chinese question loses its particles and spaces to tokenisation, so one concept
+/// can carry a whole clause (`的合同有错误吗`, `リリース`, `招聘会议`); counted as one word it lets a
+/// project name typed beside it make up half the question. Counted in the index's own units a
+/// 2-character word stays one unit, `請求書` is two (請求, 求書), `服务器故障` four, and a
+/// katakana word its bigrams. Empty for a Latin concept, which is one unit as it stands.
+pub(crate) fn floor_units(concept: &Concept) -> Vec<String> {
+    if !concept.cjk {
+        return Vec::new();
+    }
+    if !concept.grams.is_empty() {
+        return concept.grams.clone();
+    }
+    concept.surface.as_deref().map(bigrams).unwrap_or_default()
+}
+
 /// One thing a question asks for. Matches a document when `surface` occurs in it, or when every
 /// gram in `grams` is in the document's gram set.
 #[derive(Debug, Clone, PartialEq, Eq)]
