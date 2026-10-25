@@ -487,6 +487,48 @@ fn parse_command(positionals: &[String]) -> Result<Command, CliError> {
             let query = join(rest).ok_or(CliError::MissingArgument("<query>"))?;
             Ok(Command::Pack { query })
         }
+        // E4-T3: the request JSON as `memory.ingest` takes it, validated by the shared parser so a
+        // bad body is refused here with the same code the server would answer.
+        "ingest" => {
+            let raw = join(rest).ok_or(CliError::MissingArgument("<json>"))?;
+            let body: serde_json::Value =
+                serde_json::from_str(&raw).map_err(|_| CliError::BadInput("ingest takes one JSON object".into()))?;
+            shogun_mcp::ingest_api::ingest_request(&body).map_err(CliError::BadInput)?;
+            Ok(Command::Ingest { body: body.to_string() })
+        }
+        "recall" => {
+            let mut args = serde_json::Map::new();
+            let mut words = Vec::new();
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--budget-tokens" => {
+                        let value = rest.get(i + 1).ok_or_else(|| CliError::BadInput("--budget-tokens needs a value".into()))?;
+                        args.insert("budget_tokens".into(), value.parse::<u64>().map_err(|_| CliError::BadId(value.clone()))?.into());
+                        i += 2;
+                    }
+                    "--include-scratch" => {
+                        args.insert("include_scratch".into(), true.into());
+                        i += 1;
+                    }
+                    other if other.starts_with("--") => {
+                        return Err(CliError::BadInput(format!("unknown recall option `{other}`")))
+                    }
+                    word => {
+                        words.push(word.to_string());
+                        i += 1;
+                    }
+                }
+            }
+            let query = words.join(" ");
+            if query.trim().is_empty() {
+                return Err(CliError::MissingArgument("<query>"));
+            }
+            args.insert("query".into(), query.into());
+            let body = serde_json::Value::Object(args);
+            shogun_mcp::ingest_api::recall_request(&body).map_err(CliError::BadInput)?;
+            Ok(Command::Recall { body: body.to_string() })
+        }
         "people" => Ok(Command::People(parse_list_or_get("people", rest)?)),
         "projects" => Ok(Command::Projects(parse_list_or_get("projects", rest)?)),
         "commitments" => Ok(Command::Commitments(parse_list_or_get(

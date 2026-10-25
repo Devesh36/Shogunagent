@@ -71,6 +71,9 @@ pub struct AppState {
     /// Multi-principal mode (E2-T2): the backend and the writer come from the request's bearer.
     /// `None` is the single-principal server: `backend`, written as the owner.
     principals: Option<Arc<dyn BackendResolver>>,
+    /// The MCP face behind `POST /mcp` (E4-T1, Streamable HTTP, stateless). `None` answers 404
+    /// there, as before the transport existed.
+    mcp: Option<Arc<dyn crate::mcp_http::McpHandler>>,
 }
 
 /// Multi-principal mode (E2-T2): which store and which writer a bearer token names. `apps/api`
@@ -116,6 +119,7 @@ impl AppState {
             memory_gate: None,
             llm_limiter: Arc::new(crate::rate_limit::LlmRateLimiter::in_memory()),
             principals: None,
+            mcp: None,
         }
     }
 
@@ -145,6 +149,15 @@ impl AppState {
         let write = WriteContext::new(&resolved.actor, Namespace::World)
             .map_err(|_| (500, r#"{"error":"invalid_actor"}"#.to_string()))?;
         Ok((resolved.backend, CallScope { write, read }))
+    }
+
+    /// Serve the MCP face at `POST /mcp` (E4-T1): the handler runs every request under the
+    /// request's own bearer ([`crate::mcp::McpServer::handle_line_as`]), so it shares the
+    /// token list, the backend and the approval queue with the REST face.
+    #[must_use]
+    pub fn with_mcp(mut self, mcp: Arc<dyn crate::mcp_http::McpHandler>) -> Self {
+        self.mcp = Some(mcp);
+        self
     }
 
     /// Count model-starting calls against `limiter` (2026-10-20 cost audit). The standalone
@@ -252,7 +265,66 @@ impl Tokens {
 
 /// Build the router: a single catch-all handler that defers to the pure routing layer.
 pub fn build_router(state: AppState) -> Router {
-    Router::new().fallback(any(handle)).with_state(state)
+    Router::new()
+        .route(crate::mcp_http::PATH, any(handle_mcp))
+        .fallback(any(handle))
+        .with_state(state)
+}
+
+/// `POST /mcp` (E4-T1): the Streamable HTTP transport. The adapter reads the method, the body,
+/// the bearer and the `Mcp-*` / `Accept` headers, hands them to the pure transport
+/// ([`crate::mcp_http::handle`]) and writes its reply and headers back. The same loopback rule
+/// as REST (NFR-SEC-03).
+async fn handle_mcp(State(state): State<AppState>, req: Request) -> Response {
+    if !host_is_loopback(
+        req.headers()
+            .get(axum::http::header::HOST)
+            .and_then(|v| v.to_str().ok()),
+    ) {
+        return render(403, r#"{"error":"forbidden_host"}"#.to_string());
+    }
+    let Some(mcp) = state.mcp.clone() else {
+        return render(404, r#"{"error":"not_found"}"#.to_string());
+    };
+    let method = req.method().as_str().to_string();
+    let headers = req.headers().clone();
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let mcp_method = header(crate::mcp_http::HEADER_METHOD);
+    let mcp_name = header(crate::mcp_http::HEADER_NAME);
+    let accept = header("accept");
+    let bearer = rest::bearer(headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
+    let body = match axum::body::to_bytes(req.into_body(), crate::mcp_http::MAX_BODY_BYTES).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(_) => return render(413, r#"{"error":"payload_too_large"}"#.to_string()),
+    };
+    let reply = crate::mcp_http::handle(
+        mcp.as_ref(),
+        &crate::mcp_http::HttpRequest {
+            method: &method,
+            body: &body,
+            mcp_method: mcp_method.as_deref(),
+            mcp_name: mcp_name.as_deref(),
+            accept: accept.as_deref(),
+            bearer: bearer.as_deref(),
+        },
+    );
+    let mut response = Response::builder()
+        .status(reply.status)
+        .header(CONTENT_TYPE, reply.content_type)
+        .header(crate::mcp_http::HEADER_METHOD, reply.mcp_method.as_str())
+        .header(crate::mcp_http::HEADER_PROTOCOL_VERSION, crate::mcp::STATELESS_PROTOCOL_VERSION);
+    if let Some(name) = &reply.mcp_name {
+        response = response.header(crate::mcp_http::HEADER_NAME, name.as_str());
+    }
+    if let Some(quantity) = reply.mcp_quantity {
+        response = response.header(crate::mcp_http::HEADER_QUANTITY, quantity.to_string());
+    }
+    if let Some(allow) = reply.allow {
+        response = response.header(axum::http::header::ALLOW, allow);
+    }
+    response
+        .body(Body::from(reply.body))
+        .unwrap_or_else(|_| render(500, r#"{"error":"internal"}"#.to_string()))
 }
 
 /// The one handler. Adapts an axum request into a [`RestRequest`], calls [`rest::respond`], and
@@ -846,6 +918,103 @@ mod tests {
             let _ = serve_on(listener, state).await;
         });
         addr
+    }
+
+    async fn raw_request(addr: std::net::SocketAddr, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let extra: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+        let request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    fn header<'a>(response: &'a str, name: &str) -> Option<&'a str> {
+        response
+            .split("\r\n\r\n")
+            .next()?
+            .lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+            })
+    }
+
+    /// E4-T1: `POST /mcp` is the Streamable HTTP transport over the same listener: stateless,
+    /// every reply carries `Mcp-Method` / `Mcp-Name`, a GET is 405, and a request without the
+    /// metering headers is refused before the handler runs.
+    #[tokio::test]
+    async fn mcp_over_http_is_stateless_and_carries_the_metering_headers() {
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let listener = bind_local(0).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
+        let mcp = crate::mcp::McpServer::new(
+            crate::backend::StubBackend,
+            approvals.clone(),
+            || 0,
+            || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
+        );
+        let state = AppState::new(Arc::new(tokens), Arc::new(crate::backend::StubBackend), approvals, Arc::new(|| 0))
+            .with_entitlements(Arc::new(|| shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0)))
+            .with_mcp(Arc::new(mcp));
+        tokio::spawn(async move {
+            let _ = serve_on(listener, state).await;
+        });
+
+        let list = raw_request(
+            addr,
+            "POST",
+            "/mcp",
+            &[("Content-Type", "application/json"), ("Mcp-Method", "tools/list"), ("Authorization", "Bearer t")],
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        )
+        .await;
+        assert!(list.starts_with("HTTP/1.1 200"), "{list}");
+        assert_eq!(header(&list, "mcp-method"), Some("tools/list"));
+        assert_eq!(header(&list, "mcp-protocol-version"), Some(crate::mcp::STATELESS_PROTOCOL_VERSION));
+        assert!(header(&list, "mcp-session-id").is_none(), "stateless: no session header");
+        let body = list.split("\r\n\r\n").nth(1).unwrap_or_default();
+        let value: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(value["result"]["cacheScope"], crate::mcp::CACHE_SCOPE);
+        assert!(value["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "memory.ingest"));
+
+        let call = raw_request(
+            addr,
+            "POST",
+            "/mcp",
+            &[("Content-Type", "application/json"), ("Mcp-Method", "tools/call"), ("Mcp-Name", "memory.ingest"), ("Authorization", "Bearer t")],
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"memory.ingest","arguments":{"events":[{"content":"a"},{"content":"b"},{"content":"c"}],"source":"s","actor":"a","idempotency_key":"k"}}}"#,
+        )
+        .await;
+        assert!(call.starts_with("HTTP/1.1 200"), "{call}");
+        assert_eq!(header(&call, "mcp-name"), Some("memory.ingest"));
+        assert_eq!(header(&call, "mcp-quantity"), Some("3"));
+
+        let unmetered = raw_request(
+            addr,
+            "POST",
+            "/mcp",
+            &[("Content-Type", "application/json"), ("Authorization", "Bearer t")],
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#,
+        )
+        .await;
+        assert!(unmetered.starts_with("HTTP/1.1 400"), "{unmetered}");
+        assert!(unmetered.contains("missing_header"));
+
+        let get = raw_request(addr, "GET", "/mcp", &[("Authorization", "Bearer t")], "").await;
+        assert!(get.starts_with("HTTP/1.1 405"), "{get}");
+        assert_eq!(header(&get, "allow"), Some("POST"));
+
+        // Without the MCP face wired, the path is simply not there.
+        let bare = spawn_server(TokenRegistry::new()).await;
+        let missing = raw_request(bare, "POST", "/mcp", &[("Mcp-Method", "ping")], r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#).await;
+        assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
     }
 
     /// 2026-10-20 cost audit: a token's model-starting calls are limited (429 with a retry hint),

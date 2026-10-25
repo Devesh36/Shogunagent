@@ -71,6 +71,21 @@ pub fn negotiate_protocol_version(params: Option<&Value>) -> &'static str {
         .unwrap_or(&SUPPORTED_PROTOCOL_VERSIONS[0])
 }
 
+/// The protocol version of the stateless Streamable HTTP transport (E4-T1): no `initialize`
+/// handshake, no `Mcp-Session-Id`; `server/discover` answers the capabilities and every list and
+/// read carries cache hints.
+pub const STATELESS_PROTOCOL_VERSION: &str = "2026-07-28";
+
+/// How long a client may cache `tools/list` / `resources/list` (`ttlMs`): the table changes
+/// only with a release, but a token's scope or a connection's sources can change under it.
+pub const LIST_TTL_MS: u64 = 300_000;
+/// How long a client may cache a read's result (`ttlMs` in `_meta`): memory changes every
+/// capture, so a read is fresh for seconds, not minutes.
+pub const READ_TTL_MS: u64 = 15_000;
+/// The `cacheScope` of every hint: the answer depends on the bearer (scope, sources, plan), so
+/// it is cacheable per credential, never shared across callers.
+pub const CACHE_SCOPE: &str = "private";
+
 /// The JSON-RPC error code for a tool the session's token scope does not cover (issue #400).
 /// Next to `-32003` (`plan_required`); the message starts with `scope_insufficient:`.
 pub const SCOPE_INSUFFICIENT_CODE: i64 = -32004;
@@ -179,6 +194,30 @@ pub struct McpServer<B: MemoryBackend> {
     /// Per-client limit on model-starting calls (2026-10-20 cost audit). In-process by default;
     /// the stdio binary shares its window with every other face through a file.
     llm_limiter: Arc<crate::rate_limit::LlmRateLimiter>,
+    /// Where a human approves a queued L3 request (E4-T2): the pending envelope's approval URL is
+    /// `<base>/approvals/<id>`. `None` (no `SHOGUN_APPROVAL_BASE_URL`) answers the id and the
+    /// poll without a URL: the user approves in the app.
+    approval_base_url: Option<String>,
+}
+
+thread_local! {
+    /// The bearer of the stateless HTTP request this thread is serving (E4-T1): `None` outside
+    /// one. The inner `None` is a request without a bearer.
+    static REQUEST_TOKEN: std::cell::RefCell<Option<Option<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn request_token() -> Option<Option<String>> {
+    REQUEST_TOKEN.with(|cell| cell.borrow().clone())
+}
+
+/// Restores the previous request token when dropped, so a panic inside one request cannot leave
+/// the next one on this thread with its bearer.
+struct RestoreRequestToken(Option<Option<String>>);
+
+impl Drop for RestoreRequestToken {
+    fn drop(&mut self) {
+        REQUEST_TOKEN.with(|cell| *cell.borrow_mut() = self.0.take());
+    }
 }
 
 impl<B: MemoryBackend> McpServer<B> {
@@ -210,7 +249,29 @@ impl<B: MemoryBackend> McpServer<B> {
             plan_lock: None,
             memory_gate: None,
             llm_limiter: Arc::new(crate::rate_limit::LlmRateLimiter::in_memory()),
+            approval_base_url: std::env::var("SHOGUN_APPROVAL_BASE_URL")
+                .ok()
+                .map(|url| url.trim().trim_end_matches('/').to_string())
+                .filter(|url| !url.is_empty()),
         }
+    }
+
+    /// Where a human approves a queued L3 request (E4-T2), overriding `SHOGUN_APPROVAL_BASE_URL`.
+    /// `None` answers approvals without a URL.
+    #[must_use]
+    pub fn with_approval_base_url(mut self, base_url: Option<String>) -> Self {
+        self.approval_base_url = base_url.map(|url| url.trim().trim_end_matches('/').to_string()).filter(|url| !url.is_empty());
+        self
+    }
+
+    /// Handle one JSON-RPC message as a stateless HTTP request (E4-T1) that carries `token` as
+    /// its bearer: the token is authenticated against the live list for this call alone, never
+    /// the session the process started with. With no live list (tests, the in-process face) the
+    /// server's fixed scope applies.
+    pub fn handle_line_as(&self, line: &str, token: Option<&str>) -> Option<String> {
+        let previous = REQUEST_TOKEN.with(|cell| cell.replace(Some(token.map(str::to_string))));
+        let _restore = RestoreRequestToken(previous);
+        self.handle_line(line)
     }
 
     /// Count model-starting calls against `limiter` (2026-10-20 cost audit): the stdio binary
@@ -354,6 +415,22 @@ impl<B: MemoryBackend> McpServer<B> {
     /// (owner decision 2026-10-20): an app connection's own setting, read from the same live list
     /// as its scope; every token session may.
     fn session_access(&self) -> Option<(TokenScope, SensitiveSources, Option<Arc<TokenRegistry>>)> {
+        // A stateless HTTP request (E4-T1) carries its own bearer: authenticated against the live
+        // list on every call, never the process's session and never process trust.
+        if let Some(token) = request_token() {
+            return match &self.live {
+                Some(live) => {
+                    let registry = live.tokens.current();
+                    match registry.authenticate(token.as_deref()) {
+                        crate::memory_api::AuthResult::Granted(scope) => {
+                            Some((scope, SensitiveSources::Allowed, Some(registry)))
+                        }
+                        _ => None,
+                    }
+                }
+                None => Some((self.scope, self.sensitive_sources, None)),
+            };
+        }
         match &self.live {
             None => Some((self.scope, self.sensitive_sources, None)),
             Some(live) => {
@@ -457,6 +534,12 @@ impl<B: MemoryBackend> McpServer<B> {
             }),
             "tools/call" => id.map(|id| self.tools_call(id, req.get("params"))),
             "ping" => id.map(|id| result(id, json!({}))),
+            // 2026-07-28 (E4-T1): the capabilities without a handshake, and the resource list
+            // (empty: memory is reached through tools) with its cache hints.
+            "server/discover" => id.map(|id| result(id, self.discover())),
+            "resources/list" => id.map(|id| {
+                result(id, json!({ "resources": [], "ttlMs": LIST_TTL_MS, "cacheScope": CACHE_SCOPE }))
+            }),
             _ => id.map(|id| error(id, -32601, "method not found")),
         }
     }
@@ -467,15 +550,33 @@ impl<B: MemoryBackend> McpServer<B> {
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "shogun-memory", "version": env!("CARGO_PKG_VERSION") },
         });
-        // Routing guidance goes out on every handshake (issue #1066); the lock explanation is
-        // appended only for an authenticated session (#744).
-        let mut instructions = ROUTING_GUIDE.to_string();
+        result["instructions"] = Value::String(self.instructions());
+        result
+    }
+
+    /// Routing guidance goes out on every handshake (issue #1066); the lock explanation is
+    /// appended only for an authenticated session (#744).
+    fn instructions(&self) -> String {
+        let mut instructions = routing_guide();
         if let Some(lock) = self.locked_instructions() {
             instructions.push_str("\n\n");
             instructions.push_str(&lock);
         }
-        result["instructions"] = Value::String(instructions);
-        result
+        instructions
+    }
+
+    /// `server/discover` (2026-07-28, E4-T1): what `initialize` used to answer, without a
+    /// handshake or a session. Any request may follow on any instance.
+    fn discover(&self) -> Value {
+        json!({
+            "protocolVersion": STATELESS_PROTOCOL_VERSION,
+            "capabilities": { "tools": {}, "resources": {} },
+            "serverInfo": { "name": "shogun-memory", "version": env!("CARGO_PKG_VERSION") },
+            "instructions": self.instructions(),
+            "stateless": true,
+            "ttlMs": LIST_TTL_MS,
+            "cacheScope": CACHE_SCOPE,
+        })
     }
 
     /// Handshake `instructions` for a locked plan (issue #744): `tools/list` still lists every
@@ -508,7 +609,8 @@ impl<B: MemoryBackend> McpServer<B> {
             .filter(|t| crate::source_policy::tool_allowed(access, **t))
             .map(|t| tool_descriptor(*t))
             .collect();
-        json!({ "tools": tools })
+        // Cache hints (2026-07-28, E4-T1): per credential, for a few minutes.
+        json!({ "tools": tools, "ttlMs": LIST_TTL_MS, "cacheScope": CACHE_SCOPE })
     }
 
     /// `tools/call`, with the core memory surface's refusals normalized in one place (MCP v2
@@ -516,14 +618,24 @@ impl<B: MemoryBackend> McpServer<B> {
     /// an isError result `{"error", "message", "tool"}`, and -32000 is left for internal faults.
     fn tools_call(&self, id: Value, params: Option<&Value>) -> String {
         let response = self.dispatch_tool(id, params);
-        match params
+        let tool = params
             .and_then(|p| p.get("name"))
             .and_then(Value::as_str)
-            .and_then(Tool::from_wire)
-            .filter(|tool| is_core_surface(*tool))
-        {
+            .and_then(Tool::from_wire);
+        let response = match tool.filter(|tool| is_core_surface(*tool)) {
             Some(tool) => normalize_core_response(tool, response),
             None => response,
+        };
+        // E4-T2: a pending envelope becomes `resultType: "approval_required"` with the approval
+        // URL (URL-mode elicitation); a read carries its cache hints (E4-T1).
+        let response = crate::mrtr::shape_approval(response, self.approval_base_url.as_deref());
+        match tool {
+            // The approval poll is a read a client must not cache: it changes the moment the
+            // human decides.
+            Some(tool) if tool_level(tool) == ApiLevel::Read && tool != Tool::ActionsStatus => {
+                crate::mrtr::with_read_hints(response, READ_TTL_MS, CACHE_SCOPE)
+            }
+            _ => response,
         }
     }
 
@@ -646,6 +758,13 @@ impl<B: MemoryBackend> McpServer<B> {
             if let Err(message) = check_args(&tool_descriptor(tool)["inputSchema"], &args) {
                 return error(id, -32602, &message);
             }
+        }
+
+        // MRTR (E4-T2, 2026-07-28): an L2 tool is a one-tap confirmation, so the first call
+        // answers `resultType: "input_required"` with the form, and the retry carries
+        // `inputResponses`. After auth, plan, scope and argument shape; before anything runs.
+        if let Some(reply) = crate::mrtr::input_required(tool, &args, params.get("inputResponses")) {
+            return result(id, reply);
         }
 
         // Per-client limit on calls that start a model call (2026-10-20 cost audit), after auth,
@@ -781,6 +900,19 @@ impl<B: MemoryBackend> McpServer<B> {
                 id,
                 json!({ "content": [{ "type": "text", "text": text }], "isError": failed }),
             );
+        }
+
+        // memory.ingest / memory.recall (E4-T3): one parser, one backend call and one envelope
+        // for every face (`ingest_api`).
+        if crate::ingest_api::is_ingest_tool(tool) {
+            return match crate::ingest_api::serve(tool, &args, &self.backend) {
+                Ok(text) => {
+                    let failed = is_error_payload(&text);
+                    result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": failed }))
+                }
+                Err(crate::ingest_api::Refusal::BadArguments(message)) => error(id, -32602, &message),
+                Err(crate::ingest_api::Refusal::Unavailable(code)) => error(id, -32000, code),
+            };
         }
 
         // memory.get_events / memory.read_session: one parser and one backend call for every
@@ -1732,18 +1864,36 @@ fn error_with_data(id: Value, code: i64, message: &str, data: Option<Value>) -> 
 }
 
 /// Handshake `instructions` (issue #1066): which tool answers which question. Keep under ~1.5 KB.
-const ROUTING_GUIDE: &str = "ShogunAI is the user's local memory of their work on this Mac: screen text, meetings, people, projects, commitments. Check it when they refer to their own past, a person, project or meeting, or when their real context would sharpen the answer. If it holds nothing relevant, say so; do not guess.
+/// The meetings line is dropped when this build does not serve the meeting tools (E4-T6).
+fn routing_guide() -> String {
+    let meetings = crate::memory_api::tool_is_served(Tool::MeetingList);
+    ROUTING_GUIDE
+        .lines()
+        .filter(|line| meetings || !line.starts_with("- Meetings:"))
+        .map(|line| {
+            if meetings {
+                line.to_string()
+            } else {
+                line.replace(": memory.get_events (event ids from search or a pack), meeting.transcript.get, wiki.evidence.", ": memory.get_events (event ids from search, a pack or a recall), wiki.evidence.")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+const ROUTING_GUIDE: &str = "ShogunAI is the user's local memory of their work on this Mac: screen text, meetings, people, projects, commitments. Check it when they refer to their own past, a person, project or meeting; if it holds nothing relevant, say so, do not guess.
 
 Routing:
+- Before acting: memory.recall (query, budget_tokens). At a checkpoint: memory.ingest (events/turns, idempotency_key).
 - Right now: memory.get_context. One app/window over a span: memory.read_session.
-- Today, yesterday, this week, an hour range: memory.get_periods (from_ms/to_ms, unix ms); memory.get_wrap for today's wrap-up.
-- Calendar / what is coming up: calendar.upcoming.
+- Today, yesterday, this week, a time range: memory.get_periods (from_ms/to_ms, unix ms); memory.get_wrap for today's wrap-up.
+- Coming up: calendar.upcoming.
 - Find X anywhere: memory.search (distinctive query; limit, from_ms/to_ms, source_kind to narrow; depth all needs both bounds).
-- Who is Y / what do I know about project Z: memory.get_context_pack first, or search with source_kind person|project, then state.people.get / state.projects.get.
+- Who is Y / project Z: memory.get_context_pack, or search with source_kind person|project, then state.people.get / state.projects.get.
 - What do I owe / what is open: state.commitments.list, state.open_loops.list.
 - Meetings: meeting.search or meeting.list, then meeting.recap.get; meeting.transcript.get for exact words.
 
-Results and summaries are compressed indexes, not evidence. Before quoting wording, numbers or times, open the source: memory.get_events (event ids from search or a pack), meeting.transcript.get, wiki.evidence. Rows marked possibly are uncertain. Ask narrowly: tight windows, small limits. Sends and posts are never automatic: actions.execute only queues them for the user to confirm. tools/list shows the core set; other tools stay callable by name where your grant allows.";
+Results and summaries are indexes, not evidence. Before quoting wording, numbers or times, open the source: memory.get_events (event ids from search or a pack), meeting.transcript.get, wiki.evidence. Rows marked possibly are uncertain. Ask narrowly: tight windows, small limits. Sends and posts never run by themselves: actions.execute queues them for the user (approval_required; poll actions.status). tools/list shows the core set; other tools stay callable by name.";
 
 /// Lists an agent reads whole every call (517 open loops were 84 KB): newest first (state rows by
 /// id; wiki entries by confidence), `limit` (default 50) from `offset`, with `total` and
@@ -1781,6 +1931,8 @@ fn page_list(tool: Tool, text: String, args: &Value) -> String {
 /// name. No wildcard arm: a new tool does not compile until it has one.
 fn tool_title(tool: Tool) -> &'static str {
     match tool {
+        Tool::MemoryIngest => "Ingest events or turns",
+        Tool::MemoryRecall => "Recall within a budget",
         Tool::MemoryNotesList => "List memory notes",
         Tool::MemoryNotesChange => "Change a memory note",
         Tool::MemorySearch => "Search memory",
@@ -1943,8 +2095,14 @@ fn tool_title(tool: Tool) -> &'static str {
 }
 
 /// A minimal MCP tool descriptor (name + description + a permissive input schema).
-fn tool_descriptor(tool: Tool) -> Value {
+/// The `tools/list` descriptor of a tool: name, title, description, `inputSchema`, generated
+/// `annotations` (E4-T4) and, once a tool is deprecated, `deprecated` (E4-T5). Public for the
+/// wire-freeze snapshot and the generated docs.
+pub fn tool_descriptor(tool: Tool) -> Value {
     let (desc, props): (&str, Value) = match tool {
+        // The core descriptions come from `core_tools::CORE` below; these are the fallbacks.
+        Tool::MemoryIngest => ("Append events or turns to the event log under an idempotency key (L1).", crate::ingest_api::ingest_schema()),
+        Tool::MemoryRecall => ("What memory holds on a question, within a token budget.", crate::ingest_api::recall_schema()),
         Tool::FormsInspect => ("Inspect the focused form in the running ShogunAI desktop and open its review window (L2). Captures nearby labeled blank text controls only; credentials/payment controls are skipped. Never submits.", json!({})),
         Tool::FormsPlan => ("Match exact supplied facts and bounded memory excerpts to blank fields using Jev (TypeSafe), through ShogunAI's server on its own key unless the user saved their own TypeSafe key (L1). Supply notes as one labelled fact per line. Decisions remain proposals requiring human review. Never fills or submits.", json!({"session_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":0},"instruction":{"type":"string","minLength":1,"maxLength":4000}})),
         Tool::FormsStatus => ("Read a live form session snapshot, proposed values, evidence and write results. The same token/client must own the session.", json!({"session_id":{"type":"integer","minimum":1}})),
@@ -2655,11 +2813,24 @@ Records an item was linked to are not touched. Only delete what the user asked t
     if tool == Tool::ApiConnectionsRestrict {
         descriptor["inputSchema"]["required"] = json!(["client"]);
     }
-    // Read tools say so (MCP tool annotations). Codex asks before every unannotated call, so
-    // `codex exec` refused each SHOGUN read outright. A hint only: levels are still enforced here.
-    if tool_level(tool) == ApiLevel::Read {
-        let web = matches!(tool, Tool::WebPage | Tool::WebSocialPost | Tool::WebVideoTranscript);
-        descriptor["annotations"] = json!({ "readOnlyHint": true, "openWorldHint": web });
+    if tool == Tool::MemoryIngest {
+        descriptor["inputSchema"]["required"] = json!(["source", "actor", "idempotency_key"]);
+        descriptor["inputSchema"]["additionalProperties"] = json!(false);
+    }
+    if tool == Tool::MemoryRecall {
+        descriptor["inputSchema"]["required"] = json!(["query"]);
+        descriptor["inputSchema"]["additionalProperties"] = json!(false);
+    }
+    // The core set's descriptions are one agent-facing table (E4-T4, `core_tools::CORE`).
+    if let Some(description) = crate::core_tools::description(tool) {
+        descriptor["description"] = Value::String(description.to_string());
+    }
+    // Annotations are generated from the level (E4-T4), so a client knows the tier before it
+    // calls (Codex asks before every unannotated call). A hint only: levels are enforced here.
+    descriptor["annotations"] = crate::core_tools::annotations(tool_level(tool));
+    // A deprecated tool says so and names its replacement (E4-T5).
+    if let Some(note) = crate::memory_api::tool_deprecation(tool) {
+        descriptor["deprecated"] = Value::String(note.to_string());
     }
     descriptor
 }
@@ -2791,6 +2962,8 @@ mod tests {
             || 1000,
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
+        // The whole tool table, whatever this build serves (E4-T6): these tests pin the table.
+        .with_toolsets(Toolsets::every())
     }
 
     struct SearchFake;
@@ -3041,13 +3214,29 @@ mod tests {
         assert_eq!(descriptor["inputSchema"]["oneOf"][1]["required"], json!(["hidden_self_frames"]));
     }
 
+    /// E4-T4: every descriptor's annotations are the level's (`core_tools::annotations`), so a
+    /// read says read-only and idempotent, an L1 / L2 write says local and reversible, and an L3
+    /// or per-action tool says destructive and open-world.
     #[test]
-    fn read_tools_are_annotated_read_only_and_writes_are_not() {
+    fn annotations_are_generated_from_the_level_for_every_descriptor() {
+        for &tool in ALL_TOOLS {
+            assert_eq!(
+                tool_descriptor(tool)["annotations"],
+                crate::core_tools::annotations(tool_level(tool)),
+                "{}",
+                tool.wire_name()
+            );
+        }
         let search = tool_descriptor(Tool::MemorySearch);
-        assert_eq!(search["annotations"], json!({ "readOnlyHint": true, "openWorldHint": false }));
-        assert_eq!(tool_descriptor(Tool::WebPage)["annotations"]["openWorldHint"], json!(true));
-        for tool in [Tool::MemoryAppendNote, Tool::ActionsExecute, Tool::StateDelete] {
-            assert!(tool_descriptor(tool).get("annotations").is_none(), "{tool:?}");
+        assert_eq!(search["annotations"], json!({ "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }));
+        let note = tool_descriptor(Tool::MemoryAppendNote);
+        assert_eq!(note["annotations"], json!({ "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false }));
+        let execute = tool_descriptor(Tool::ActionsExecute);
+        assert_eq!(execute["annotations"], json!({ "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true }));
+        assert_eq!(tool_descriptor(Tool::CaptureExclusionsSet)["annotations"]["destructiveHint"], json!(true));
+        // No tool is deprecated today, so no descriptor carries the field (E4-T5).
+        for &tool in ALL_TOOLS {
+            assert!(tool_descriptor(tool).get("deprecated").is_none(), "{}", tool.wire_name());
         }
     }
 
@@ -3121,7 +3310,8 @@ mod tests {
             shared_queue(),
             || 1000,
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
-        );
+        )
+        .with_toolsets(Toolsets::every());
         let listed = call(&server, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#);
         let tools = listed["result"]["tools"].as_array().unwrap();
         for name in ["search_index.status", "search_index.compact.start", "search_index.compact.stop"] {
@@ -3197,7 +3387,8 @@ mod tests {
             shared_queue(),
             || 1000,
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
-        );
+        )
+        .with_toolsets(Toolsets::every());
         let listed = call(&server, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#);
         let tools = listed["result"]["tools"].as_array().unwrap();
         for name in ["backup.status", "backup.set_retention"] {
@@ -3587,7 +3778,8 @@ mod tests {
         }
         let v = call(
             &server(),
-            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"mail.triage.archive","arguments":{"thread_key":"gmail:abc"}}}"#,
+            // An L2 tool, so the call carries the accepted MRTR confirmation (E4-T2).
+            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"mail.triage.archive","arguments":{"thread_key":"gmail:abc"},"inputResponses":[{"id":"l2_confirm","action":"accept","content":{"confirm":true}}]}}"#,
         );
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
@@ -3936,24 +4128,24 @@ mod tests {
         // A locked session gets the guide plus the lock text.
         let s = locked_server().with_plan_lock(|| Some(PlanLock::TrialEnded));
         let text = call(&s, INITIALIZE)["result"]["instructions"].as_str().unwrap().to_string();
-        assert!(text.starts_with(ROUTING_GUIDE) && text.contains("(trial_ended)"));
+        assert!(text.starts_with(&routing_guide()) && text.contains("(trial_ended)"));
     }
 
     #[test]
     fn an_open_plan_or_a_missing_reason_answers_exactly_as_before() {
         // An open plan never asks why it would be locked.
         let s = server().with_plan_lock(|| panic!("an open plan never consults the lock reason"));
-        assert_eq!(call(&s, INITIALIZE)["result"]["instructions"], ROUTING_GUIDE);
+        assert_eq!(call(&s, INITIALIZE)["result"]["instructions"], routing_guide());
 
         // Locked without a provider (tests, embedders): no `data` member, no instructions.
         let bare = locked_server();
         assert!(call(&bare, SEARCH_CALL)["error"].get("data").is_none());
-        assert_eq!(call(&bare, INITIALIZE)["result"]["instructions"], ROUTING_GUIDE);
+        assert_eq!(call(&bare, INITIALIZE)["result"]["instructions"], routing_guide());
 
         // A provider that cannot name a cause adds nothing either.
         let unknown = locked_server().with_plan_lock(|| None);
         assert!(call(&unknown, SEARCH_CALL)["error"].get("data").is_none());
-        assert_eq!(call(&unknown, INITIALIZE)["result"]["instructions"], ROUTING_GUIDE);
+        assert_eq!(call(&unknown, INITIALIZE)["result"]["instructions"], routing_guide());
     }
 
     #[test]
@@ -3969,7 +4161,7 @@ mod tests {
         let s = locked_server()
             .with_plan_lock(|| Some(PlanLock::StandardPlan))
             .with_live_tokens(live, Some("shogun_ffffffffffffffffffff".into()));
-        assert_eq!(call(&s, INITIALIZE)["result"]["instructions"], ROUTING_GUIDE);
+        assert_eq!(call(&s, INITIALIZE)["result"]["instructions"], routing_guide());
         assert_eq!(call(&s, SEARCH_CALL)["error"]["code"], TOKEN_INVALID_CODE, "auth first, then the plan");
     }
 
@@ -4268,32 +4460,31 @@ mod toolset_tests {
             .collect()
     }
 
-    /// The 15 tools of `docs/specs/mcp-tool-surface.md` §5.A. Changing core is a reviewed diff.
-    /// +2 (MCP v2): memory.get_events opens the sources hits point at; memory.read_session.
-    const PINNED_CORE: [&str; 23] = [
+    /// The core set of plan §7.1 (E4-T3): the previous core minus the four meeting reads (now
+    /// the `meeting` group, desktop only) plus `memory.ingest` and `memory.recall`. Frozen by
+    /// `tests/wire_freeze.rs`; changing it is a reviewed diff and a deprecation note.
+    const PINNED_CORE: [&str; 21] = [
         "memory.search",
         "memory.get_context",
         "memory.get_context_pack",
         "memory.get_events",
         "memory.read_session",
         "memory.get_wrap",
-        "memory.append_note",
+        "memory.get_periods",
+        "memory.recall",
+        "calendar.upcoming",
         "profile.whoami",
         "state.commitments.list",
         "state.open_loops.list",
         "state.people.list",
         "state.projects.list",
-        "meeting.list",
-        "meeting.search",
-        "meeting.recap.get",
-        "actions.execute",
-        "actions.status",
-        "memory.get_periods",
         "state.people.get",
         "state.projects.get",
-        "meeting.transcript.get",
         "wiki.evidence",
-        "calendar.upcoming",
+        "actions.status",
+        "memory.append_note",
+        "memory.ingest",
+        "actions.execute",
     ];
 
     fn sorted(mut v: Vec<String>) -> Vec<String> {
@@ -4315,7 +4506,7 @@ mod toolset_tests {
     #[test]
     fn core_tools_list_stays_small_and_calls_outside_it_still_work() {
         let core = listed(&echo_server(Toolsets::core()));
-        let full = listed(&echo_server(Toolsets::all()));
+        let full = listed(&echo_server(Toolsets::every()));
         let (c, f) = (serde_json::to_string(&core).unwrap().len(), serde_json::to_string(&full).unwrap().len());
         eprintln!("tools/list bytes: core={c} full={f}");
         assert!(c * 3 < f);
@@ -4324,13 +4515,13 @@ mod toolset_tests {
     #[test]
     fn every_tool_belongs_to_exactly_one_group_and_no_group_is_empty() {
         for &tool in ALL_TOOLS {
-            let owners = crate::memory_api::ALL_GROUPS
+            let owners = crate::memory_api::EVERY_GROUP
                 .iter()
                 .filter(|g| tool_group(tool) == **g)
                 .count();
             assert_eq!(owners, 1, "{}", tool.wire_name());
         }
-        for &group in crate::memory_api::ALL_GROUPS {
+        for &group in crate::memory_api::EVERY_GROUP {
             assert!(
                 ALL_TOOLS.iter().any(|t| tool_group(*t) == group),
                 "group {} lists nothing",
@@ -4344,25 +4535,34 @@ mod toolset_tests {
         assert_eq!(wire.len(), ALL_TOOLS.len());
     }
 
+    /// E4-T6: `all` (and the unset default) lists every tool whose group this build serves, in
+    /// table order; `every` lists the whole table. On the desktop build the two are the same.
     #[test]
     fn default_and_all_list_exactly_all_tools() {
         let every: Vec<String> = ALL_TOOLS.iter().map(|t| t.wire_name().to_string()).collect();
+        let served: Vec<String> = ALL_TOOLS
+            .iter()
+            .filter(|t| crate::memory_api::tool_is_served(**t))
+            .map(|t| t.wire_name().to_string())
+            .collect();
+        assert_eq!(served == every, cfg!(feature = "desktop"));
         let default = McpServer::new(
             Echo,
             Arc::new(Mutex::new(ApprovalQueue::new())),
             || 1000,
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         );
-        assert_eq!(names(&listed(&default)), every, "unset keeps today's list and order");
-        assert_eq!(names(&listed(&echo_server(Toolsets::all()))), every);
-        assert_eq!(names(&listed(&echo_server(Toolsets::parse(None).0))), every);
+        assert_eq!(names(&listed(&default)), served, "unset keeps the served list and order");
+        assert_eq!(names(&listed(&echo_server(Toolsets::all()))), served);
+        assert_eq!(names(&listed(&echo_server(Toolsets::parse(None).0))), served);
+        assert_eq!(names(&listed(&echo_server(Toolsets::every()))), every);
     }
 
     #[test]
     fn every_listed_tool_under_any_toolset_is_in_all_tools() {
         let mut values = vec!["core".to_string(), "all".to_string()];
         values.extend(crate::memory_api::ALL_GROUPS.iter().map(|g| g.id().to_string()));
-        values.push("mail,meeting,settings".to_string());
+        values.push(if cfg!(feature = "desktop") { "mail,meeting,settings" } else { "import,state,wiki" }.to_string());
         for value in values {
             let (toolsets, unknown) = Toolsets::parse(Some(&value));
             assert_eq!(unknown, 0);
@@ -4437,7 +4637,7 @@ mod toolset_tests {
         // One private ledger for both servers: `meeting.start.status` must read the same rows
         // under either toolset, and nothing outside this test may write them in between.
         let meeting_start = private_meeting_store();
-        let all = echo_server_with(Toolsets::all(), meeting_start.clone());
+        let all = echo_server_with(Toolsets::every(), meeting_start.clone());
         let core = echo_server_with(Toolsets::core(), meeting_start);
         let listed_under_core = names(&listed(&core));
         let mut hidden_checked = 0;
@@ -4485,13 +4685,15 @@ mod toolset_tests {
     /// MCP v2 (2026-10-14): + memory.get_events and memory.read_session, longer get_context /
     /// append_note text: 10,331 bytes, budget plus ~10%.
     /// + calendar.upcoming in core and limit/offset on the four state lists: 12,066 bytes, +~10%.
-    const CORE_DESCRIPTOR_BUDGET_BYTES: usize = 13_200; // 23 routed tools; was 11_400 for 22
+    // 21 core tools with agent-facing descriptions and four generated hints each (E4-T4); was
+    // 13_200 for the 23 of the previous core, 11_400 for 22.
+    const CORE_DESCRIPTOR_BUDGET_BYTES: usize = 15_000;
 
     #[test]
     fn core_descriptor_budget() {
         let core = listed(&echo_server(Toolsets::core()));
         let bytes = serde_json::to_string(&core).unwrap().len();
-        let every = listed(&echo_server(Toolsets::all()));
+        let every = listed(&echo_server(Toolsets::every()));
         let all_bytes = serde_json::to_string(&every).unwrap().len();
         let execute_bytes = core
             .iter()
@@ -4512,7 +4714,8 @@ mod toolset_tests {
         let execute = tools.iter().find(|t| t["name"] == "actions.execute").unwrap();
         assert_eq!(execute["inputSchema"]["required"], json!(["kind"]));
         let description = execute["description"].as_str().unwrap();
-        assert!(description.contains("external sends require L3 confirmation"));
+        assert!(description.contains("explicit approval (L3)"), "{description}");
+        assert!(description.contains("approval_required"), "{description}");
         let kinds = execute["inputSchema"]["properties"]["kind"]["enum"]
             .as_array()
             .unwrap();
@@ -4558,7 +4761,7 @@ mod toolset_tests {
 
     #[test]
     fn writing_voice_set_states_its_l3_level() {
-        let tools = listed(&echo_server(Toolsets::all()));
+        let tools = listed(&echo_server(Toolsets::every()));
         let set = tools.iter().find(|t| t["name"] == "writing_voice.set").unwrap();
         let description = set["description"].as_str().unwrap();
         assert_eq!(tool_level(Tool::WritingVoiceSet), ApiLevel::Write(Level::L3));
@@ -4685,6 +4888,7 @@ mod toolset_tests {
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
         .with_approval_surface(rest::ApprovalSurface::Present)
+        .with_toolsets(Toolsets::every())
     }
 
     fn call_exclusions<B: MemoryBackend>(server: &McpServer<B>, arguments: Value) -> (String, bool) {
@@ -4799,6 +5003,7 @@ mod toolset_tests {
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
         .with_approval_surface(rest::ApprovalSurface::Present)
+        .with_toolsets(Toolsets::every())
     }
 
     #[test]
@@ -4928,6 +5133,7 @@ mod toolset_tests {
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
         .with_approval_surface(rest::ApprovalSurface::Present)
+        .with_toolsets(Toolsets::every())
     }
 
     #[test]
@@ -5034,6 +5240,7 @@ mod toolset_tests {
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
         .with_approval_surface(rest::ApprovalSurface::Present)
+        .with_toolsets(Toolsets::every())
     }
 
     #[test]
@@ -5133,12 +5340,19 @@ mod toolset_tests {
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
         .with_approval_surface(rest::ApprovalSurface::Present)
+        .with_toolsets(Toolsets::every())
     }
 
+    /// A call that carries an accepted L2 confirmation (E4-T2): an L2 tool runs instead of
+    /// answering `input_required`; every other tool ignores the field.
     fn call_tool<B: MemoryBackend>(server: &McpServer<B>, name: &str, arguments: Value) -> (String, bool) {
         let line = json!({
             "jsonrpc": "2.0", "id": 9, "method": "tools/call",
-            "params": { "name": name, "arguments": arguments },
+            "params": {
+                "name": name,
+                "arguments": arguments,
+                "inputResponses": [{ "id": crate::mrtr::INPUT_REQUEST_ID, "action": "accept", "content": { "confirm": true } }],
+            },
         })
         .to_string();
         let v: Value = serde_json::from_str(&server.handle_line(&line).unwrap()).unwrap();
@@ -5309,6 +5523,7 @@ mod toolset_tests {
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
         .with_approval_surface(rest::ApprovalSurface::Present)
+        .with_toolsets(Toolsets::every())
     }
 
     #[test]
@@ -5489,6 +5704,7 @@ mod scope_tests {
         }
     }
 
+    /// A session over the whole tool table (E4-T6): the scope tests pin every tool's scope.
     fn session(scope: TokenScope) -> (McpServer<Counting>, Arc<Mutex<ApprovalQueue>>) {
         let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
         let server = McpServer::new(
@@ -5498,6 +5714,7 @@ mod scope_tests {
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
         .with_approval_surface(rest::ApprovalSurface::Present)
+        .with_toolsets(Toolsets::every())
         .with_token_scope(scope);
         (server, approvals)
     }
@@ -5546,7 +5763,8 @@ mod scope_tests {
             Arc::new(Mutex::new(ApprovalQueue::new())),
             || 1000,
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
-        );
+        )
+        .with_toolsets(Toolsets::every());
         assert_eq!(listed(&legacy), every);
     }
 
@@ -5828,6 +6046,7 @@ mod scope_tests {
             || 1000,
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
+        .with_toolsets(Toolsets::every())
         .with_live_tokens(live, Some("shogun_only".into()));
         let read_tools = ALL_TOOLS.iter().filter(|t| tool_level(**t) == ApiLevel::Read).count();
         assert_eq!(listed(&server).len(), read_tools, "admitted with read scope");
@@ -5898,9 +6117,13 @@ mod forms_tests {
             || 1000,
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
+        .with_toolsets(Toolsets::every())
     }
+    /// `forms.inspect` is L2, so every call carries the accepted MRTR confirmation (E4-T2); the
+    /// other forms tools ignore it.
     fn call(server: &McpServer<FormsRecorder>, name: &str, args: Value) -> Value {
-        serde_json::from_str(&server.handle_line(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args}}).to_string()).unwrap()).unwrap()
+        let responses = json!([{ "id": crate::mrtr::INPUT_REQUEST_ID, "action": "accept", "content": { "confirm": true } }]);
+        serde_json::from_str(&server.handle_line(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":name,"arguments":args,"inputResponses":responses}}).to_string()).unwrap()).unwrap()
     }
 
     #[test]
@@ -6150,6 +6373,7 @@ mod sensitive_sources_tests {
             || 1000,
             || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
         )
+        .with_toolsets(Toolsets::every())
         .with_live_client(live.clone(), client.to_string())
     }
 
@@ -6295,5 +6519,153 @@ mod sensitive_sources_tests {
         let reader = server(&read_live, "cursor");
         let v = call(&reader, "api.connections.restrict", json!({ "client": "cursor" }));
         assert_eq!(v["error"]["code"], SCOPE_INSUFFICIENT_CODE, "{v}");
+    }
+}
+
+/// MRTR and URL-mode elicitation on this face (E4-T2): how an agent sees L2 and L3.
+#[cfg(test)]
+mod mrtr_tests {
+    use super::*;
+    use crate::mail_archive_api::test_support::{FakeMail, Thread};
+    use crate::mrtr::{INPUT_REQUEST_ID, RESULT_APPROVAL_REQUIRED, RESULT_INPUT_REQUIRED};
+
+    fn mail_server(queue: Arc<Mutex<ApprovalQueue>>, base_url: Option<&str>) -> McpServer<FakeMail> {
+        let inbox = Thread { archived: false, requested: false, standing: false };
+        McpServer::new(
+            FakeMail::with(&[("gmail:a", inbox)]),
+            queue,
+            || 1000,
+            || shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0),
+        )
+        .with_approval_surface(rest::ApprovalSurface::Present)
+        .with_toolsets(Toolsets::every())
+        .with_approval_base_url(base_url.map(str::to_string))
+    }
+
+    fn call<B: MemoryBackend>(server: &McpServer<B>, name: &str, arguments: Value, responses: Option<Value>) -> Value {
+        let mut params = json!({ "name": name, "arguments": arguments });
+        if let Some(responses) = responses {
+            params["inputResponses"] = responses;
+        }
+        let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params }).to_string();
+        serde_json::from_str(&server.handle_line(&line).unwrap()).unwrap()
+    }
+
+    fn text(v: &Value) -> Value {
+        serde_json::from_str(v["result"]["content"][0]["text"].as_str().expect("text block")).unwrap()
+    }
+
+    fn accept() -> Value {
+        json!([{ "id": INPUT_REQUEST_ID, "action": "accept", "content": { "confirm": true } }])
+    }
+
+    #[test]
+    fn an_l2_tool_asks_for_the_confirmation_form_first_and_runs_on_the_accepted_retry() {
+        let queue = Arc::new(Mutex::new(ApprovalQueue::new()));
+        let server = mail_server(queue.clone(), Some("https://approve.example"));
+        let args = json!({ "thread_key": "gmail:a" });
+
+        // First call: the form, nothing queued, nothing reached the backend.
+        let first = call(&server, "mail.triage.archive", args.clone(), None);
+        assert_eq!(first["result"]["resultType"], RESULT_INPUT_REQUIRED, "{first}");
+        assert_eq!(first["result"]["isError"], false);
+        let request = &first["result"]["inputRequests"][0];
+        assert_eq!(request["id"], INPUT_REQUEST_ID);
+        assert_eq!(request["mode"], "form");
+        assert_eq!(request["tool"], "mail.triage.archive");
+        assert_eq!(request["arguments"], args);
+        assert_eq!(request["requestedSchema"]["required"], json!(["confirm"]));
+        assert_eq!(text(&first)["input_required"], true);
+        assert_eq!(queue.lock().unwrap().pending_len(), 0);
+        assert_eq!(*server.backend.writes.lock().unwrap(), 0);
+
+        // Declined: nothing runs, and the answer says so without an error.
+        let declined = call(
+            &server,
+            "mail.triage.archive",
+            args.clone(),
+            Some(json!([{ "id": INPUT_REQUEST_ID, "action": "decline" }])),
+        );
+        assert!(declined["result"].get("resultType").is_none(), "{declined}");
+        assert_eq!(text(&declined)["ran"], false);
+        assert_eq!(text(&declined)["declined"], true);
+        assert_eq!(queue.lock().unwrap().pending_len(), 0);
+
+        // Accepted: the tool runs; this one waits for the user's in-app tap, so the pending
+        // envelope comes back shaped as an approval with the URL to hand over.
+        let accepted = call(&server, "mail.triage.archive", args, Some(accept()));
+        assert_eq!(accepted["result"]["resultType"], RESULT_APPROVAL_REQUIRED, "{accepted}");
+        let approval = &accepted["result"]["approval"];
+        assert_eq!(approval["level"], "L2");
+        assert_eq!(approval["origin"], "mcp");
+        assert_eq!(approval["url"], "https://approve.example/approvals/1");
+        assert_eq!(accepted["result"]["inputRequests"][0]["mode"], "url");
+        assert_eq!(queue.lock().unwrap().pending_len(), 1);
+        assert_eq!(queue.lock().unwrap().origin(shogun_agents::approval::ApprovalId(1)), Some(ApprovalOrigin::Mcp));
+    }
+
+    #[test]
+    fn an_l3_send_answers_approval_required_with_the_url_and_the_status_poll() {
+        let queue = Arc::new(Mutex::new(ApprovalQueue::new()));
+        let server = mail_server(queue.clone(), Some("https://approve.example/"));
+        let send = call(
+            &server,
+            "actions.execute",
+            json!({ "kind": "send_email", "to": "a@b.com", "subject": "s", "body": "b" }),
+            None,
+        );
+        assert_eq!(send["result"]["resultType"], RESULT_APPROVAL_REQUIRED, "{send}");
+        assert_eq!(send["result"]["isError"], false);
+        let approval = &send["result"]["approval"];
+        assert_eq!(approval["approval_id"], 1);
+        assert_eq!(approval["level"], "L3");
+        assert_eq!(approval["url"], "https://approve.example/approvals/1");
+        assert_eq!(approval["poll"], json!({ "tool": "actions.status", "arguments": { "approval_id": 1 } }));
+        let url_request = &send["result"]["inputRequests"][0];
+        assert_eq!(url_request["id"], crate::mrtr::APPROVAL_REQUEST_ID);
+        assert_eq!(url_request["mode"], "url");
+        assert_eq!(url_request["url"], "https://approve.example/approvals/1");
+        let payload = text(&send);
+        assert_eq!(payload["pending"], true);
+        assert_eq!(payload["approval_id"], 1);
+        assert_eq!(payload["url"], "https://approve.example/approvals/1");
+        assert_eq!(payload["next_action"], "approve_at_url");
+        // The queue is the one every face shares, and the poll is unchanged.
+        let q = queue.lock().unwrap();
+        assert_eq!(q.origin(shogun_agents::approval::ApprovalId(1)), Some(ApprovalOrigin::Mcp));
+        assert_eq!(q.pending_len(), 1);
+        drop(q);
+        let status = call(&server, "actions.status", json!({ "approval_id": 1 }), None);
+        assert_eq!(text(&status)["status"], "pending");
+        assert!(status["result"].get("resultType").is_none(), "the poll is a plain read: {status}");
+        assert!(status["result"].get("_meta").is_none(), "the poll is never cacheable: {status}");
+    }
+
+    #[test]
+    fn without_a_base_url_the_approval_names_the_app_and_the_poll_only() {
+        let queue = Arc::new(Mutex::new(ApprovalQueue::new()));
+        let server = mail_server(queue, None);
+        let send = call(
+            &server,
+            "actions.execute",
+            json!({ "kind": "send_email", "to": "a@b.com", "subject": "s", "body": "b" }),
+            None,
+        );
+        assert_eq!(send["result"]["resultType"], RESULT_APPROVAL_REQUIRED, "{send}");
+        assert_eq!(send["result"]["approval"]["url"], Value::Null);
+        assert!(send["result"].get("inputRequests").is_none());
+        assert_eq!(text(&send)["next_action"], "poll_status");
+    }
+
+    #[test]
+    fn l1_tools_and_reads_ignore_input_responses_and_reads_carry_cache_hints() {
+        let queue = Arc::new(Mutex::new(ApprovalQueue::new()));
+        let server = mail_server(queue, Some("https://approve.example"));
+        let list = call(&server, "state.commitments.list", json!({}), Some(accept()));
+        assert!(list["result"].get("resultType").is_none(), "{list}");
+        assert_eq!(list["result"]["_meta"], json!({ "ttlMs": READ_TTL_MS, "cacheScope": CACHE_SCOPE }));
+        let note = call(&server, "memory.append_note", json!({ "text": "x" }), None);
+        assert!(note["result"].get("resultType").is_none(), "an L1 write never asks: {note}");
+        assert!(note["result"].get("_meta").is_none(), "a write carries no cache hint: {note}");
     }
 }

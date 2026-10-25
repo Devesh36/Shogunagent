@@ -322,3 +322,44 @@ A locked plan is also explained to the client: the MCP handshake carries `instru
 | `plan_not_found` | This process cannot locate the app's plan files at all (for example `HOME` is unset). |
 
 A token revoked in Settings, or a connection removed with **Remove from …** or **Disconnect**, stops a running server at its next call: the standalone servers re-read the token list from the Keychain without the in-process cache (`keychain_store::get_generic_secret_uncached`), so the change the app made is what they check.
+
+## Streamable HTTP (`POST /mcp`, MCP 2026-07-28)
+
+The `shogun-api` server (`SHOGUN_API_PORT`, default 7464) also serves the MCP face over HTTP at
+`/mcp` (E4-T1). The transport is **stateless**: no `initialize` handshake, no `Mcp-Session-Id`,
+one JSON-RPC request per `POST`; `GET` and `DELETE` answer 405. `server/discover` returns the
+capabilities, `tools/list` and `resources/list` carry `ttlMs` / `cacheScope` (`private`: the
+answer depends on the bearer), and a read's result carries the same hints under `_meta`.
+
+Every request names what it does in headers so a gateway can meter it without reading the body:
+
+```
+POST /mcp
+Authorization: Bearer <token>
+Content-Type: application/json
+Mcp-Method: tools/call
+Mcp-Name: memory.ingest
+
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memory.ingest","arguments":{...}}}
+```
+
+`Mcp-Method` is required and must equal the body's `method`; for `tools/call`, `Mcp-Name` is
+required and must equal `params.name`. A mismatch or a missing header is refused with 400 before
+anything runs. Every reply carries `Mcp-Method`, `Mcp-Name` (when a tool was named),
+`Mcp-Protocol-Version: 2026-07-28` and, for `memory.ingest`, `Mcp-Quantity` (the items received).
+The bearer is a REST token; it is authenticated on every request against the live token list.
+
+### L2 and L3 on the MCP face (MRTR and URL-mode elicitation, E4-T2)
+
+- An **L2** tool answers `resultType: "input_required"` with one `inputRequests` form (a single
+  `confirm` boolean, the tool and its arguments). Resend the same call with
+  `params.inputResponses: [{ "id": "l2_confirm", "action": "accept", "content": { "confirm": true } }]`
+  to run it; `decline` or `cancel` runs nothing.
+- An **L3** request (an `actions.execute` send, or any write that waits in the approval queue)
+  answers `resultType: "approval_required"` with an `approval` block (`approval_id`, `level`,
+  `url`, the `actions.status` poll). With `SHOGUN_APPROVAL_BASE_URL` set, `url` is
+  `<base>/approvals/<id>` and a URL-mode `inputRequests` entry carries it for the human; without
+  it the human approves in the app and the agent polls `actions.status`. The text block keeps the
+  pending envelope (`pending`, `approval_id`, `level`, `origin`) for older clients.
+
+REST and the CLI keep their `202 pending` envelope with the same `approval_id`.

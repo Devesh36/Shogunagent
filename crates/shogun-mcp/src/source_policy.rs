@@ -141,6 +141,8 @@ pub fn tool_handling(tool: Tool) -> ToolHandling {
         Tool::MemorySearch
         | Tool::MemoryGetContext
         | Tool::MemoryGetContextPack
+        // The budgeted recall is the context-pack assembly (E4-T3): same rows, same filter.
+        | Tool::MemoryRecall
         | Tool::MemoryGetEvents
         | Tool::MemoryReadSession
         | Tool::WikiEvidence => Filtered,
@@ -179,6 +181,8 @@ pub fn tool_handling(tool: Tool) -> ToolHandling {
         | Tool::MemoryImportList
         | Tool::MemoryImportDelete
         | Tool::MemoryAppendNote
+        // An agent's own events join the log; they read nothing (E4-T3).
+        | Tool::MemoryIngest
         | Tool::ActionsStatus
         | Tool::ActionsQuestions
         | Tool::ActionsAnswer
@@ -397,6 +401,7 @@ mod tests {
                 "memory.get_context_pack",
                 "memory.get_events",
                 "memory.read_session",
+                "memory.recall",
                 "wiki.evidence",
             ]
         );

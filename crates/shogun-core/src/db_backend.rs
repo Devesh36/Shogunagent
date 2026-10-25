@@ -2447,6 +2447,22 @@ impl MemoryBackend for DbBackend {
         Ok(value.to_string())
     }
 
+    /// `memory.ingest` (E4-T3): the store's append path under the request's idempotency key.
+    fn ingest(
+        &self,
+        request: &shogun_mcp::ingest_api::IngestRequest,
+    ) -> Result<shogun_mcp::ingest_api::IngestOutcome, String> {
+        self.db.agent_ingest(request)
+    }
+
+    /// `memory.recall` (E4-T3): the context-pack assembly within the request's token budget.
+    fn recall(
+        &self,
+        request: &shogun_mcp::ingest_api::RecallRequest,
+    ) -> Result<shogun_mcp::ingest_api::RecallOutcome, String> {
+        self.db.agent_recall(request)
+    }
+
     fn memory_import(&self, operation: MemoryImportOperation) -> Result<String, String> {
         use shogun_memory::memory_import::Via;
         let value = match operation {
@@ -2716,6 +2732,9 @@ impl MemoryBackend for DbBackend {
             | Tool::CaptureExclusionsGet
             | Tool::CaptureExclusionsSet
             | Tool::MemoryAppendNote
+            // Served by `ingest` / `recall` (E4-T3), never through the generic read channel.
+            | Tool::MemoryIngest
+            | Tool::MemoryRecall
             | Tool::MemoryNotesList
             | Tool::MemoryNotesChange
             | Tool::ProfileSet

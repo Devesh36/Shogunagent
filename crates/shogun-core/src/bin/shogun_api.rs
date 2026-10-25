@@ -35,6 +35,7 @@ use shogun_core::metrics::{
     render_snapshots_json_with_shared_service, SanitizerCounters, SloRegistry,
 };
 use shogun_mcp::live_tokens::{revision_path, LiveTokens};
+use shogun_mcp::mcp::McpServer;
 use shogun_mcp::memory_api::TokenRegistry;
 use shogun_mcp::memory_api_settings;
 use shogun_mcp::startup_report;
@@ -340,8 +341,40 @@ async fn main() -> std::io::Result<()> {
     }
     let approval_store = shogun_mcp::approval_store::ApprovalStore::new(approvals_path, approval_seal);
     let heartbeat_path = shogun_mcp::desktop_heartbeat::resolve_path(&db_path);
+    // 2026-10-20 cost audit: model-starting calls are limited per token, in a window shared
+    // with the stdio faces through a file beside the memory DB. One limiter for both faces here.
+    let llm_limiter = Arc::new(shogun_mcp::rate_limit::LlmRateLimiter::shared(
+        shogun_mcp::rate_limit::resolve_store_path(&db_path),
+    ));
+    // E4-T1: the MCP face at `POST /mcp` (Streamable HTTP, stateless) over the same backend,
+    // token list, approval queue, plan gate and store gate as REST. Every request is authenticated
+    // by its own bearer against the live list (`handle_line_as`); there is no process session.
+    let mcp = {
+        let clock = clock.clone();
+        let plan_source = plan_source.clone();
+        let plan_clock = clock.clone();
+        let lock_source = plan_source.clone();
+        let lock_clock = clock.clone();
+        let store = store.clone();
+        let heartbeat_path = heartbeat_path.clone();
+        McpServer::new(backend.clone(), approvals.clone(), move || (clock)(), move || {
+            plan_source.resolve(u64::try_from((plan_clock)()).unwrap_or(0))
+        })
+        .with_live_session(live_tokens.clone(), None, true)
+        .with_plan_lock(move || lock_source.diagnose(u64::try_from((lock_clock)()).unwrap_or(0)).lock)
+        .with_memory_gate(move || store.unavailable())
+        .with_approval_store(approval_store.clone())
+        .with_llm_rate_limiter(llm_limiter.clone())
+        .with_desktop_running_check(move || {
+            shogun_mcp::desktop_heartbeat::fresh(
+                &heartbeat_path,
+                shogun_mcp::desktop_heartbeat::now_ms(),
+            )
+        })
+    };
     let state = AppState::new(tokens, backend, approvals, clock)
         .with_live_tokens(live_tokens)
+        .with_mcp(Arc::new(mcp))
         .with_metrics(metrics)
         .with_entitlements(Arc::new(move || {
             plan_source.resolve(u64::try_from((plan_clock)()).unwrap_or(0))
@@ -350,11 +383,7 @@ async fn main() -> std::io::Result<()> {
         // #800: every memory request re-checks the store's schema; no restart after an upgrade.
         .with_memory_gate(move || store.unavailable())
         .with_approval_store(approval_store)
-        // 2026-10-20 cost audit: model-starting calls are limited per token, in a window shared
-        // with the stdio faces through a file beside the memory DB.
-        .with_llm_rate_limiter(Arc::new(shogun_mcp::rate_limit::LlmRateLimiter::shared(
-            shogun_mcp::rate_limit::resolve_store_path(&db_path),
-        )))
+        .with_llm_rate_limiter(llm_limiter)
         .with_desktop_running_check(move || {
             shogun_mcp::desktop_heartbeat::fresh(
                 &heartbeat_path,

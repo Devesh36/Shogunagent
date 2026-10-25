@@ -171,17 +171,22 @@ arguments, or `SHOGUN_MCP_TOOLSETS` to its `env` block, to choose the list:
 "args": ["--client", "cursor", "--toolset", "full"]
 ```
 
-- With neither, the client sees `core`: 23 everyday tools (about 3k tokens).
-- `core` (always included) is 23 everyday tools: memory search, context,
-  day and period summaries, notes, people, project and state lists, meeting
-  list / search / recap / transcript, evidence, source events, time spans,
-  upcoming calendar and `actions.execute`.
-  Under a read-only token it is 21: no `memory.append_note`, no `actions.execute`.
-- `full` (or `all`) lists everything: 158 tools, or the 85
+- With neither, the client sees `core`: 21 everyday tools (about 4k tokens).
+- `core` (always included) is 21 everyday tools: memory search, context,
+  day and period summaries, notes, `memory.ingest` and `memory.recall`,
+  people, project and state lists, evidence, source events, time spans,
+  upcoming calendar and `actions.execute`. The wire names of this set are
+  frozen (`docs/api/core-tools.md`).
+  Under a read-only token it is 18: no `memory.append_note`, no
+  `memory.ingest`, no `actions.execute`.
+- `full` (or `all`) lists everything: 160 tools, or the 86
   reads under a read-only token.
 - Or name groups to add to `core`: `import`, `state`, `meeting`, `mail`,
   `visual_recall`, `voice`, `skills`, `wiki`, `web`, `export`, `translate`,
-  `settings`, for example `core,meeting,mail`.
+  `settings`, for example `core,meeting,mail`. The meeting, mail,
+  visual_recall, voice, web, export, translate and settings groups are the
+  Mac app's: a server build lists core, import, state, skills and wiki, and
+  its `all` stops there (every name still resolves when called).
 
 <Note>
   This changes what the client is shown, nothing else. A tool that is not

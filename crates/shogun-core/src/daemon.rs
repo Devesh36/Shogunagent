@@ -47,6 +47,8 @@ pub use brief_generation::{set_brief_charm, BriefGeneration};
 mod wrap_generation;
 pub use wrap_generation::WrapLines;
 mod activity;
+/// `memory.ingest` / `memory.recall` on the store (E4-T3).
+mod agent_memory;
 mod chat;
 mod chat_grounding;
 pub use chat_grounding::{ChatGrounding, ChatRetrieval, CHAT_EVIDENCE_CHARS, CHAT_EVIDENCE_HITS};
