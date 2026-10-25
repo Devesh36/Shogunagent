@@ -1,0 +1,4 @@
+# Run outputs. Only the gate reference (baseline.json + its summary) is committed (E11-T2).
+results/*
+!results/baseline.json
+!results/baseline.md
