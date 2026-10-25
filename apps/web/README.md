@@ -24,8 +24,10 @@ The landing page, built for agents first. The domain `shogunagent.com` is regist
 pnpm --filter @shogun-ai/web build     # writes dist/
 pnpm --filter @shogun-ai/web test      # node --test: HTML, Markdown and llms.txt agree; negotiation works
 pnpm --filter @shogun-ai/web dev       # local preview with the same negotiation, http://127.0.0.1:8788/
-pnpm --filter @shogun-ai/web deploy    # wrangler deploy (needs the shogunagent.com zone on the Cloudflare account)
+pnpm --filter @shogun-ai/web deploy    # wrangler deploy; the runbook is DEPLOY.md
 ```
+
+Look and feel: dark-first "liquid glass" (translucent blurred panels over drifting gradient light); the light scheme follows the OS and `prefers-reduced-motion` turns the motion off. Under 900px the sidebar becomes a sticky glass header with a scrollable section nav and every table stacks into labeled cards.
 
 ## Rules
 
