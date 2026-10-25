@@ -88,6 +88,21 @@ importers:
 
   packages/config: {}
 
+  packages/interop:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.5
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@22.20.5)(tsx@4.23.15)
+
   packages/sdk-ts:
     devDependencies:
       '@types/node':

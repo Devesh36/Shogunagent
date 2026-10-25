@@ -1,0 +1,35 @@
+{
+  "name": "@shogunagent/interop",
+  "version": "0.1.0",
+  "description": "ShogunAgent export v2 and converters to and from other memory shapes (export v1, a flat memories list, a /memories directory tree), each with a lossiness report. No runtime dependencies.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/Torutesu/Shogunagent", "directory": "packages/interop" },
+  "homepage": "https://shogunagent.dev",
+  "type": "module",
+  "engines": { "node": ">=18.17" },
+  "sideEffects": false,
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "ajv": "^8.17.1",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  }
+}
