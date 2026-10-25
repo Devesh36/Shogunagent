@@ -15,7 +15,7 @@ import {
 } from "./handoff.js";
 import type {
   ActionArgs, ApprovalInfo, ApprovalStatus, DiscoverParams, DiscoverResult, Envelope, FetchLike,
-  Hint, IngestParams, IngestResult, InputRequest, InputResponse, Namespace, QuoteParams, QuoteResult,
+  AcceptHandoffResult, Hint, IngestParams, IngestResult, InputRequest, InputResponse, Namespace, QuoteParams, QuoteResult,
   RecallParams, RecallResult, ResponseLike, RunParams, RunResult, StateListParams, StateListResult, Usage,
 } from "./types.js";
 
@@ -445,30 +445,22 @@ export class ShogunAgent {
   }
 
   /**
-   * Accept a handoff another agent sent: validate it (format, addressee, expiry) and ingest it into
-   * YOUR `agent_scratch` namespace — never the user's world — under `thread_key handoff:<id>`.
-   * Idempotent: accepting the same handoff twice replays. Accepts the object, its A2A data part,
-   * the A2A message, or `handoff()`'s result.
+   * Accept a handoff another agent sent: checked here first (format, addressee, expiry) so a bad
+   * one costs no call, then `handoff.accept`, which the core validates again and stores in YOUR
+   * `agent_scratch` namespace — never the user's world — under `thread_key handoff:<id>`.
+   * Idempotent: accepting the same handoff twice replays (key `handoff:<id>:<receiver>`). Accepts
+   * the object, its A2A data part, the A2A message, or `handoff()`'s result. Metered per event
+   * stored (ingest).
    */
-  async acceptHandoff(input: unknown, options: { as?: string; checkAddressee?: boolean } = {}): Promise<{ handoff: Handoff; ingested: IngestResult[] }> {
+  async acceptHandoff(input: unknown, options: { as?: string; checkAddressee?: boolean } = {}): Promise<{ handoff: Handoff; accepted: AcceptHandoffResult; envelope: Envelope<AcceptHandoffResult> }> {
     const h = extractHandoff(input);
     const receiver = options.as ?? this.actor;
-    checkHandoff(h, options.checkAddressee === false ? undefined : receiver, this.now());
-    const events = handoffEvents(h);
-    const ingested: IngestResult[] = [];
-    for (let i = 0; i < events.length; i += MAX_INGEST_ITEMS) {
-      const chunk = events.slice(i, i + MAX_INGEST_ITEMS);
-      const part = i / MAX_INGEST_ITEMS;
-      ingested.push(await this.ingest({
-        events: chunk,
-        actor: receiver,
-        source: "handoff",
-        namespace: "agent_scratch" satisfies Namespace,
-        threadKey: `handoff:${h.handoff_id}`,
-        idempotencyKey: `handoff:${h.handoff_id}:${part}`.slice(0, 128),
-        metadata: { handoff_id: h.handoff_id, from_agent: h.from_agent, to_agent: h.to_agent, expires_at: h.expires_at },
-      }));
-    }
-    return { handoff: h, ingested };
+    const check = options.checkAddressee !== false;
+    checkHandoff(h, check ? receiver : undefined, this.now());
+    const args: Record<string, unknown> = { handoff: h, actor: receiver };
+    if (!check) args.check_addressee = false;
+    const env = envelopeOf<AcceptHandoffResult>(await this.callTool("handoff.accept", args, { quantity: handoffEvents(h).length }));
+    const accepted = (isObj(env.result) ? env.result : {}) as AcceptHandoffResult;
+    return { handoff: h, accepted, envelope: env };
   }
 }

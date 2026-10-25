@@ -134,6 +134,25 @@ export interface IngestParams {
   namespace?: Namespace;
 }
 
+/** `handoff.accept`'s receipt (E35): what the core stored in the receiver's scratch. */
+export interface AcceptHandoffResult {
+  handoff_id: string;
+  from_agent: string;
+  to_agent: string;
+  accepted: number;
+  inserted: number;
+  deduplicated: number;
+  rejected: number;
+  /** Rows left out: Low band or without provenance. */
+  skipped: number;
+  replayed: boolean;
+  event_ids: number[];
+  thread_key: string | null;
+  namespace: "agent_scratch";
+  idempotency_key: string;
+  [key: string]: unknown;
+}
+
 export interface IngestResult {
   event_ids: number[];
   inserted: number;

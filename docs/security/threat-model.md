@@ -56,7 +56,7 @@ operator ──(9)──▶ /metrics, admin routes, OTLP collector
 | Threat | Mitigation (code) |
 |---|---|
 | S: another process answering as the sidecar | Loopback only (`bind_local`), same network namespace in compose/Helm. **Open risk R3** below |
-| T: gateway altering bodies | Bodies are relayed, not parsed (invariant 1); the exception (`handoff.ts` parsing recall) is scheduled for removal in E35 |
+| T: gateway altering bodies | Bodies are relayed, not parsed (invariant 1); `POST /v1/handoff` too since E35 (the core assembles the object, `handoff.ts` only relays) |
 | I: cross-principal read | One SQLCipher file per principal; the bearer resolves to exactly one principal (`tenancy/resolver.rs`, `tenancy/multi.rs`); `crates/shogun-core/tests/invariant_tenant.rs` proves zero leaked rows |
 | I: DNS rebinding against the loopback API | Host header must be loopback (`host_is_loopback`, `crates/shogun-mcp/src/server.rs`) |
 | D: one principal starving others | LRU of open stores (`SHOGUN_MULTI_MAX_OPEN`); body cap 8 MiB on `/mcp`. Writes to one principal serialize on its file (see the load numbers in `docs/slo.md`) |
@@ -149,7 +149,7 @@ operator ──(9)──▶ /metrics, admin routes, OTLP collector
 | R2 | **Router stores are per-isolate stubs** (metering, idempotency, health) until E32/E33; no route is bound (`workers_dev: false`). Binding a route before E32 would let idempotency and caps reset per isolate. | High if deployed | Keep unbound until E32/E33 land; `docs/deploy` (E41) must gate on it |
 | R3 | **Sidecar port fallback**: `bind_local` silently moves to an ephemeral port when 7464 is taken. In a shared network namespace, a process that binds 7464 first would receive the gateway's bearer and bodies. | Medium | In multi-principal mode, fail to start instead of falling back; or authenticate the gateway→sidecar hop (mTLS or a shared admin token on every request) |
 | R4 | **`SHOGUN_PRINCIPAL_TOKENS` holds principal bearers in clear in the environment** of the sidecar. | Medium | Replace with the gateway's resolver (E3 seam) or hashed tokens, as agent keys already are |
-| R5 | **Invariant 1 exception**: `apps/api/src/handoff.ts` parses recall bodies. | Low | E35 moves handoff assembly into the Rust core |
+| R5 | ~~**Invariant 1 exception**: `apps/api/src/handoff.ts` parses recall bodies.~~ **Resolved (E35)**: the core assembles the handoff (`handoff.create` / `handoff.accept`, `crates/shogun-mcp/src/handoff_api.rs`) and `handoff.ts` relays the request and the answer as streams through the sidecar relay without reading either. | — | — |
 | R6 | **xml-crypto as a SAML trust anchor**: a large, complex library; its silent skip of an `Algorithm`-less transform is now refused by our own check, but future versions may change verification semantics. | Medium | Pin (already exact), keep the fuzz test, review release notes on every bump |
 | R7 | **Single-principal write throughput**: concurrent ingest to one principal serialises on its SQLCipher file (p95 ~200 ms at 8 concurrent writers locally, `docs/slo.md`). A noisy agent can raise latency for every agent of that principal. | Low | Per-principal write queue with back-pressure (429 with `Retry-After`) |
 | R8 | No secret scanner in CI (only fixtures today). | Low | Add gitleaks with a fixture allowlist |

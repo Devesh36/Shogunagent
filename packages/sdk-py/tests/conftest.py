@@ -111,7 +111,16 @@ def memory_fake(recall: Any = None) -> Fake:
         seen.add(key)
         return tool_text({"result": {"event_ids": [1], "inserted": 0 if replayed else 1, "deduplicated": 0, "replayed": replayed, "thread_key": "t"}, "usage": {"unit": "ingest", "quantity": 1, "cost_micro_usd": 500}, "latency_ms": 1})
 
-    return Fake().tool("memory.recall", tool_text(recall or recall_payload())).tool("memory.ingest", ingest)
+    def accept(c: Call) -> Reply:
+        args = c.body["params"]["arguments"]
+        key = f"handoff:{args['handoff']['handoff_id']}:{args['actor']}"
+        replayed = key in seen
+        seen.add(key)
+        result = {"handoff_id": args["handoff"]["handoff_id"], "accepted": 3, "inserted": 0 if replayed else 3, "replayed": replayed,
+                  "event_ids": [1, 2, 3], "thread_key": f"handoff:{args['handoff']['handoff_id']}", "namespace": "agent_scratch", "idempotency_key": key}
+        return tool_text({"tool": "handoff.accept", "result": result, "usage": {"unit": "events", "quantity": 0 if replayed else 3}, "latency_ms": 1})
+
+    return Fake().tool("memory.recall", tool_text(recall or recall_payload())).tool("memory.ingest", ingest).tool("handoff.accept", accept)
 
 
 @pytest.fixture

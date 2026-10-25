@@ -54,8 +54,8 @@ export interface LogVars {
     // without the core's `Mcp-Quantity` (settled at 0 — a sidecar older than the contract).
     | "wrong_shard" | "settle_quantity_missing"
     | "stripe_unavailable" | "stripe_failure" | "topup_session_created" | "topup_credited" | "topup_duplicate" | "webhook_rejected"
-    // `POST /v1/handoff` (handoff.ts, plan E16).
-    | "handoff_built"
+    // `POST /v1/handoff` (handoff.ts, plan E16 / E35): relayed to the core, which assembles it.
+    | "handoff_relayed"
     // E19 billing (billing/routes.ts, the Stripe webhook): fixed words.
     | "statement_closed" | "commit_created" | "adjustment_applied" | "refund_debited" | "dispute_resolved" | "licence_linked" | "topup_expired"
     // E3-T2 OAuth (oauth/app.ts): fixed words, never a client id, a code or a token.

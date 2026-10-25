@@ -16,7 +16,7 @@ This is enforced in code, not only in policy: the gateway's only console writer 
 |---|---|---|
 | `/mcp` (the metered MCP proxy) | JSON-RPC request and response bodies, and streams | Nothing of the body. The call is classified from headers, never from the body. A receipt (method, tool name, unit, quantity, cost, time) is kept for billing. |
 | Router runs (`/v1/router/run`) | Tool inputs and outputs | Nothing of the body. A receipt as above; provider credentials are injected at the transport layer and never reach the router engine. |
-| `POST /v1/handoff` | The state-of-work object built from one recall | Nothing; it is built per request and returned. |
+| `POST /v1/handoff` | The request and the state-of-work object the core builds from one recall | Nothing; both are relayed to and from the core as streams, never parsed or kept. |
 | Remote approvals (`/approve/{token}`, Slack, webhooks) | A redacted summary fetched from your store | Nothing; the summary is rendered or delivered and dropped. Webhook endpoint URLs and event names you register are kept until you delete them. |
 | Tenant audit export (`GET /v1/tenant/audit/export`) | Each member's audit records | Nothing; bytes are streamed from the store to the admin and never parsed beyond the per-member frame. |
 | SSO sign-in (OIDC ID tokens, SAML assertions) | Identity claims from your IdP | Nothing of the token or assertion. The admin's IdP subject is bound once; a SAML assertion id is kept only as a SHA-256 hash until the assertion expires (minutes), to refuse replays. |

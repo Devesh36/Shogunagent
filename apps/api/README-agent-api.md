@@ -37,7 +37,7 @@ Conventions:
 | POST | `/v1/quote` | `read` | The exact cost of a call, nothing reserved (discounted under a commit, with the list price) |
 | GET | `/v1/receipts?since=&limit=` | `read` | Per-call receipts, oldest first |
 | POST | `/v1/receipts/{id}/dispute` | `write` | Open a dispute on a receipt (one per receipt) |
-| POST | `/v1/handoff` | `read` | An A2A state-of-work handoff for a task, built from one recall through the core (free; `docs/api/handoff.md`) |
+| POST | `/v1/handoff` | `read` | An A2A state-of-work handoff for a task, assembled by the core (`handoff.create`) and relayed untouched (free; `docs/api/handoff.md`) |
 | GET | `/v1/statements?month=&format=` | `read` | The month's statement, JSON or CSV; immutable once the month closes ([billing](../../docs/api/billing.md)) |
 | GET | `/v1/commit` | `read` | The active annual commit: discount, drawn, remaining, overage |
 | POST | `/v1/agents/me/licence` | `write` (key only) | Link a ShogunAI licence; Pro earns $20 a month |

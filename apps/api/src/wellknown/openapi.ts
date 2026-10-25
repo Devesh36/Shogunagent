@@ -152,7 +152,7 @@ const components: Json = {
       properties: {
         task: { type: "string", minLength: 1, maxLength: 2000, description: "What the receiving agent is asked to do." },
         to_agent: { type: "string", pattern: "^[A-Za-z0-9_.:@/-]{1,128}$", description: "The receiving agent's id." },
-        from_agent: { type: "string", pattern: "^[A-Za-z0-9_.:@/-]{1,128}$", description: "Your agent id; default agent:<key id>." },
+        from_agent: { type: "string", pattern: "^[A-Za-z0-9_.:@/-]{1,128}$", description: "Your agent id; default the key's agent (agent:<key id>)." },
         query: { type: "string", minLength: 1, maxLength: 2000, description: "What to recall for the task; default task." },
         budget_tokens: { type: "integer", minimum: 100, maximum: 32000, default: 2000 },
         ttl_seconds: { type: "integer", minimum: 60, maximum: 86400, default: 3600 },
@@ -162,6 +162,7 @@ const components: Json = {
     HandoffResponse: {
       type: "object", required: ["result", "usage", "latency_ms", "next_action"],
       properties: {
+        tool: { type: "string", const: "handoff.create" },
         result: {
           type: "object", required: ["handoff", "a2a"],
           properties: {
@@ -345,13 +346,13 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     { method: "post", path: "/v1/quote", tag: "billing", security: "key", scope: "read", summary: "The exact cost of a call. Nothing is reserved.", requestBody: jsonBody(ref("QuoteRequest")), responses: { "200": jsonBody(ref("QuoteResponse")), "400": errorResponse("invalid_quantity | invalid_price | run_price_unavailable | invalid_json") } },
     { method: "get", path: "/v1/receipts", tag: "billing", security: "key", scope: "read", summary: "Per-call receipts, oldest first. Page with next_since.", parameters: [{ name: "since", in: "query", schema: { type: "string" }, description: "ISO-8601 or epoch milliseconds." }, { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 500, default: 100 } }], responses: { "200": jsonBody(ref("Receipts")), "400": errorResponse("invalid_since | invalid_limit") } },
     { method: "post", path: "/v1/receipts/{id}/dispute", tag: "billing", security: "key", scope: "write", summary: "Open a dispute on a receipt (one per receipt; a second answers 200 with the existing one).", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: jsonBody(ref("DisputeRequest")), responses: { "201": jsonBody(ref("Dispute")), "200": jsonBody(ref("Dispute")), "400": errorResponse("invalid_reason | invalid_json"), "404": errorResponse("receipt_not_found") } },
-    // --- A2A handoff (E16) ---
+    // --- A2A handoff (E16, E35) ---
     {
       method: "post", path: "/v1/handoff", tag: "a2a", security: "key", scope: "read",
       summary: "The state of work for a task as a typed handoff object (a strict subset of export v1) plus its A2A data part. Free.",
-      description: "Built from one memory.recall of the task through the core: people, projects, commitments and open loops with their confidence band and provenance quotes; Low never travels. The receiver ingests it into its own agent_scratch namespace, never the principal's world.",
+      description: "Assembled by the core (handoff.create; the gateway relays the body and the answer untouched): one recall of the task, mapped onto people, projects, commitments and open loops with their confidence band and provenance quotes; Low never travels. The receiver accepts it with handoff.accept over /mcp (metered as ingest) into its own agent_scratch namespace, never the principal's world.",
       requestBody: jsonBody(ref("HandoffRequest")),
-      responses: { "200": jsonBody(ref("HandoffResponse")), "400": errorResponse("missing_task | invalid_to_agent | invalid_from_agent | invalid_budget_tokens | invalid_ttl_seconds | invalid_json"), "403": errorResponse("insufficient_scope"), "502": errorResponse("upstream_error | memory_update_pending: the core refused the recall"), "503": errorResponse("upstream_unavailable, with Retry-After") },
+      responses: { "200": jsonBody(ref("HandoffResponse")), "400": errorResponse("missing_task | missing_to_agent | invalid_to_agent | invalid_from_agent | invalid_budget_tokens | invalid_ttl_seconds | invalid_request (from the core)"), "403": errorResponse("insufficient_scope"), "421": errorResponse("wrong_shard"), "503": errorResponse("upstream_unavailable | recall_unavailable | memory_update_pending | principal_not_provisioned, with Retry-After where it applies") },
     },
     // --- E19: statements, commits, operator billing ---
     {

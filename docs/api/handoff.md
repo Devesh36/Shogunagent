@@ -8,14 +8,22 @@ record carries is the export v1 field of the same name and type, Low-confidence 
 and every row carries at least one provenance pointer. The JSON Schema is
 [`handoff.schema.json`](handoff.schema.json) (`$id`
 `https://shogunagent.dev/schemas/handoff.schema.json`); `apps/api/test/handoff.test.ts` validates
-built objects against it and checks the subset relation field by field against
-`export-v1.schema.json`. Implementation: `apps/api/src/handoff.ts`; plan E16.
+the object against it and checks the subset relation field by field against
+`export-v1.schema.json`, and `the_built_object_has_the_schema_fields` in the core checks that what
+it builds carries exactly the schema's fields. Implementation: the Rust core
+(`crates/shogun-mcp/src/handoff_api.rs`, tools `handoff.create` / `handoff.accept`); the hosted
+gateway only relays (`apps/api/src/handoff.ts`). Plan E16, E35.
 
-## Getting one
+## Getting one: `handoff.create`
+
+The same tool on every face, at the same level (a read) and with the same answer (invariant 4):
 
 | Face | Call |
 |---|---|
-| REST (hosted gateway) | `POST /v1/handoff` with `Authorization: Bearer sa_live_…` (scope `read`) |
+| MCP | `tools/call` `handoff.create` with the arguments below |
+| REST (sidecar) | `POST /v1/handoff` with the arguments as the body |
+| REST (hosted gateway) | `POST /v1/handoff` with `Authorization: Bearer sa_live_…` (scope `read`), relayed to the core |
+| CLI | `shogun handoff create '{"task":"…","to_agent":"agent:…"}'` |
 | TypeScript SDK | `await sa.handoff({ task, toAgent })` (`@shogunagent/sdk`) |
 | Python SDK | `sa.handoff(task, to_agent=…)` (`shogunagent`) |
 
@@ -28,22 +36,29 @@ curl -s -X POST $BASE/v1/handoff -H "Authorization: Bearer $KEY" -H 'content-typ
 |---|---|---|
 | `task` | yes | What the receiving agent is asked to do (1–2,000 characters). |
 | `to_agent` | yes | The receiving agent's id (`[A-Za-z0-9_.:@/-]`, ≤ 128). |
-| `from_agent` | no | Your agent id; default `agent:<key id>`. |
-| `query` | no | What to recall for the task; default `task`. |
+| `from_agent` | no | Your agent id; default the caller's own (`agent:<key id>` on the hosted service). |
+| `query` | no | What to recall for the task (≤ 2,000 characters); default `task`. |
 | `budget_tokens` | no | The recall's token budget, 100–32,000; default 2,000. |
 | `ttl_seconds` | no | How long the handoff is valid, 60–86,400; default 3,600. |
 | `thread_key` | no | Your task or conversation id, carried in `task.thread_key`. |
 
-The gateway sends one `memory.recall` (query, budget) to the principal's core through the same
-upstream it relays `/mcp` to, with the caller's own bearer: the core decides what the principal may
-read and applies the confidence rules. The gateway maps the recall's state items onto the handoff
-shape in memory and answers; it logs only the route, status and a fixed event word, and stores
-nothing. It is a read: free, no receipt is billed (invariant 10).
+The core runs one budgeted recall (the `memory.recall` read, so the principal's confidence rules
+and source filter apply unchanged) and maps its state items onto the handoff shape. The hosted
+gateway hands the request body to the principal's sidecar as a stream and returns the sidecar's
+answer as a stream: it reads neither, logs only the route, the status and a fixed event word, and
+stores nothing (invariants 1 and 2). It is a read: free, no receipt is billed (invariant 10).
+
+**Across principals.** A handoff reads the caller's own principal. On the sidecar's REST face,
+`POST /v1/handoff?principal=<teammate>` builds it from a teammate's **world** rows only when the
+two share a team and the teammate granted `world_read` (Team, E18); otherwise the same `403
+cross_principal_forbidden` as every other cross-principal read. No other path crosses a principal
+boundary.
 
 The answer is the usual envelope:
 
 ```json
 {
+  "tool": "handoff.create",
   "result": {
     "handoff": { "format": "shogunagent-handoff/v1", "…": "…" },
     "a2a": {
@@ -59,10 +74,12 @@ The answer is the usual envelope:
 ```
 
 `next_action` is `narrow_query` when the recall was cut to its budget (`handoff.truncated`).
-Refusals: `400` (`missing_task`, `invalid_to_agent`, `invalid_from_agent`, `invalid_budget_tokens`,
-`invalid_ttl_seconds`, `invalid_json`; `next_action: fix_input`), `401` / `403` (key, scope), `502`
-(the core refused the recall: `memory_update_pending`, `upstream_error`; `next_action` says
-whether to retry), `503 upstream_unavailable` with `Retry-After`.
+Refusals (REST status; MCP answers JSON-RPC `-32602` / `-32000` with the same `code: message`):
+`400` (`missing_task`, `missing_to_agent`, `invalid_to_agent`, `invalid_from_agent`,
+`invalid_budget_tokens`, `invalid_ttl_seconds`, `invalid_request`; `next_action: fix_input`), `401`
+/ `403` (key, scope, cross-principal), `503` (`recall_unavailable`, `memory_update_pending`; the
+gateway adds `upstream_unavailable` and `principal_not_provisioned`, and `421 wrong_shard`, each
+with `next_action`).
 
 ## Shape
 
@@ -106,23 +123,49 @@ Ids (`id`, `event_id`) are the sender principal's. Duplicate `(kind, id)` rows f
 merged, their provenance concatenated. A row the recall returned without an event id is left out:
 it cannot be proven to the receiver.
 
-## Accepting one
+## Accepting one: `handoff.accept`
 
-The receiver validates the object (format, `to_agent`, `expires_at`) and ingests it into **its own
-`agent_scratch` namespace**, never the principal's world: what another agent claims is working
-context for the receiver, not something the user's store observed. The SDKs do this in one call:
+The receiver hands the object back to the core, which validates it (format, row shapes, that it is
+addressed to the receiver and not expired) and stores it in **the receiver's own `agent_scratch`
+namespace**, never the principal's world: what another agent claims is working context for the
+receiver, not something the user's store observed.
 
-```ts
-const { handoff } = await sa.acceptHandoff(a2aMessageOrPartOrObject);   // TypeScript
+| Face | Call |
+|---|---|
+| MCP | `tools/call` `handoff.accept` `{"handoff": <object, A2A data part or message>, "actor": "<your agent id>"}` |
+| REST (sidecar) | `POST /v1/handoff/accept` with the same body |
+| CLI | `shogun handoff accept '{"handoff": …, "actor": "agent:…"}'` |
+| SDKs | `await sa.acceptHandoff(a2aMessageOrPartOrObject)` / `sa.accept_handoff(…)` |
+
+| Field | Required | Meaning |
+|---|---|---|
+| `handoff` | yes | The `shogunagent-handoff/v1` object, its A2A data part, the A2A message carrying it, or a `handoff.create` result. |
+| `actor` | yes | Who accepts: your agent id. Must equal `to_agent` unless `check_addressee` is `false`. On the hosted service the rows are written as the key's agent whatever this says. |
+| `idempotency_key` | no | Default `handoff:<handoff_id>:<actor>`: accepting the same handoff again replays and appends nothing. |
+| `check_addressee` | no | Default `true`. |
+
+It is the `memory.ingest` path: one event for the task and one per entity and fact (kinds
+`handoff_task` / `handoff_entity` / `handoff_fact`), source `handoff`, `thread_key
+handoff:<handoff_id>`, Medium rows prefixed `possibly:`, the quotes and the sender's event ids in
+the text. A Low row or one without provenance is skipped and counted (`skipped`). An L1 write
+(like `memory.ingest`), metered per event stored (`usage.unit: events`; a replay is 0, and the
+sidecar's `Mcp-Quantity` says what to settle). On the hosted service it is a `tools/call` over the
+metered `/mcp`; there is no gateway REST route for it. Cross-principal accepts are refused (a
+write).
+
+```json
+{
+  "tool": "handoff.accept",
+  "result": { "handoff_id": "hof_…", "from_agent": "agent:planner", "to_agent": "agent:writer", "task": "…",
+              "accepted": 4, "inserted": 4, "deduplicated": 0, "rejected": 0, "skipped": 0, "replayed": false,
+              "event_ids": [91, 92, 93, 94], "thread_key": "…", "namespace": "agent_scratch", "idempotency_key": "handoff:hof_…:agent:writer" },
+  "usage": { "unit": "events", "quantity": 4 },
+  "latency_ms": 6,
+  "hints": ["Read it back with memory.recall and include_scratch: true."],
+  "next_action": null
+}
 ```
 
-```python
-sa.accept_handoff(a2a_message_or_part_or_object)                        # Python
-```
-
-`acceptHandoff` sends `memory.ingest` with `namespace: "agent_scratch"`, `source: "handoff"`,
-`actor` = the receiver, `thread_key: handoff:<handoff_id>`, one event for the task and one per
-entity and fact (Medium ones keep the `possibly:` prefix, the quotes and event ids ride in the
-text), and the idempotency key `handoff:<handoff_id>:<n>`, so accepting the same handoff twice
-replays instead of appending. The receiver then reads it back with
-`memory.recall({ include_scratch: true })`.
+Refusals: `400 invalid_handoff` / `missing_actor` (`fix_input`), `400 handoff_expired`
+(`retry_after`: ask the sender for a fresh one), `403 handoff_not_for_you` (`not_allowed`), `503
+ingest_unavailable`. The receiver then reads it back with `memory.recall({ include_scratch: true })`.

@@ -123,6 +123,17 @@ export function memoryFake(recall: unknown = recallPayload()): FakeFetch {
       const replayed = seen.has(key);
       seen.set(key, true);
       return toolText({ ...(ingestPayload(key) as object), result: { event_ids: [1], inserted: replayed ? 0 : 1, deduplicated: 0, replayed, thread_key: "t" } });
+    })
+    .tool("handoff.accept", (c) => {
+      const args = c.body.params.arguments as { handoff: { handoff_id: string }; actor: string };
+      const key = `handoff:${args.handoff.handoff_id}:${args.actor}`;
+      const replayed = seen.has(key);
+      seen.set(key, true);
+      return toolText({
+        tool: "handoff.accept",
+        result: { handoff_id: args.handoff.handoff_id, accepted: 3, inserted: replayed ? 0 : 3, deduplicated: 0, rejected: 0, skipped: 0, replayed, event_ids: [1, 2, 3], thread_key: `handoff:${args.handoff.handoff_id}`, namespace: "agent_scratch", idempotency_key: key },
+        usage: { unit: "events", quantity: replayed ? 0 : 3 }, latency_ms: 1, next_action: null,
+      });
     });
 }
 

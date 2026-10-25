@@ -56,7 +56,7 @@ Options: `budgetTokens` (default 2000), `threadKey`, `ingest: false`, `recall: f
 | `router.discover()`, `router.inspect()`, `router.run()` | `/v1/router/*` (`routerBaseUrl`) | run: the tool's quote |
 | `quote({ name, quantity })` | `POST /v1/quote` | free |
 | `handoff({ task, toAgent })` | `POST /v1/handoff`: a typed state-of-work object + its A2A data part (`docs/api/handoff.md`) | free |
-| `acceptHandoff(partOrMessage)` | validates and ingests a received handoff into **your** `agent_scratch` namespace, never the user's world | per event |
+| `acceptHandoff(partOrMessage)` | `handoff.accept`: the core validates a received handoff and stores it in **your** `agent_scratch` namespace, never the user's world | per event |
 
 Errors are typed: `AuthenticationError` (401), `PaymentRequiredError` (402: `payment`, `paymentRequiredHeader`, `topUpUrl`, `shortfallMicroUsd`), `PermissionDeniedError` (403), `RateLimitError` (429, `retryAfter`), `ServiceUnavailableError` (5xx), `ToolError` (the tool refused), `TransportError`, `HandoffError`. Each carries `code` and `nextAction`; branch on those, not on `message`.
 

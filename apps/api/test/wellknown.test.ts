@@ -116,8 +116,9 @@ describe("/.well-known/agent-card.json (E10-T3)", () => {
       expect(s.description).not.toContain("**");
       expect(s.description).not.toContain("`");
     }
-    // The tool names SKILL.md cites are real wire names (or the router's verbs).
-    const known = new Set([...FIXTURE_TOOL_TABLE.tools.map((t) => t.name), "router.run", "router.discover", "router.inspect"]);
+    // The tool names SKILL.md cites are real wire names: the core table, the router's verbs, or
+    // the handoff pair (E35, outside core; crates/shogun-mcp/src/handoff_api.rs).
+    const known = new Set([...FIXTURE_TOOL_TABLE.tools.map((t) => t.name), "router.run", "router.discover", "router.inspect", "handoff.create", "handoff.accept"]);
     for (const tag of AGENT_SKILLS.skills.flatMap((s) => s.tags)) expect(known.has(tag), tag).toBe(true);
   });
 
