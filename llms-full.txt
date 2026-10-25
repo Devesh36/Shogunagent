@@ -814,6 +814,11 @@ Every metered route returns this shape: the `/mcp` proxy (classified from `Mcp-M
 `Mcp-Name`), and any REST route mounted with the same metering middleware. Free calls (`read`,
 `protocol`) never 402 — a wallet at zero still reads its own state.
 
+A router `run` (`POST /v1/router/run`, `router.run`) is refused by the same wallet (E32): the router
+asks this gateway to hold the run's price (`POST /v1/internal/router/reserve`) and passes the
+`payment` object of the answer to the agent, so the amount (provider price + one take), the rails
+and `retry_after` are the wallet's own. The router keeps no balance of its own.
+
 Nothing is reserved, forwarded or recorded on a 402. The call is a no-op; retrying it after the
 remedy is safe.
 
@@ -1096,6 +1101,24 @@ While a commit is active:
 
 Admin routes take an `admin` agent key, never an OAuth access token.
 
+## Router runs (E32)
+
+A router `run` is billed by this wallet, once, like any other metered call: the receipt is
+`rcpt_run_<run_id>` (`unit: "run"`, `name: "router.run"`), it counts against the same caps, and an
+active commit discounts it. The router reserves the run's price through
+`POST /v1/internal/router/reserve` and settles it through `POST /v1/internal/router/settlements`
+(contract and diagram: `docs/api/payouts.md` §1, "The single-charge path").
+
+- **Price.** Third-party tool: the provider's measured price plus one take, `RUN_MARKUP_BPS`
+  (5%, rounded up; set once in `packages/config/pricing.json`). First-party tool: its listed
+  price, no take. The router sends only the provider's price; the take is added here.
+- **Marketplace imports.** A tool imported from Monid is priced at Monid's own price (what Monid
+  invoices us) plus the same one take. There is no second markup.
+- **Free.** Failures and empty results settle at $0; a $0 tool (the state reads) holds nothing.
+- **Durability.** The router's settlement outbox (E33) redelivers until this gateway acknowledges,
+  so a statement is never missing a run that was charged, and a run that died mid-flight is
+  released at $0.
+
 ## ShogunAI Pro bundle
 
 `POST /v1/agents/me/licence` with `X-Shogun-Licence: <the ShogunAI licence token>` links the
@@ -1151,7 +1174,7 @@ An entry:
   "summary": "Find what the user committed to: promises, deliverables and deadlines they made to others.",
   "categories": ["state", "memory"],
   "permission": { "level": "L1", "class": "read", "meaning": "Runs immediately. Reads only; nothing leaves the user's data." },
-  "price": { "model": "per_call", "unit": "call", "cost_micro_usd": 0, "quote_micro_usd": 0, "quote_usd": "$0", "failures_cost": 0, "empty_results_cost": 0 },
+  "price": { "model": "per_call", "unit": "call", "cost_micro_usd": 0, "quote_micro_usd": 0, "quote_usd": "$0", "provider_quote_micro_usd": 0, "take_bps": 0, "failures_cost": 0, "empty_results_cost": 0 },
   "health": { "p50_ms": 40, "p95_ms": 120, "success_rate": 0.999, "source": "declared" },
   "data_handling": { "retention": "user_account", "retention_days": 0, "zero_retention": false, "regions": ["global"], "statement": "…" },
   "docs_url": "https://…", "entry_hash": "…",
@@ -1159,6 +1182,7 @@ An entry:
 }
 ```
 
+- `price`: the usage-model figures (`cost_micro_usd`, …) and `provider_quote_micro_usd` are the provider's own price (for a marketplace import such as Monid, the marketplace's price). `quote_micro_usd` is what the caller pays for a typical run: that price plus one take, `take_bps` (500 for third-party tools, 0 for first-party), charged once by the wallet (E32, `docs/api/payouts.md`).
 - `health.source` is `observed` once the router has seen 20 runs of the tool, `declared` (the provider's baseline) before that.
 - `data_handling` is `null` for passthrough entries (an imported marketplace catalog), which are handled under that marketplace's terms.
 - `ranking.formula` is the exact formula `router.discover` uses; `ranking.policy` states that first-party tools get no boost, no pinned slot and no hidden term (CLAUDE.md invariant 13).
@@ -1881,7 +1905,7 @@ client id or redirect URI, appears in a log line.
 
 # Provider payouts
 
-How a tool provider listed in the router gets paid: every settled run accrues to the provider named in its `provider.json`, a monthly job pays the balance through Stripe Connect Express, and the provider reads a statement per month. Plan: E29. Implementation: `apps/api/src/payouts.ts` (rules, in-memory store, monthly job), `apps/api/src/payouts-pg-store.ts` (Postgres, `apps/api/sql/provider-payouts.sql`), `apps/api/src/payouts-app.ts` (routes), `apps/api/src/billing/connect.ts` (Stripe Connect over `fetch`, no SDK); the router side is `apps/router/src/settlement.ts`. Tests: `apps/api/test/payouts.test.ts`, `apps/router/test/settlement.test.ts`. Amounts are integer micro-USD (1 USD = 1,000,000).
+How a tool provider listed in the router gets paid: every settled run accrues to the provider named in its `provider.json`, a monthly job pays the balance through Stripe Connect Express, and the provider reads a statement per month. Plan: E29. Implementation: `apps/api/src/payouts.ts` (rules, in-memory store, monthly job), `apps/api/src/payouts-pg-store.ts` (Postgres, `apps/api/sql/provider-payouts.sql`), `apps/api/src/payouts-app.ts` (routes), `apps/api/src/billing/connect.ts` (Stripe Connect over `fetch`, no SDK); the router side is `apps/router/src/settlement.ts`, `apps/router/src/wallet.ts` and `apps/router/src/outbox.ts`; the receiving routes are `apps/api/src/router-wallet.ts`. Tests: `apps/api/test/payouts.test.ts`, `apps/api/test/router-wallet.test.ts` (the router engine against the real wallet routes), `apps/router/test/{settlement,wallet,outbox}.test.ts`. Amounts are integer micro-USD (1 USD = 1,000,000).
 
 ## 1. Accrual: the settlement seam
 
@@ -1889,15 +1913,42 @@ The router settles every run it reserved exactly once and sends the settlement t
 
 ```json
 { "settlements": [
-  { "format": "shogunagent-run-settlement/1", "run_id": "9f0c…", "ts": 1792411200000,
+  { "format": "shogunagent-run-settlement/2", "run_id": "9f0c…", "receipt_id": "rcpt_run_9f0c…", "ts": 1792411200000,
     "tool_id": "acme.lookup", "provider_id": "acme", "first_party": false,
-    "payout_account_ref": "acct_1Acme", "outcome": "ok", "quantity": 1, "provider_micro_usd": 1000 } ] }
+    "payout_account_ref": "acct_1Acme", "marketplace": null, "outcome": "ok", "quantity": 1, "provider_micro_usd": 1000 } ] }
 ```
 
 - Content-free by construction: no input, no output, no actor, no key. Unknown fields are rejected.
 - `outcome` is `ok`, `empty`, `provider_error` or `transport_error`. Only `ok` carries a price; failures and empty results settle at $0 and count as runs.
-- Idempotent by `run_id`: `{ "recorded": 1, "duplicates": 0 }`, then `{ "recorded": 0, "duplicates": 1 }` for a redelivery. Up to 100 per request; one invalid entry rejects the request and records nothing.
+- `receipt_id` (E32) names the caller's wallet hold for this run, `rcpt_run_<run_id>` or null for a $0 run that held nothing; any other value is rejected, so a settlement can settle only its own run. The hold is settled once (the receipt's settled flag), at provider price + one take for a third-party run, the provider price for a first-party run, $0 for failures and empty results, discounted under an active commit.
+- `marketplace` (E32) tags a tool imported from a marketplace catalog (`"monid"`): that marketplace executes the run and invoices us; the provider is never paid through Connect.
+- Idempotent by `run_id`: `{ "recorded": 1, "duplicates": 0, "wallet_settled": 1, "accrual": "on" }`, then `{ "recorded": 0, "duplicates": 1, "wallet_settled": 0, "accrual": "on" }` for a redelivery. Up to 100 per request; one invalid entry rejects the request and records nothing. The wallet is settled before the accrual is recorded, so a crash between the two leaves the accrual to the redelivery, never a provider credited for a run the caller was not charged for. Without `PAYOUTS_STATE_SECRET` the route still settles wallets (`"accrual": "off"`).
+- Format `shogunagent-run-settlement/1` (E29, without `receipt_id` and `marketplace`) is still accepted: accrual only.
 - `payout_account_ref` comes from the provider's `provider.json` (`apps/router/connectors/schema.md` §9).
+
+### The single-charge path (E32)
+
+A router run is charged by this gateway's wallet and nowhere else. The router holds no balance and adds no price:
+
+```
+router run ──► outbox.open(draft $0)                                   router Postgres
+           ──► POST /v1/internal/router/reserve                         apps/api
+                 { run_id, tool_id, provider_micro_usd, first_party }
+                 X-Caller-Authorization: Bearer <the caller's key>      verified, never stored
+                 → list = provider + RUN_MARKUP_BPS (third-party) | provider (first-party)
+                 → caps, commit discount, balance; hold as rcpt_run_<run_id> (or 402)
+           ──► provider call (the transport)
+           ──► outbox.put(settlement)                                   router Postgres
+           ──► POST /v1/internal/router/settlements                     apps/api
+                 → settle rcpt_run_<run_id> once at the measured price + one take ($0 on failure)
+                 → accrue the provider (provider price, take)
+```
+
+- **The take is in one place.** `RUN_MARKUP_BPS` is `packages/config/pricing.json` `run_markup_bps`. apps/api's rate table (the wallet, `/.well-known/pricing.json`) and the router's quotes (`apps/router/src/take.ts`) both read it. Only the provider's price crosses the wire; the router never sends a caller price, so the take cannot be applied twice.
+- **The Monid passthrough.** Imported Monid tools are priced at Monid's own price, the figure Monid invoices us (Monid bills the router's account, never the caller). Before E32 the importer added 5% and the wallet would have added 5% again (1300 µ$ → 1365 → 1434). Now the caller sees and pays 1365: Monid's price + one take. Whatever platform fee Monid includes in its own price is part of the provider price.
+- **Reads stay free.** A $0 tool (the first-party state reads) reserves nothing and calls the wallet not at all; its settlement only counts the run, delivered by the retry job.
+- **Fails closed.** If the router cannot write the draft, or cannot reach the wallet, the run is refused (`503`, `next_action: retry_after`) before the provider is called. A 402 or a 401 from the wallet is passed to the agent unchanged in substance.
+- **Idempotent reserve.** A retried reserve for the same `run_id` returns the same hold (`"replayed": true`); a `run_id` already settled, or held by another principal, is a 409.
 
 Each settlement is added to the provider's accrual for its UTC day (`provider_accruals`): runs by outcome, the provider's price, and our take.
 
@@ -1905,13 +1956,25 @@ Each settlement is added to the provider's accrual for its UTC day (`provider_ac
 |---|---|---|---|
 | `connect` | a third-party provider with a payout reference | 5% of the provider's price, rounded up (`RUN_MARKUP_BPS`, the same figure `/.well-known/pricing.json` publishes) | yes, through Stripe Connect |
 | `first_party` | `first_party: true` or a `first-party:` reference | 0 (the revenue is ours) | never |
-| `passthrough` | no payout reference (an imported marketplace catalog such as Monid) | 0 (the imported price already carries its markup) | never; settled on that marketplace's invoice |
+| `passthrough` | `marketplace` set, or no payout reference (an imported marketplace catalog such as Monid) | 5% of the marketplace's price, rounded up (the one take the caller paid; E32). A format /1 settlement records 0: the E29 importer had baked its markup into the price | never; settled on that marketplace's invoice |
 
-An agent pays `provider price + take` for a third-party run; failures and empty results cost the agent nothing and earn the provider nothing.
+An agent pays `provider price + take` for a third-party run, once; failures and empty results cost the agent nothing and earn the provider nothing.
 
-### Delivery
+### Delivery (E33): the durable outbox
 
-The router's `HttpSettlementSink` retries a failed POST three times (the route is idempotent) and then counts the settlement as dropped. A durable outbox in the router is the production follow-up; until it exists a dropped settlement is an under-payment to the provider, never an over-payment.
+The router writes every settlement to `router_settlement_outbox` (`apps/router/sql/settlement-outbox.sql`, Postgres through the router Worker's `HYPERDRIVE` binding) **before** it sends it, and delivery is at-least-once against a receiver that is idempotent by `run_id` (accrual) and by `receipt_id` (wallet):
+
+| State | Written when | Then |
+|---|---|---|
+| `open` | before apps/api is asked to hold money: a draft settlement (`transport_error`, $0) | replaced by the final settlement; deleted if the reservation is refused (402, 401). A draft older than 10 minutes means the run died after its hold: the retry job promotes it, and its delivery releases the hold at $0 |
+| `pending` | the run's final settlement, before it is sent | one inline delivery for a run that held money; otherwise, and on any failure, the retry job |
+| `delivered` | apps/api answered 2xx | pruned after 30 days |
+| `dead` | apps/api answered 400 / 404 / 413 / 422 (the settlement itself is malformed; a batch is split so one bad row cannot block the rest) | kept, never pruned; `UPDATE router_settlement_outbox SET state='pending', next_attempt_at=0 WHERE state='dead'` re-queues after a fix |
+
+- **Retry job.** The router's cron trigger (`* * * * *`, `scheduled` in `apps/router/src/worker.ts`) claims due rows (leased for 60 s, so overlapping runs do not double-send), posts them in batches of up to 100, and backs off per row: 30 s, 1 min, 2 min, … capped at one hour. Network errors, 401/403, 408, 429 and 5xx are retried forever.
+- **Nothing is lost on a crash.** Before the hold: no money is held. Between the hold and the settlement: the draft releases it at $0 (an under-charge at worst, never an over-charge). After the settlement is written: it is delivered, eventually, exactly once in effect.
+- **Fails closed.** A router with `ROUTER_WALLET_URL` but no `HYPERDRIVE` binding refuses metered runs (503) rather than charging without a durable settlement.
+- **Content-free.** A row holds the settlement's fields and delivery bookkeeping (attempts, next attempt, last status, timestamps). No body column, no key, no actor. The router logs `kind=settlement` with a fixed word (`delivered`, `retry_scheduled`, `dead`, `deferred`, `outbox_unavailable`) and a count.
 
 ## 2. Onboarding (Stripe Connect Express)
 
@@ -1975,12 +2038,13 @@ The open catalog (`GET /v1/catalog`, `docs/api/catalog.md`) publishes `data_hand
 | Variable | |
 |---|---|
 | `PAYOUTS_STATE_SECRET` | secret, ≥ 32 characters; turns the payout routes and the monthly job on |
-| `ROUTER_SETTLEMENT_TOKEN` | secret, ≥ 32 characters; the router's bearer for the settlement route (same value in `apps/router`) |
+| `ROUTER_SETTLEMENT_TOKEN` | secret, ≥ 32 characters; the router's bearer for `/v1/internal/router/reserve` and `/settlements` (same value in `apps/router`). Set = the router's wallet is served, with or without payouts |
 | `PAYOUT_MIN_USD` | optional, default 10 |
 | `STRIPE_SECRET_KEY` | the platform key; Connect onboarding and transfers use it |
-| router `ROUTER_SETTLEMENT_URL` | where the router posts settlements |
+| router `ROUTER_WALLET_URL` | apps/api's base URL; set = runs are reserved and settled through the wallet (E32) |
+| router `HYPERDRIVE` binding | the Postgres holding `router_settlement_outbox` (E33); required with `ROUTER_WALLET_URL` |
 
-Apply `apps/api/sql/provider-payouts.sql` (additive, idempotent) before enabling.
+Apply `apps/api/sql/provider-payouts.sql` (additive, idempotent) before enabling payouts, and `apps/router/sql/settlement-outbox.sql` then `settlement-outbox-permissions.sql` to the router's database before setting `ROUTER_WALLET_URL`.
 
 ---
 

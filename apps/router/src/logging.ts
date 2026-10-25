@@ -9,7 +9,7 @@
 import type { MiddlewareHandler } from "hono";
 
 export interface LogEvent {
-  kind: "request" | "run" | "catalog" | "metering";
+  kind: "request" | "run" | "catalog" | "metering" | "settlement";
   route?: string;
   method?: string;
   status?: number;

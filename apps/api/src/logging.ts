@@ -62,7 +62,7 @@ export interface LogVars {
     // Remote approvals (approvals/app.ts, plan E15): fixed words, never a token or a summary.
     | "approval_page" | "approval_decided" | "approval_refused" | "approval_notified" | "slack_rejected" | "webhook_registered"
     // E29 provider payouts (payouts-app.ts): fixed words, never an amount, a provider id or a reference.
-    | "payout_store_unavailable" | "settlement_rejected" | "settlements_recorded" | "connect_link_created" | "payouts_run"
+    | "payout_store_unavailable" | "settlement_rejected" | "settlements_recorded" | "router_reserved" | "router_reserve_replayed" | "connect_link_created" | "payouts_run"
     // E30 x402 (billing/x402.ts): fixed words, never a payment payload.
     | "x402_rejected" | "x402_replayed" | "x402_verified" | "x402_settled" | "x402_settle_failed"
     // E26 enterprise (enterprise/*.ts): fixed words, never a token, an assertion, a claim or a SCIM body.
@@ -92,6 +92,8 @@ export function routeTemplate(pathname: string): string {
   if (["/.well-known/mcp/server-card.json", "/.well-known/agent-card.json", "/.well-known/status.json", "/.well-known/mcp-config",
     "/health", "/openapi.json", "/llms.txt", "/llms-full.txt", "/privacy", "/terms"].includes(pathname)) return pathname;
   // E19 billing and E3-T2 OAuth: fixed paths; ids collapsed below.
+  // E32: the router's internal wallet routes (fixed paths).
+  if (["/v1/internal/router/reserve", "/v1/internal/router/settlements"].includes(pathname)) return pathname;
   if (["/v1/statements", "/v1/commit", "/v1/agents/me/licence", "/v1/admin/commits", "/v1/admin/adjustments",
     "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server",
     "/oauth/authorize", "/oauth/token", "/oauth/revoke"].includes(pathname)) return pathname;

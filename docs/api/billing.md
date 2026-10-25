@@ -85,6 +85,24 @@ While a commit is active:
 
 Admin routes take an `admin` agent key, never an OAuth access token.
 
+## Router runs (E32)
+
+A router `run` is billed by this wallet, once, like any other metered call: the receipt is
+`rcpt_run_<run_id>` (`unit: "run"`, `name: "router.run"`), it counts against the same caps, and an
+active commit discounts it. The router reserves the run's price through
+`POST /v1/internal/router/reserve` and settles it through `POST /v1/internal/router/settlements`
+(contract and diagram: `docs/api/payouts.md` §1, "The single-charge path").
+
+- **Price.** Third-party tool: the provider's measured price plus one take, `RUN_MARKUP_BPS`
+  (5%, rounded up; set once in `packages/config/pricing.json`). First-party tool: its listed
+  price, no take. The router sends only the provider's price; the take is added here.
+- **Marketplace imports.** A tool imported from Monid is priced at Monid's own price (what Monid
+  invoices us) plus the same one take. There is no second markup.
+- **Free.** Failures and empty results settle at $0; a $0 tool (the state reads) holds nothing.
+- **Durability.** The router's settlement outbox (E33) redelivers until this gateway acknowledges,
+  so a statement is never missing a run that was charged, and a run that died mid-flight is
+  released at $0.
+
 ## ShogunAI Pro bundle
 
 `POST /v1/agents/me/licence` with `X-Shogun-Licence: <the ShogunAI licence token>` links the

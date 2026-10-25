@@ -49,6 +49,17 @@ Three read endpoints, the ones that answer what other tools in Monid's catalog c
 4. **Price floor and fees.** Monid raises x402 runs to a $0.01 floor and secondary press reports a 10% platform fee while its own pages say 0% markup. Confirm that a $0 per-call endpoint is allowed, stays $0 for the caller, and is not floored on the x402 path (or is excluded from x402).
 5. **Ranking neutrality.** Monid's own Simple FS sits in its rankings, and an independent review found its ranking ignored price. Ask whether listing order is published; a free state read should not be buried, but we also make no request for preferential placement.
 
+## Pricing through the router (E32): no double markup
+
+This listing is the reverse direction of the router's Monid passthrough (`apps/router/src/passthrough/monid.ts`, Monid tools reached through ShogunAgent). For that passthrough the rule is one take, applied once:
+
+- The passthrough is tagged on every settlement (`marketplace: "monid"`), executes through Monid with the router's own `MONID_API_KEY`, and Monid invoices **us**, never the caller.
+- The imported price is Monid's own price, with no markup baked in. The caller pays Monid's price plus one take (`RUN_MARKUP_BPS`, `packages/config/pricing.json`), added by apps/api's wallet at reserve and settle. Before E32 the importer added 5% and the wallet would have added 5% again (1300 µ$ → 1434 µ$ instead of 1365 µ$).
+- If Monid's own price includes a platform fee (open question 4), that fee is part of the provider price; we do not add a second take for it, and we do not discount it.
+- The provider accrual records `payee: passthrough`, the provider price and the one take; nothing is paid out through Connect (Monid is settled on its invoice).
+
+For this listing (ShogunAgent endpoints sold on Monid) the same rule holds from the other side: the endpoints are $0, so there is nothing to mark up. If a priced endpoint is ever listed, Monid bills the caller and we must not charge the same call again on our wallet: a call that arrives through Monid with the caller's own key reaches the REST face as an ordinary metered call, so the Monid price for it must be set at $0 (distribution only) or the listing must not be made. Recorded as CHECKLIST item 5.
+
 ## Checklist
 
 See `CHECKLIST.md`.

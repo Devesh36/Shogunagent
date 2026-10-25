@@ -1,0 +1,4 @@
+{
+  "$comment": "The take on a third-party router run, in basis points (500 = 5%). The ONE place it is set: apps/api/src/pricing.ts (RUN_MARKUP_BPS: the wallet that charges, and /.well-known/pricing.json) and apps/router/src/take.ts (the prices discover, inspect and dryRun quote) both read it from here. First-party runs carry no take.",
+  "run_markup_bps": 500
+}

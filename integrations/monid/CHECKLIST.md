@@ -8,7 +8,7 @@ Tick an item only with evidence (a link, a commit, a written answer). Nothing he
 - [ ] 2. **Category.** Monid adds `memory` (or `state`) to `connectors/categories.ts`, or we agree in writing on the category to use. (open question 2; the plan's condition for E31)
 - [ ] 3. **Zero retention.** Inputs and outputs of `shogunagent/*` runs are not stored or returned by Monid's runs API, in writing. (open question 3; CLAUDE.md invariant 2)
 - [ ] 4. **Terms and privacy.** Monid publishes terms and a privacy policy (they returned 404 in August 2026), and our counsel has read them.
-- [ ] 5. **Price.** A $0 per-call endpoint is allowed, is not floored, and carries no fee to the caller. (open question 4; CLAUDE.md invariant 10)
+- [ ] 5. **Price.** A $0 per-call endpoint is allowed, is not floored, and carries no fee to the caller. (open question 4; CLAUDE.md invariant 10) A call through Monid is billed by Monid; it must not be charged again on our wallet, so every listed endpoint stays at $0 on Monid (README "Pricing through the router").
 
 ## Blocking: our side
 

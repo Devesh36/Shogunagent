@@ -56,7 +56,8 @@ describe("transport credential injection", () => {
 
     const out = await run(deps, { input: { tool_id: "vendor.lookup", input: { q: "hi" }, idempotency_key: "t1" }, bearer: bearer() });
     expect(out.status).toBe(200);
-    expect(out.body.usage).toEqual({ unit: "u", quantity: 2, cost_micro_usd: 20 });
+    // 2 units × 10 µ$ from the provider, plus one take (5%, rounded up) for a third-party tool.
+    expect(out.body.usage).toEqual({ unit: "u", quantity: 2, cost_micro_usd: 21 });
 
     // fetch saw the credential…
     expect(seen).toHaveLength(1);

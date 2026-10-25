@@ -10,8 +10,15 @@
 // read by src/transport.ts only (invariant 7: provider keys are injected at the transport layer
 // and never reach the engine or a connector hook):
 //   MONID_API_KEY             Monid hosted-catalog passthrough (src/passthrough/monid.ts)
-//   SHOGUNAGENT_API_BASE_URL  base URL of the ShogunAgent REST face the first-party connector calls
+//   ROUTER_SETTLEMENT_TOKEN   the router's bearer for apps/api's internal reserve/settlement routes
 // Every name is documented in src/env.ts.
+//
+// E32/E33 wallet: set `ROUTER_WALLET_URL` (apps/api's base URL) and bind `HYPERDRIVE` to the
+// Postgres holding `router_settlement_outbox` (apply apps/router/sql/settlement-outbox.sql and
+// settlement-outbox-permissions.sql first). The binding is added per environment once its
+// Hyperdrive configuration exists, e.g.
+//   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive config id>" }]
+// Without it a router with ROUTER_WALLET_URL refuses metered runs (503 wallet_unavailable).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "shogunagent-router",
@@ -26,6 +33,9 @@
   // Invocation logs are OFF because the runtime's own record carries request headers, and every
   // metered request's `Authorization` is an agent key.
   "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "enabled": true, "invocation_logs": false } },
+  // E33: the settlement outbox's retry job (`scheduled` in src/worker.ts). Every minute; each run
+  // is bounded (≤ 10 batches of 100) and a no-op when nothing is due or no outbox is bound.
+  "triggers": { "crons": ["* * * * *"] },
   "vars": {
     // Non-secret defaults; override per environment.
     "SHOGUNAGENT_API_BASE_URL": "https://api.shogunaios.com",

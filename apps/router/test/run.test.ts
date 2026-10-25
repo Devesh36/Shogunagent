@@ -74,7 +74,8 @@ describe("run (E8-T5)", () => {
     const out = await run(deps, { input: { tool_id: SEARCH, input: { query: "x" }, idempotency_key: "dry", dryRun: true } });
     expect(out.status).toBe(200);
     if (out.body.resultType !== "quote") throw new Error("expected quote");
-    expect(out.body.quote).toEqual({ estimate_micro_usd: 1365, unit: "call", model: "per_call", failures_cost: 0, empty_results_cost: 0 });
+    // Monid's price (1300) plus one take (5%, rounded up): the take is applied once, not on top of a marked-up import.
+    expect(out.body.quote).toEqual({ estimate_micro_usd: 1365, provider_micro_usd: 1300, take_bps: 500, unit: "call", model: "per_call", failures_cost: 0, empty_results_cost: 0 });
     expect(out.body.permission_level).toBe("L1");
     expect(deps.calls).toHaveLength(0);
     expect(deps.runLog.records).toHaveLength(0);

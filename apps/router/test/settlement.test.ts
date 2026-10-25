@@ -7,7 +7,7 @@ import type { ProviderDefinition } from "../connectors/types.js";
 import { compileCatalog } from "../src/catalog.js";
 import { InMemoryMeteringClient } from "../src/metering.js";
 import { run } from "../src/run.js";
-import { HttpSettlementSink, InMemorySettlementSink, RUN_SETTLEMENT_KEYS, SETTLEMENT_FORMAT, type RunSettlement } from "../src/settlement.js";
+import { InMemorySettlementSink, RUN_SETTLEMENT_KEYS, SETTLEMENT_FORMAT, type RunSettlement } from "../src/settlement.js";
 import { createSettlementPoster, type TransportCall, type TransportResult } from "../src/transport.js";
 import { bearer, fullCatalog, makeDeps, synthEndpoint, synthProvider } from "./helpers.js";
 
@@ -47,8 +47,8 @@ describe("run settlement (E29)", () => {
     expect(sink.settlements).toHaveLength(1);
     const s = sink.settlements[0] as RunSettlement;
     expect(s).toMatchObject({
-      format: SETTLEMENT_FORMAT, run_id: out.body.run_id, tool_id: "acme.lookup", provider_id: "acme", first_party: false,
-      payout_account_ref: "acct_1AcmeExample", outcome: "ok", quantity: 1, provider_micro_usd: 1000,
+      format: SETTLEMENT_FORMAT, run_id: out.body.run_id, receipt_id: null, tool_id: "acme.lookup", provider_id: "acme", first_party: false,
+      payout_account_ref: "acct_1AcmeExample", marketplace: null, outcome: "ok", quantity: 1, provider_micro_usd: 1000,
     });
     // Content-free: exactly the published key set, and no input or output reaches it.
     expect(Object.keys(s).sort()).toEqual([...RUN_SETTLEMENT_KEYS].sort());
@@ -87,46 +87,38 @@ describe("run settlement (E29)", () => {
     expect(sink.settlements).toHaveLength(0);
   });
 
-  it("first-party and passthrough runs carry their kind: first_party true, or no payout reference", async () => {
+  it("first-party and marketplace runs carry their kind: first_party true, or the marketplace tag", async () => {
     const sink = new InMemorySettlementSink();
     const deps = makeDeps({ catalog: fullCatalog(), metering: new InMemoryMeteringClient({ settlements: sink }), responder: () => ({ status: 200, body: { status: "succeeded", output: { results: [{ url: "u" }] } } }) });
     await run(deps, { input: { tool_id: "monid.tinyfish.web-search", input: { query: "x" }, idempotency_key: "m1" }, bearer: bearer() });
     const fp = makeDeps({ catalog: fullCatalog(), metering: new InMemoryMeteringClient({ settlements: sink }), responder: () => ({ status: 200, body: { items: [{ id: "c1" }] } }) });
     await run(fp, { input: { tool_id: "shogunagent.state.commitments.list", input: {}, idempotency_key: "fp1" }, bearer: bearer() });
     const [monid, first] = sink.settlements;
-    expect(monid).toMatchObject({ provider_id: "monid", first_party: false, payout_account_ref: null });
-    expect(first).toMatchObject({ provider_id: "shogunagent", first_party: true, payout_account_ref: "first-party:select", provider_micro_usd: 0 });
+    // Monid's own price (no markup baked in): the take is the wallet's, applied once.
+    expect(monid).toMatchObject({ provider_id: "monid", first_party: false, payout_account_ref: null, marketplace: "monid", provider_micro_usd: 1300 });
+    expect(first).toMatchObject({ provider_id: "shogunagent", first_party: true, payout_account_ref: "first-party:select", marketplace: null, provider_micro_usd: 0 });
   });
 });
 
-describe("HttpSettlementSink and the poster", () => {
-  it("posts { settlements } with the token from the env map only, and retries a 5xx", async () => {
+describe("the settlement poster", () => {
+  it("posts { settlements } with the token from the env map only, and reports the status", async () => {
     const seen: { url: string; auth: string | null; body: string }[] = [];
-    let calls = 0;
     const poster = createSettlementPoster({
       env: { ROUTER_SETTLEMENT_TOKEN: "rst_secret_value" },
       url: "https://api.test/v1/internal/router/settlements",
       fetch: (async (url: string, init: RequestInit) => {
-        calls += 1;
         seen.push({ url, auth: new Headers(init.headers).get("authorization"), body: String(init.body) });
-        return new Response("{}", { status: calls === 1 ? 503 : 200 });
+        return new Response("{}", { status: 503 });
       }) as unknown as typeof fetch,
     });
-    const sink = new HttpSettlementSink(poster);
-    const s: RunSettlement = { format: SETTLEMENT_FORMAT, run_id: "r1", ts: 1, tool_id: "acme.lookup", provider_id: "acme", first_party: false, payout_account_ref: "acct_1", outcome: "ok", quantity: 1, provider_micro_usd: 1000 };
-    await sink.accrue(s);
-    expect(calls).toBe(2);
-    expect(sink.dropped).toBe(0);
+    const s: RunSettlement = { format: SETTLEMENT_FORMAT, run_id: "r1", receipt_id: "rcpt_run_r1", ts: 1, tool_id: "acme.lookup", provider_id: "acme", first_party: false, payout_account_ref: "acct_1", marketplace: null, outcome: "ok", quantity: 1, provider_micro_usd: 1000 };
+    expect(await poster([s])).toEqual({ status: 503 });
     expect(seen[0]?.auth).toBe("Bearer rst_secret_value");
     expect(JSON.parse(seen[0]?.body ?? "{}")).toEqual({ settlements: [s] });
   });
 
-  it("drops (and counts) after a 4xx or when the token is missing; never throws into the run", async () => {
-    const reject = new HttpSettlementSink(async () => ({ status: 400 }));
-    await reject.accrue({ format: SETTLEMENT_FORMAT, run_id: "r", ts: 0, tool_id: "t", provider_id: "p", first_party: false, payout_account_ref: null, outcome: "ok", quantity: 1, provider_micro_usd: 1 });
-    expect(reject.dropped).toBe(1);
-    const noToken = new HttpSettlementSink(createSettlementPoster({ env: {}, url: "https://api.test/x", fetch: (async () => new Response("{}")) as unknown as typeof fetch }), { attempts: 1 });
-    await noToken.accrue({ format: SETTLEMENT_FORMAT, run_id: "r", ts: 0, tool_id: "t", provider_id: "p", first_party: false, payout_account_ref: null, outcome: "ok", quantity: 1, provider_micro_usd: 1 });
-    expect(noToken.dropped).toBe(1);
+  it("throws (and the outbox keeps the row) when the token is missing", async () => {
+    const poster = createSettlementPoster({ env: {}, url: "https://api.test/x", fetch: (async () => new Response("{}")) as unknown as typeof fetch });
+    await expect(poster([])).rejects.toThrow(/ROUTER_SETTLEMENT_TOKEN/);
   });
 });

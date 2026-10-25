@@ -10,6 +10,9 @@
 import type { Json, ProviderAuth, RunRequest } from "../connectors/types.js";
 import type { Secret } from "./secret.js";
 import type { RunSettlement } from "./settlement.js";
+import type { WalletTransport } from "./wallet.js";
+import type { SqlConnector, SqlRow } from "./outbox.js";
+import postgres from "postgres";
 
 export interface ProviderRef {
   id: string;
@@ -132,8 +135,9 @@ export function createFetchTransport(opts: FetchTransportOptions): Transport {
 }
 
 /**
- * The settlement poster (E29): POSTs run settlements to apps/api's payout ledger
- * (`POST /v1/internal/router/settlements`). Lives here because this module is the router's only
+ * The settlement poster (E29, E33): POSTs run settlements from the outbox (src/outbox.ts) to
+ * apps/api (`POST /v1/internal/router/settlements`), which settles the caller's wallet and the
+ * provider's accrual. Lives here because this module is the router's only
  * egress and the only reader of the secret map: `ROUTER_SETTLEMENT_TOKEN` is read at send time
  * and never leaves this function. Settlements are content-free (src/settlement.ts).
  */
@@ -154,6 +158,64 @@ export function createSettlementPoster(opts: { env: CredentialEnv; url: string; 
       return { status: res.status };
     } finally {
       clearTimeout(timer);
+    }
+  };
+}
+
+/**
+ * The wallet transport (E32): `POST /v1/internal/router/reserve` on apps/api. The router presents
+ * `ROUTER_SETTLEMENT_TOKEN` (read here, at send time) and forwards the caller's own bearer in
+ * `X-Caller-Authorization` so apps/api verifies the key and its `run` scope itself. The bearer is
+ * exposed here and nowhere else on this path; the body is content-free (ids, a price, a flag).
+ * Only the status, the JSON body (a reservation or a 402) and `Retry-After` come back.
+ */
+export function createWalletTransport(opts: { env: CredentialEnv; baseUrl: string; fetch?: typeof fetch; timeoutMs?: number }): WalletTransport {
+  const doFetch = opts.fetch ?? fetch;
+  const url = joinUrl(opts.baseUrl, "/v1/internal/router/reserve");
+  return {
+    async reserve(body, caller) {
+      const token = opts.env["ROUTER_SETTLEMENT_TOKEN"];
+      if (!token) throw new TransportError("credential_missing", "ROUTER_SETTLEMENT_TOKEN is not configured");
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5_000);
+      try {
+        const res = await doFetch(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "x-caller-authorization": `Bearer ${caller.expose()}`, "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        const text = await res.text();
+        let parsed: Json = null;
+        try {
+          parsed = text ? (JSON.parse(text) as Json) : null;
+        } catch {
+          parsed = null;
+        }
+        const retry = Number(res.headers.get("retry-after"));
+        return { status: res.status, body: parsed, ...(Number.isFinite(retry) && retry > 0 ? { retryAfter: retry } : {}) };
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
+/**
+ * The outbox's database connection (E33): Postgres through the Worker's Hyperdrive binding. Workers
+ * do not let a socket opened by one request serve another, so each operation opens one connection
+ * (`max: 1`; Hyperdrive pools behind it) and closes it after. The driver never prints a notice or a
+ * query; rows hold content-free settlements only (apps/router/sql/settlement-outbox.sql).
+ */
+export function postgresConnector(connectionString: string): SqlConnector {
+  return async (fn) => {
+    const sql = postgres(connectionString, { max: 1, fetch_types: false, prepare: false, idle_timeout: 5, connect_timeout: 5, onnotice: () => undefined });
+    try {
+      return await fn({
+        query: async (text, params = []) => [...(await sql.unsafe(text, params as postgres.ParameterOrJSON<never>[]))] as SqlRow[],
+      });
+    } finally {
+      await sql.end({ timeout: 1 }).catch(() => undefined);
     }
   };
 }

@@ -29,6 +29,7 @@ import { Bm25Index } from "./bm25.js";
 import { contentHash, sha256Hex } from "./hash.js";
 import { publicDataHandling, validateManifest, type PublicDataHandling } from "./listing/manifest.js";
 import { buildScopeTable, levelFor, type Level, type ScopeTable } from "./scope.js";
+import { callerPrice } from "./take.js";
 
 export type PublicUsage =
   | { model: "per_call"; unit: "call"; cost_micro_usd: number }
@@ -49,8 +50,12 @@ export interface CatalogEntry {
   input_schema: JsonObject;
   output_schema: JsonObject | null;
   usage: PublicUsage;
-  /** The typical cost of one run, in micro-USD — what `discover` ranks on and `dryRun` quotes. */
+  /** What the caller is quoted for one typical run, in micro-USD: the provider's price plus one
+   * take for third-party tools (src/take.ts) — what `discover` ranks on and `dryRun` quotes. */
   quote_micro_usd: number;
+  /** The provider's own price for one typical run (`usage` priced at `typical_*`), before the take.
+   * For an imported marketplace catalog, the price that marketplace invoices us. */
+  provider_quote_micro_usd: number;
   health: HealthBaseline;
   scope: { class: OpClass; level: Level };
   examples: { input: Json; output: Json }[];
@@ -221,7 +226,8 @@ export function compileCatalog(providers: ProviderDefinition[]): CompiledCatalog
         input_schema: endpoint.input.schema.jsonSchema,
         output_schema: endpoint.output.schema?.jsonSchema ?? null,
         usage,
-        quote_micro_usd: quoteMicroUsd(usage),
+        quote_micro_usd: callerPrice(quoteMicroUsd(usage), provider.first_party),
+        provider_quote_micro_usd: quoteMicroUsd(usage),
         health,
         scope: { class: endpoint.scope.class, level: levelFor(endpoint.scope.class) },
         examples: endpoint.meta.examples ?? [],

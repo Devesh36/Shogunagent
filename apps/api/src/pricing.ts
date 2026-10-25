@@ -8,8 +8,10 @@
  * - `ingest`   — $0.50 per 1,000 events (500 µ$ per event): `memory.ingest`, `memory.append_note`.
  * - `model_op` — $0.10 per 1,000 model-invoking operations (100 µ$ each): the default for any
  *                `tools/call` the table does not list as free, ingest or run.
- * - `run`      — a router tool run: the provider's price plus `RUN_MARKUP_BPS` (5%), rounded up.
- *                The provider price is supplied by the router (never by the client).
+ * - `run`      — a router tool run: the provider's price plus `RUN_MARKUP_BPS` (5%), rounded up, once
+ *                (first-party tools: their listed price, no take). The provider price is supplied
+ *                by the router (never by the client); the router never adds a take of its own
+ *                (router-wallet.ts, E32).
  * - `storage`  — $0.10 per GB-month of stored state, booked by the storage sweep (not per call).
  * - `read`     — $0 (CLAUDE.md invariant 10): `state.*`, `memory.get_context_pack`,
  *                `memory.recall`, `memory.search`, approvals and the other reads. Counted, never
@@ -19,6 +21,8 @@
  * Classification reads only the `Mcp-Method` / `Mcp-Name` headers of the MCP 2026-07-28
  * Streamable HTTP transport and an optional quantity header — never the body.
  */
+
+import sharedPricing from "../../../packages/config/pricing.json";
 
 export type MeterUnit = "ingest" | "model_op" | "run" | "storage" | "read" | "protocol";
 
@@ -33,8 +37,10 @@ export const RATE_MICROS: Readonly<Record<Exclude<MeterUnit, "run">, number>> = 
   protocol: 0,
 });
 
-/** The markup on a provider's price for a `run`, in basis points (500 = 5%). */
-export const RUN_MARKUP_BPS = 500;
+/** The take on a provider's price for a third-party `run`, in basis points (500 = 5%). Set in ONE
+ * place, `packages/config/pricing.json`, which the router reads too (apps/router/src/take.ts) for
+ * the prices it quotes; the wallet that charges is this module. First-party runs carry none. */
+export const RUN_MARKUP_BPS: number = sharedPricing.run_markup_bps;
 
 /** The free allowance granted to a self-registered principal (E3-T3): $5.00. */
 export const FREE_ALLOWANCE_MICROS = 5 * MICRO_USD_PER_USD;
@@ -108,7 +114,7 @@ export function pricingDocument(ctx: PricingContext): Record<string, unknown> {
     units: {
       ingest: { per: "event", micro_usd: RATE_MICROS.ingest, usd_per_1000: RATE_MICROS.ingest * 1000 / MICRO_USD_PER_USD, tools: [...INGEST_TOOLS] },
       model_op: { per: "operation", micro_usd: RATE_MICROS.model_op, usd_per_1000: RATE_MICROS.model_op * 1000 / MICRO_USD_PER_USD, tools: "any tools/call not listed under read, ingest or run" },
-      run: { per: "run", micro_usd: null, formula: `ceil(provider_price_micro_usd * (1 + ${RUN_MARKUP_BPS / 10_000}))`, markup_bps: RUN_MARKUP_BPS, tools: [...RUN_TOOLS] },
+      run: { per: "run", micro_usd: null, formula: `ceil(provider_price_micro_usd * (1 + ${RUN_MARKUP_BPS / 10_000}))`, markup_bps: RUN_MARKUP_BPS, first_party_markup_bps: 0, charged: "once, by the wallet, on the provider's measured price; failures and empty results 0", tools: [...RUN_TOOLS] },
       storage: { per: "gb_month", micro_usd: RATE_MICROS.storage, billed: "by the storage sweep, not per call" },
       read: { per: "call", micro_usd: 0, tools: [...FREE_TOOLS, ...FREE_PREFIXES.map((p) => `${p}*`)] },
       protocol: { per: "request", micro_usd: 0, methods: "every MCP method other than tools/call" },

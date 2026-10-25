@@ -1,4 +1,4 @@
-/** Public surface of @shogunagent/router for apps/api (E9 wires the wallet behind `MeteringClient`). */
+/** Public surface of @shogunagent/router. The wallet behind `MeteringClient` is apps/api's (E32, src/wallet.ts). */
 export { createApp } from "./app.js";
 export { compileCatalog, CatalogCompileError, type CatalogEntry, type CatalogManifest, type CompiledCatalog } from "./catalog.js";
 export { discover, RANKING_FORMULA, RANKING_WEIGHTS, PERSONAL_WEIGHT, BASE_QUALITY_WEIGHTS, type DiscoverCandidate, type ScoreBreakdown, type PersonalContext } from "./discover.js";
@@ -8,9 +8,12 @@ export { run, type RunBody, type RunDeps } from "./run.js";
 export { callVerb, type RouterDeps } from "./engine.js";
 export { handleMcp, mcpTools } from "./mcp.js";
 export { authorize, buildScopeTable, levelFor, isExternalSend, type Level, type ScopeTable } from "./scope.js";
-export { createFetchTransport, createReplayTransport, TransportError, type Transport, type TransportCall } from "./transport.js";
-export { InMemoryMeteringClient, type MeteringClient, type PaymentRequired, type Quote } from "./metering.js";
-export { buildSettlement, HttpSettlementSink, InMemorySettlementSink, payoutRefOf, RUN_SETTLEMENT_KEYS, SETTLEMENT_FORMAT, type RunSettlement, type SettledOutcome, type SettlementSink } from "./settlement.js";
+export { createFetchTransport, createReplayTransport, createSettlementPoster, createWalletTransport, TransportError, type Transport, type TransportCall } from "./transport.js";
+export { InMemoryMeteringClient, type MeteringClient, type PaymentRequired, type Quote, type Reservation, type ReserveContext } from "./metering.js";
+export { buildSettlement, InMemorySettlementSink, marketplaceOf, payoutRefOf, receiptIdFor, RUN_SETTLEMENT_KEYS, SETTLEMENT_FORMAT, type RunSettlement, type SettledOutcome, type SettlementSink } from "./settlement.js";
+export { ApiWalletClient, UnavailableWalletClient, type WalletReserveRequest, type WalletTransport } from "./wallet.js";
+export { InMemorySettlementOutbox, SqlSettlementOutbox, SettlementDelivery, backoffMs, type SettlementOutbox, type SqlConnector, type SqlExecutor } from "./outbox.js";
+export { callerPrice, takeOf, RUN_MARKUP_BPS } from "./take.js";
 export { openCatalog, openCatalogDetail, openCatalogHtml, OPEN_CATALOG_FORMAT, type OpenCatalogDocument, type OpenCatalogEntry } from "./open-catalog.js";
 export { InMemoryRunLogSink, noopRunLogSink, TOOL_RUN_RECORD_KEYS, type RunLogSink, type ToolRunRecord } from "./runlog.js";
 export { InMemoryIdempotencyStore, type IdempotencyStore } from "./idempotency.js";
