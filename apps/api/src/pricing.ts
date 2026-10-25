@@ -1,0 +1,128 @@
+/**
+ * The rate table (docs/implementation-plan.md E9-T5) and the one place a call is classified
+ * into a metering unit. `/.well-known/pricing.json` (E10-T7) is rendered FROM this module
+ * (`pricingDocument`), so the published prices and the enforced prices are one source
+ * (CLAUDE.md invariant 12).
+ *
+ * Units (amounts are integer micro-USD, 1 USD = 1,000,000):
+ * - `ingest`   — $0.50 per 1,000 events (500 µ$ per event): `memory.ingest`, `memory.append_note`.
+ * - `model_op` — $0.10 per 1,000 model-invoking operations (100 µ$ each): the default for any
+ *                `tools/call` the table does not list as free, ingest or run.
+ * - `run`      — a router tool run: the provider's price plus `RUN_MARKUP_BPS` (5%), rounded up.
+ *                The provider price is supplied by the router (never by the client).
+ * - `storage`  — $0.10 per GB-month of stored state, booked by the storage sweep (not per call).
+ * - `read`     — $0 (CLAUDE.md invariant 10): `state.*`, `memory.get_context_pack`,
+ *                `memory.recall`, `memory.search`, approvals and the other reads. Counted, never
+ *                billed.
+ * - `protocol` — $0: MCP requests that are not `tools/call` (initialize, tools/list, ping…).
+ *
+ * Classification reads only the `Mcp-Method` / `Mcp-Name` headers of the MCP 2026-07-28
+ * Streamable HTTP transport and an optional quantity header — never the body.
+ */
+
+export type MeterUnit = "ingest" | "model_op" | "run" | "storage" | "read" | "protocol";
+
+export const MICRO_USD_PER_USD = 1_000_000;
+
+/** µ$ per unit for the flat units. */
+export const RATE_MICROS: Readonly<Record<Exclude<MeterUnit, "run">, number>> = Object.freeze({
+  ingest: 500,
+  model_op: 100,
+  storage: 100_000,
+  read: 0,
+  protocol: 0,
+});
+
+/** The markup on a provider's price for a `run`, in basis points (500 = 5%). */
+export const RUN_MARKUP_BPS = 500;
+
+/** The free allowance granted to a self-registered principal (E3-T3): $5.00. */
+export const FREE_ALLOWANCE_MICROS = 5 * MICRO_USD_PER_USD;
+
+/** The MCP method a tool invocation travels on. Anything else is protocol traffic. */
+export const TOOLS_CALL = "tools/call";
+
+/** Reads: free, by name. The core 22's read set (§7.1) plus approvals and the router's
+ * `discover` / `inspect`, which are free by the plan (§7.4). `state.*` matches by prefix. */
+export const FREE_TOOLS: ReadonlySet<string> = new Set([
+  "memory.search", "memory.get_context", "memory.get_context_pack", "memory.get_events",
+  "memory.read_session", "memory.get_wrap", "memory.get_periods", "memory.recall",
+  "calendar.upcoming", "profile.whoami", "wiki.evidence", "actions.status",
+  "approvals.list", "approvals.get", "approvals.decide",
+  "router.discover", "router.inspect",
+]);
+const FREE_PREFIXES = ["state.", "approvals."] as const;
+
+export const INGEST_TOOLS: ReadonlySet<string> = new Set(["memory.ingest", "memory.append_note"]);
+
+export const RUN_TOOLS: ReadonlySet<string> = new Set(["router.run", "actions.execute"]);
+
+/** Classify one MCP request by its method and (for `tools/call`) tool name. */
+export function classifyCall(method: string | undefined, name: string | undefined): MeterUnit {
+  if (method !== TOOLS_CALL) return "protocol";
+  if (!name) return "model_op";
+  if (FREE_TOOLS.has(name) || FREE_PREFIXES.some((p) => name.startsWith(p))) return "read";
+  if (INGEST_TOOLS.has(name)) return "ingest";
+  if (RUN_TOOLS.has(name)) return "run";
+  return "model_op";
+}
+
+/** A priced call: what the receipt records and what the 402 quotes. */
+export interface Quote {
+  unit: MeterUnit;
+  quantity: number;
+  cost_micro_usd: number;
+}
+
+/** The cost of `quantity` units. For `run` the provider price (µ$, for the whole run) is
+ * required; without it the call cannot be priced and the caller must refuse it. Integer, rounded
+ * up, never negative. Throws only on a programming error (a `run` without a price). */
+export function quoteCost(unit: MeterUnit, quantity: number, providerPriceMicros?: number): Quote {
+  const qty = Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 1;
+  if (unit === "run") {
+    if (providerPriceMicros === undefined) throw new Error("run price missing");
+    const base = Number.isSafeInteger(providerPriceMicros) && providerPriceMicros > 0 ? providerPriceMicros : 0;
+    return { unit, quantity: qty, cost_micro_usd: Math.ceil((base * (10_000 + RUN_MARKUP_BPS)) / 10_000) * qty };
+  }
+  return { unit, quantity: qty, cost_micro_usd: RATE_MICROS[unit] * qty };
+}
+
+/** The `usage` field of the plan's common response (§7.2). */
+export function usageOf(quote: Quote): { unit: MeterUnit; quantity: number; cost_micro_usd: number } {
+  return { unit: quote.unit, quantity: quote.quantity, cost_micro_usd: quote.cost_micro_usd };
+}
+
+/** What `pricingDocument` needs beyond the rate table: the caps in force (`caps.ts`). */
+export interface PricingContext {
+  caps: { key: { day: number; month: number }; principal: { day: number; month: number } };
+}
+
+/** The body of `/.well-known/pricing.json`: the table above, rendered. Agent-readable: every
+ * number is an integer µ$ and every unit says what one of it is. */
+export function pricingDocument(ctx: PricingContext): Record<string, unknown> {
+  return {
+    schema: "shogunagent/pricing/v1",
+    currency: "USD",
+    amount_unit: "micro_usd",
+    micro_usd_per_usd: MICRO_USD_PER_USD,
+    units: {
+      ingest: { per: "event", micro_usd: RATE_MICROS.ingest, usd_per_1000: RATE_MICROS.ingest * 1000 / MICRO_USD_PER_USD, tools: [...INGEST_TOOLS] },
+      model_op: { per: "operation", micro_usd: RATE_MICROS.model_op, usd_per_1000: RATE_MICROS.model_op * 1000 / MICRO_USD_PER_USD, tools: "any tools/call not listed under read, ingest or run" },
+      run: { per: "run", micro_usd: null, formula: `ceil(provider_price_micro_usd * (1 + ${RUN_MARKUP_BPS / 10_000}))`, markup_bps: RUN_MARKUP_BPS, tools: [...RUN_TOOLS] },
+      storage: { per: "gb_month", micro_usd: RATE_MICROS.storage, billed: "by the storage sweep, not per call" },
+      read: { per: "call", micro_usd: 0, tools: [...FREE_TOOLS, ...FREE_PREFIXES.map((p) => `${p}*`)] },
+      protocol: { per: "request", micro_usd: 0, methods: "every MCP method other than tools/call" },
+    },
+    free_allowance_micro_usd: FREE_ALLOWANCE_MICROS,
+    caps: {
+      key: { day_micro_usd: ctx.caps.key.day, month_micro_usd: ctx.caps.key.month },
+      principal: { day_micro_usd: ctx.caps.principal.day, month_micro_usd: ctx.caps.principal.month },
+    },
+    headers: {
+      classify: ["Mcp-Method", "Mcp-Name"],
+      quantity: "Mcp-Quantity (events for ingest; default 1)",
+      dry_run: "Mcp-Dry-Run: true (quote only, nothing reserved)",
+    },
+    payment_required: { status: 402, header: "PAYMENT-REQUIRED", doc: "docs/api/402.md" },
+  };
+}
