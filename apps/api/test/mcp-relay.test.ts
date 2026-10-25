@@ -157,6 +157,11 @@ describe("createMcpRelay", () => {
     expect(derivedSidecarBearer(secret, principal("prn_a", "ak_2"))).not.toBe(a);
     expect(derivedSidecarBearer("t".repeat(32), principal("prn_a"))).not.toBe(a);
     expect(derivedSidecarBearer(secret, principal("PRN.bad"))).toBeUndefined();
+    // The shared vector (E34): the sidecar's verifier asserts the same string
+    // (crates/shogun-core/src/tenancy/derived_bearer.rs, `matches_the_gateway_byte_for_byte`).
+    expect(derivedSidecarBearer("conformance-shared-sidecar-secret-0123456789", { principalId: "prn_alice-01", keyId: "key_AbC-123_x" })).toBe(
+      "sgw1.prn_alice-01.key_AbC-123_x.Ozj4qWUTuoA1pltKOvZ9a5Eiu7rS-0ehsArUCWsSzHc",
+    );
     // FNV-1a 64 reference vectors.
     expect(fnv1a64("").toString(16)).toBe("cbf29ce484222325");
     expect(fnv1a64("a").toString(16)).toBe("af63dc4c8601ec8c");

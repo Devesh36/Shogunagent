@@ -641,6 +641,7 @@ impl<B: MemoryBackend> McpServer<B> {
     /// contract): a bad argument is -32602 `code: sentence`, a tool that ran but had no answer is
     /// an isError result `{"error", "message", "tool"}`, and -32000 is left for internal faults.
     fn tools_call(&self, id: Value, params: Option<&Value>) -> String {
+        let started = std::time::Instant::now();
         let response = self.dispatch_tool(id, params);
         let tool = params
             .and_then(|p| p.get("name"))
@@ -662,6 +663,10 @@ impl<B: MemoryBackend> McpServer<B> {
         if let Some(tool) = tool.filter(|tool| tool_level(*tool) != ApiLevel::Read) {
             self.audit_call(tool, actor.as_str(), &response);
         }
+        // The metered envelope (repository rule, E34 conformance): a refusal says what to do
+        // next, and a core read carries its usage (free) and latency.
+        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let response = with_envelope(response, tool.filter(|tool| is_core_surface(*tool)), latency_ms);
         match tool {
             // The approval poll is a read a client must not cache: it changes the moment the
             // human decides.
@@ -1980,6 +1985,92 @@ fn normalize_core_response(tool: Tool, response: String) -> String {
     v.to_string()
 }
 
+/// What a refusal tells the caller to do next (`next_action`, CLAUDE.md "Every metered response
+/// returns … on error `next_action`"), from its JSON-RPC code. Agents branch on it, never on the
+/// message; an unknown value means "stop and tell the human" (`docs/api/deprecation-policy.md`).
+fn next_action_for_code(code: i64) -> &'static str {
+    match code {
+        -32700 | -32600 | -32601 | -32602 => "fix_input",
+        TOKEN_INVALID_CODE => "reauthenticate",
+        -32003 => "upgrade_plan",
+        SCOPE_INSUFFICIENT_CODE => "request_scope",
+        SOURCE_NOT_ALLOWED_CODE => "ask_human",
+        MEMORY_UNAVAILABLE_CODE | RATE_LIMITED_CODE => "retry_after",
+        _ => "retry_after",
+    }
+}
+
+/// What an `isError` result tells the caller to do next, from its `error` code.
+fn next_action_for_refusal(code: &str) -> &'static str {
+    match code {
+        "not_found" => "fix_input",
+        "revision_changed" => "reread",
+        code if ["invalid_", "missing_", "bad_"].iter().any(|prefix| code.starts_with(prefix)) => "fix_input",
+        "unavailable" | "memory_unavailable" | "upstream_error" => "retry_after",
+        _ => "ask_human",
+    }
+}
+
+/// The metered envelope of one `tools/call` reply (E34 conformance; three faces, one result: the
+/// `result` itself is untouched, only envelope keys are added, and only when absent):
+///
+/// - a JSON-RPC error gets `error.data.next_action`;
+/// - an `isError` result whose text is a JSON object gets `next_action`;
+/// - a state read or `profile.whoami` whose text is a JSON object gets `usage`
+///   (`{unit: "read", quantity: 1, cost_micro_usd: 0}`, invariant 10), `latency_ms` and
+///   `next_action: null`.
+fn with_envelope(response: String, core: Option<Tool>, latency_ms: u64) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(&response) else {
+        return response;
+    };
+    if let Some(error) = value.get_mut("error").and_then(Value::as_object_mut) {
+        let code = error.get("code").and_then(Value::as_i64).unwrap_or(-32000);
+        match error.get_mut("data") {
+            Some(Value::Object(data)) => {
+                data.entry("next_action").or_insert_with(|| Value::String(next_action_for_code(code).into()));
+            }
+            Some(_) => return response,
+            None => {
+                error.insert("data".into(), json!({ "next_action": next_action_for_code(code) }));
+            }
+        }
+        return value.to_string();
+    }
+    let failed = value["result"]["isError"] == Value::Bool(true);
+    // The state reads and `profile.whoami` (the core reads whose answers carried no envelope);
+    // the other core reads render their own (`memory.recall`) or are compared byte for byte
+    // across the three faces (`memory.search`, `memory.get_events`), so they are left as they are.
+    let read = core.is_some_and(|tool| {
+        tool_level(tool) == ApiLevel::Read
+            && (tool.wire_name().starts_with("state.") || tool == Tool::ProfileWhoami)
+    });
+    if (!failed && !read) || value["result"].get("resultType").is_some_and(|kind| !kind.is_null()) {
+        return response;
+    }
+    let Some(text) = value["result"]["content"][0]["text"].as_str() else {
+        return response;
+    };
+    let Ok(Value::Object(mut payload)) = serde_json::from_str::<Value>(text) else {
+        return response;
+    };
+    if failed {
+        if payload.contains_key("next_action") {
+            return response;
+        }
+        let code = payload.get("error").and_then(Value::as_str).unwrap_or_default().to_string();
+        payload.insert("next_action".into(), Value::String(next_action_for_refusal(&code).into()));
+    } else {
+        if payload.contains_key("usage") {
+            return response;
+        }
+        payload.insert("usage".into(), json!({ "unit": "read", "quantity": 1, "cost_micro_usd": 0 }));
+        payload.entry("latency_ms").or_insert_with(|| Value::from(latency_ms));
+        payload.entry("next_action").or_insert(Value::Null);
+    }
+    value["result"]["content"][0]["text"] = Value::String(Value::Object(payload).to_string());
+    value.to_string()
+}
+
 /// Run the MCP server over a line-delimited transport (stdio in production). Reads one JSON-RPC
 /// message per line, writes each response as a line. Blank lines are skipped; notifications produce
 /// no output. Generic over the streams so it is testable without real stdio.
@@ -3260,6 +3351,65 @@ mod tests {
         )
     }
 
+    /// A reply line with the envelope's `latency_ms` (a measurement) removed from its text block.
+    pub(super) fn without_latency(line: &str) -> String {
+        let Ok(mut value) = serde_json::from_str::<Value>(line) else {
+            return line.to_string();
+        };
+        let Some(text) = value["result"]["content"][0]["text"].as_str() else {
+            return line.to_string();
+        };
+        let Ok(mut payload) = serde_json::from_str::<Value>(text) else {
+            return line.to_string();
+        };
+        if let Some(object) = payload.as_object_mut() {
+            object.remove("latency_ms");
+        }
+        value["result"]["content"][0]["text"] = Value::String(payload.to_string());
+        value.to_string()
+    }
+
+    /// E34 conformance: a refusal says what to do next, a core read carries its usage (free) and
+    /// latency; an answer that already has them, an MRTR shape and a non-JSON text are untouched.
+    #[test]
+    fn replies_carry_the_metered_envelope() {
+        let unknown = call_line(&server(), "conformance.no_such_tool", json!({}));
+        assert_eq!(unknown["error"]["data"]["next_action"], "fix_input", "{unknown}");
+        let bad = call_line(&server(), "memory.search", json!({ "query": 5 }));
+        assert_eq!(bad["error"]["data"]["next_action"], "fix_input", "{bad}");
+
+        let response = |text: &str, is_error: bool| {
+            json!({ "jsonrpc": "2.0", "id": 1, "result": { "content": [{ "type": "text", "text": text }], "isError": is_error } }).to_string()
+        };
+        let text_of = |line: String| -> Value {
+            let value: Value = serde_json::from_str(&line).unwrap();
+            serde_json::from_str(value["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+        };
+        let not_found = text_of(with_envelope(response(r#"{"error":"not_found","message":"No record has that id.","tool":"state.people.get"}"#, true), Some(Tool::StatePeopleGet), 3));
+        assert_eq!(not_found["next_action"], "fix_input");
+        assert!(not_found.get("usage").is_none(), "a refusal bills nothing and claims no usage");
+
+        let read = text_of(with_envelope(response(r#"{"results":[],"tool":"state.commitments.list"}"#, false), Some(Tool::StateCommitmentsList), 7));
+        assert_eq!(read["usage"], json!({ "unit": "read", "quantity": 1, "cost_micro_usd": 0 }));
+        assert_eq!(read["latency_ms"], 7);
+        assert_eq!(read["next_action"], Value::Null);
+        assert_eq!(read["results"], json!([]), "the result itself is untouched");
+
+        let recall = r#"{"latency_ms":1,"next_action":null,"usage":{"unit":"read","quantity":1,"cost_micro_usd":0}}"#;
+        assert_eq!(text_of(with_envelope(response(recall, false), Some(Tool::MemoryRecall), 9))["latency_ms"], 1, "its own envelope wins");
+        // A write is not a read: no read usage on it.
+        let note = response(r#"{"accepted":true,"note_id":1}"#, false);
+        assert_eq!(with_envelope(note.clone(), Some(Tool::MemoryAppendNote), 1), note);
+        // Not a JSON object, or an MRTR shape: unchanged.
+        let plain = response("plain text", false);
+        assert_eq!(with_envelope(plain.clone(), Some(Tool::StateCommitmentsList), 1), plain);
+        let pending = json!({ "jsonrpc": "2.0", "id": 1, "result": { "resultType": "approval_required", "content": [{ "type": "text", "text": "{}" }], "isError": false } }).to_string();
+        assert_eq!(with_envelope(pending.clone(), Some(Tool::ActionsExecute), 1), pending);
+        // An error that already names its next action keeps it.
+        let named = json!({ "jsonrpc": "2.0", "id": 1, "error": { "code": -32029, "message": "rate_limited", "data": { "retry_after_ms": 5, "next_action": "wait" } } }).to_string();
+        assert_eq!(with_envelope(named.clone(), None, 1), named);
+    }
+
     fn call<B: MemoryBackend>(server: &McpServer<B>, line: &str) -> Value {
         serde_json::from_str(&server.handle_line(line).unwrap()).unwrap()
     }
@@ -4359,14 +4509,15 @@ mod tests {
         let s = server().with_plan_lock(|| panic!("an open plan never consults the lock reason"));
         assert_eq!(call(&s, INITIALIZE)["result"]["instructions"], routing_guide());
 
-        // Locked without a provider (tests, embedders): no `data` member, no instructions.
+        // Locked without a provider (tests, embedders): no cause in `data` (only the envelope's
+        // `next_action`, E34), no instructions.
         let bare = locked_server();
-        assert!(call(&bare, SEARCH_CALL)["error"].get("data").is_none());
+        assert_eq!(call(&bare, SEARCH_CALL)["error"]["data"], json!({ "next_action": "upgrade_plan" }));
         assert_eq!(call(&bare, INITIALIZE)["result"]["instructions"], routing_guide());
 
         // A provider that cannot name a cause adds nothing either.
         let unknown = locked_server().with_plan_lock(|| None);
-        assert!(call(&unknown, SEARCH_CALL)["error"].get("data").is_none());
+        assert_eq!(call(&unknown, SEARCH_CALL)["error"]["data"], json!({ "next_action": "upgrade_plan" }));
         assert_eq!(call(&unknown, INITIALIZE)["result"]["instructions"], routing_guide());
     }
 
@@ -4609,6 +4760,7 @@ mod tests {
 #[cfg(test)]
 mod toolset_tests {
     use super::*;
+    use super::tests::without_latency;
     use crate::backend::{ReadItem, ReadParams, WriteResult};
     use crate::memory_api::{tool_group, ToolGroup};
     use shogun_agents::permission::Level;
@@ -4874,8 +5026,9 @@ mod toolset_tests {
                 "params": { "name": tool.wire_name(), "arguments": arguments(tool) },
             })
             .to_string();
-            let under_all = all.handle_line(&request).unwrap();
-            let under_core = core.handle_line(&request).unwrap();
+            // The envelope's `latency_ms` is a measurement, not part of the answer.
+            let under_all = without_latency(&all.handle_line(&request).unwrap());
+            let under_core = without_latency(&core.handle_line(&request).unwrap());
             assert_eq!(under_all, under_core, "{} differs when hidden", tool.wire_name());
             assert!(
                 !under_core.contains("unknown tool"),

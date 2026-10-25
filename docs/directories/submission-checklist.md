@@ -16,7 +16,7 @@ Legend: **BLOCKER** = the submission cannot pass review or cannot be made until 
 | X1 | Hosted `/mcp` answers | a live Streamable HTTP endpoint at the URL every listing names | `apps/api` serves `/mcp` with `503 upstream_unavailable` until E34 wires the core behind it; the Worker → sidecar network path is still open (`docs/deploy/production.md` §1) | **BLOCKER** |
 | X2 | One public hostname | the URL in listings is the one the Worker serves | listings, `server.json`, `plugin.json`, `smithery.yaml`, `identity.ts` say `api.shogunagent.dev`; `apps/api/wrangler.jsonc` routes only `api.shogunaios.com` (`docs/deploy/production.md` §1.1) | **BLOCKER** (owner decision) |
 | X3 | Production deploy with OAuth | `AGENT_API_ENABLED`, `AGENT_OAUTH_SECRET`, `agent-oauth.sql` applied, consent flow verified by hand from each client | runbook ready (`docs/deploy/production.md`), nothing deployed | **BLOCKER** |
-| X4 | Annotations on every tool | MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` as explicit booleans on every tool in the core's `tools/list`, identical to the server card | server card (`apps/api/src/wellknown/tool-table.ts`) renders all of them; the core (`docs/api/core-tools.md`, wire-frozen) lists only the true hints and **none** for `memory.append_note` / `memory.ingest`. E34 fixes this with new names and a deprecation entry (invariant 11) | **BLOCKER** |
+| X4 | Annotations on every tool | MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` as explicit booleans on every tool in the core's `tools/list`, identical to the server card | met (E34). The core's `tools/list` always carried all four hints as explicit booleans (`core_tools::annotations`; `docs/api/core-tools.md` prints only the true ones); the real mismatch was `idempotentHint` on L1 tools (`memory.ingest` / `memory.append_note`): the card said `true`, the wire-frozen core `false`. The derived card now follows the core's rule, and `apps/api/test/wellknown.test.ts` compares every core tool's card annotations with the wire-freeze snapshot. No wire name changed, so no deprecation entry | ok |
 | X5 | Privacy policy | published, out of DRAFT | `docs/legal/privacy-policy.md` served at `/privacy` with a DRAFT banner; `[TBD]` operator address, company number, privacy@ and security@ addresses, subprocessors, transfer mechanism, log retention | **BLOCKER** (counsel) |
 | X6 | Terms | published, out of DRAFT | `docs/legal/terms.md` at `/terms`, DRAFT; `[TBD]` dispute window, refund conditions, deletion grace period | **BLOCKER** (counsel) |
 | X7 | Legal entity and contact | one entity, one support contact, one security contact | "Select KK" (`plugin.json`, `docs/legal/*`) vs "Select, Inc." with `https://shogunai.si` (`apps/router/connectors/*/provider.json`); support `[TBD]`; no `SECURITY.md` (E38) | **BLOCKER** (owner) |
@@ -34,7 +34,7 @@ Legend: **BLOCKER** = the submission cannot pass review or cannot be made until 
 |---|---|---|
 | Server URL, Streamable HTTP | `https://api.shogunagent.dev/mcp` named; not served (X1, X2) | **BLOCKER** |
 | OAuth 2.1, CIMD, discovery from a `401` | implemented (`apps/api/src/oauth/`, `docs/api/oauth.md`); off until deployed (X3) | **BLOCKER** |
-| Annotations | X4 | **BLOCKER** |
+| Annotations | X4 | ok |
 | Privacy policy / terms URLs | X5, X6 | **BLOCKER** |
 | Support contact, logo | X7, X9 | **BLOCKER** |
 | Demo credentials in the private field | X8 | **BLOCKER** |
@@ -60,7 +60,7 @@ Legend: **BLOCKER** = the submission cannot pass review or cannot be made until 
 | Requirement | Exists now | Status |
 |---|---|---|
 | No selling of credits / digital goods inside the plugin | prepaid wallet, `402` with a top-up URL; options and recommendation in `openai-credit-rule.md` (Option A: free read-only toolset for the ChatGPT client) — not decided, not built | **BLOCKER** (owner decision + build) |
-| `readOnlyHint` / `destructiveHint` / `openWorldHint` booleans on every tool | X4 (under Option A only the 18 reads are listed, which narrows the fix to explicit `false` values on reads) | **BLOCKER** |
+| `readOnlyHint` / `destructiveHint` / `openWorldHint` booleans on every tool | X4 (met: every tool carries all four booleans, identical on the core and the card) | ok |
 | ChatGPT's client registration path | we support CIMD and deliberately have no DCR; whether ChatGPT registers by CIMD is unconfirmed | **BLOCKER** (confirm) |
 | Business / identity verification in the OpenAI Platform dashboard | owner | **BLOCKER** (owner) |
 | Published privacy policy, support contact | X5, X7 | **BLOCKER** |

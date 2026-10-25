@@ -17,6 +17,9 @@
 //! - [`PrincipalResolver`]: bearer token → principal + actor. [`TokenPrincipalMap`] is the
 //!   sidecar's own in-memory map (`SHOGUN_PRINCIPAL_TOKENS`); `apps/api` replaces it with real
 //!   agent keys in E3.
+//! - [`derived_bearer`]: the gateway's derived `sgw1.<principal>.<key_id>.<mac>` bearers, verified
+//!   against `SHOGUN_SIDECAR_BEARER_SECRET` (E34, threat model R4); with it no principal token is
+//!   listed in the sidecar's environment.
 //! - [`import`]: a ShogunAI single-user `memory.db` becomes a principal's file (E2-T6).
 //! - [`dream_tick`]: the hourly Dream Cycle per principal, only when new material exists (E5-T4;
 //!   `shogun-api --dream-tick`).
@@ -28,6 +31,7 @@
 //!   opens that file for the teammate.
 
 pub mod credentials;
+pub mod derived_bearer;
 pub mod dream_tick;
 pub mod import;
 pub mod key_provider;
@@ -38,6 +42,7 @@ pub mod resolver;
 pub mod store;
 pub mod team;
 
+pub use derived_bearer::{ChainedResolver, DerivedBearers};
 pub use import::{import_single_user_store, ImportReport};
 pub use key_provider::{provider_from_env, EnvKeyProvider, KeyProvider, KeyProviderKind, KmsKeyProvider};
 pub use principal::PrincipalId;

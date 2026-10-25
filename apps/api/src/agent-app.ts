@@ -43,7 +43,7 @@ import {
 import { createOAuthApp, oauthKeyLookup, type OAuthDeps } from "./oauth/app.js";
 import { DEFAULT_CAPS, capsFor, parseCapMicros, periodsOf, type CapSet } from "./caps.js";
 import type { LogFn } from "./logging.js";
-import { classifyCall, pricingDocument, quoteCost, usageOf, FREE_ALLOWANCE_MICROS, type MeterUnit } from "./pricing.js";
+import { classifyCall, fixedRunPriceMicros, pricingDocument, quoteCost, usageOf, FREE_ALLOWANCE_MICROS, type MeterUnit } from "./pricing.js";
 import { DEFAULT_POW_BITS, MAX_POW_BITS, challengeHash, mintChallenge, verifyPow } from "./pow.js";
 import { WindowLimiter, type RateLimiter } from "./ratelimit.js";
 import { metered, priceCall, type MeteringDeps } from "./metering.js";
@@ -463,7 +463,7 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     if (unit === "run") {
       const given = body.provider_price_micro_usd;
       if (given !== undefined && (typeof given !== "number" || !Number.isSafeInteger(given) || given < 0)) return agentError(c, 400, "invalid_price", "provider_price_micro_usd must be a non-negative integer.");
-      providerPrice = typeof given === "number" ? given : deps.runPricer ? await deps.runPricer(typeof body.tool_id === "string" ? body.tool_id : undefined, p) : undefined;
+      providerPrice = typeof given === "number" ? given : (fixedRunPriceMicros(name) ?? (deps.runPricer ? await deps.runPricer(typeof body.tool_id === "string" ? body.tool_id : undefined, p) : undefined));
       if (providerPrice === undefined) return agentError(c, 400, "run_price_unavailable", "Pass provider_price_micro_usd (from router.inspect) to quote a run.");
     }
     const quote = quoteCost(unit, quantity, providerPrice);

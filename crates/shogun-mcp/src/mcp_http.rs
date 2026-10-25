@@ -10,8 +10,13 @@
 //! every `POST` must carry `Mcp-Method` (the JSON-RPC method) and, for `tools/call`, `Mcp-Name`
 //! (the tool); each must equal what the body says, or the request is refused before the handler
 //! sees it, so a client cannot bill a `memory.ingest` as a `tools/list`. Every reply carries
-//! `Mcp-Method` and, when applicable, `Mcp-Name`; a `memory.ingest` reply also carries
-//! `Mcp-Quantity` (the items it received) so the gateway settles the actual count.
+//! `Mcp-Method` and, when applicable, `Mcp-Name`; every `tools/call` reply also carries
+//! `Mcp-Quantity`, the units the core actually took ([`settled_quantity`]), which is all the
+//! gateway settles (the contract: `docs/api/billing.md`, "Hosted `/mcp`").
+//!
+//! Authentication (E34): a call refused for its bearer (JSON-RPC [`crate::mcp::TOKEN_INVALID_CODE`])
+//! answers HTTP 401 with `WWW-Authenticate: Bearer`, the JSON-RPC error kept as the body, as MCP
+//! authorization expects of the HTTP transport.
 //!
 //! Streaming: nothing on this face streams today (every handler answers one message), so a
 //! client that accepts only `text/event-stream` gets that one message as a single SSE event and
@@ -30,6 +35,9 @@ pub const HEADER_METHOD: &str = "mcp-method";
 pub const HEADER_NAME: &str = "mcp-name";
 /// The reply header carrying the number of items a `memory.ingest` received.
 pub const HEADER_QUANTITY: &str = "mcp-quantity";
+/// The `WWW-Authenticate` of a 401 (E34): the sidecar has no authorization server of its own;
+/// its bearers come from the operator or the gateway.
+pub const WWW_AUTHENTICATE: &str = r#"Bearer realm="shogun-memory""#;
 /// The reply header naming the protocol version the transport speaks.
 pub const HEADER_PROTOCOL_VERSION: &str = "mcp-protocol-version";
 /// The longest `POST /mcp` body (8 MiB: a full `memory.ingest` with room to spare).
@@ -73,10 +81,13 @@ pub struct HttpReply {
     pub mcp_method: String,
     /// `Mcp-Name` of the reply, when the request named a tool.
     pub mcp_name: Option<String>,
-    /// `Mcp-Quantity` of the reply: the items a `memory.ingest` received.
+    /// `Mcp-Quantity` of the reply: the units a `tools/call` actually took (`None` for any other
+    /// method).
     pub mcp_quantity: Option<u64>,
     /// `Allow` of a 405.
     pub allow: Option<&'static str>,
+    /// `WWW-Authenticate` of a 401.
+    pub www_authenticate: Option<&'static str>,
 }
 
 const JSON: &str = "application/json";
@@ -94,19 +105,50 @@ fn wants_sse_only(accept: Option<&str>) -> bool {
     lower.contains(SSE) && !lower.contains(JSON) && !lower.contains("*/*")
 }
 
-/// The `Mcp-Quantity` a `memory.ingest` reply settles (E36a conformance finding): what the core
-/// actually took, not what the request carried. A refusal (a JSON-RPC error or an `isError`
-/// result) took nothing, and an idempotent replay reports `usage.quantity: 0`, so neither is
-/// settled as new events. A reply without a `usage.quantity` keeps the requested count.
-fn settled_quantity(asked: u64, reply: &Value) -> u64 {
-    if reply.get("error").is_some() || reply["result"]["isError"] == Value::Bool(true) {
+/// The `Mcp-Quantity` of a `tools/call` reply (E34 settlement contract, `docs/api/billing.md`):
+/// the units the core actually took, which is all the gateway bills.
+///
+/// - 0 for a JSON-RPC error, an `isError` result, an MRTR answer (`input_required`,
+///   `approval_required`), a declined L2 confirmation (`ran: false`), a write recorded as a pending
+///   intent, and an idempotent replay;
+/// - 0 for a read (invariant 10: whatever the gateway's table says, a read is never billed);
+/// - `usage.quantity` when the result reports one (`memory.ingest`: the events newly stored, 0 for a
+///   replay);
+/// - otherwise 1 for a tool that ran (`memory.append_note` that wrote its note, a model op), and
+///   for a `memory.ingest` without `usage` the count it was sent (`asked`).
+fn settled_quantity(name: Option<&str>, asked: u64, reply: &Value) -> u64 {
+    use crate::memory_api::{tool_level, ApiLevel, Tool};
+    if reply.get("error").is_some() {
         return 0;
     }
-    reply["result"]["content"][0]["text"]
+    let result = &reply["result"];
+    if result["isError"] == Value::Bool(true) || result.get("resultType").is_some_and(|kind| !kind.is_null()) {
+        return 0;
+    }
+    let Some(tool) = name.and_then(Tool::from_wire) else {
+        return 0;
+    };
+    if tool_level(tool) == ApiLevel::Read {
+        return 0;
+    }
+    let payload = result["content"][0]["text"]
         .as_str()
         .and_then(|text| serde_json::from_str::<Value>(text).ok())
-        .and_then(|payload| payload["usage"]["quantity"].as_u64())
-        .unwrap_or(asked)
+        .unwrap_or(Value::Null);
+    let took_nothing = payload["pending"] == Value::Bool(true)
+        || payload["ran"] == Value::Bool(false)
+        || payload["replayed"] == Value::Bool(true)
+        || payload["result"]["replayed"] == Value::Bool(true);
+    if took_nothing {
+        return 0;
+    }
+    if let Some(quantity) = payload["usage"]["quantity"].as_u64() {
+        return quantity;
+    }
+    if tool == Tool::MemoryIngest {
+        return asked;
+    }
+    1
 }
 
 /// Handle one request against `handler`.
@@ -150,6 +192,7 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
         mcp_name: name,
         mcp_quantity: None,
         allow: None,
+        www_authenticate: None,
     };
     if !request.method.eq_ignore_ascii_case("POST") {
         let message = if request.method.eq_ignore_ascii_case("GET") {
@@ -165,6 +208,7 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
             mcp_name: None,
             mcp_quantity: None,
             allow: Some("POST"),
+            www_authenticate: None,
         };
     }
     let header_method = request.mcp_method.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
@@ -232,7 +276,8 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
             _ => {}
         }
     }
-    let quantity = (body_method == "tools/call" && body_name.as_deref() == Some("memory.ingest")).then(|| {
+    let is_call = body_method == "tools/call";
+    let asked = if body_name.as_deref() == Some("memory.ingest") {
         let arguments = &object.get("params").and_then(|params| params.get("arguments"));
         ["events", "turns"]
             .iter()
@@ -240,28 +285,33 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
             .map(|items| items.len() as u64)
             .sum::<u64>()
             .max(1)
-    });
+    } else {
+        1
+    };
     let line = message.to_string();
     let reply = handler.handle_line_as(&line, request.bearer);
     let name = body_name.filter(|_| body_method == "tools/call");
     let Some(reply) = reply else {
-        // A notification (no id): accepted, nothing to answer.
+        // A notification (no id): accepted, nothing to answer; a `tools/call` without an id runs
+        // nothing, so it settles nothing.
         return HttpReply {
             status: 202,
             content_type: JSON,
             body: String::new(),
             mcp_method: body_method,
             mcp_name: name,
-            mcp_quantity: quantity,
+            mcp_quantity: is_call.then_some(0),
             allow: None,
+            www_authenticate: None,
         };
     };
     let parsed = serde_json::from_str::<Value>(&reply).ok();
-    let status = match &parsed {
-        Some(value) if value["error"]["code"].as_i64() == Some(-32700) => 400,
-        _ => 200,
+    let (status, www_authenticate) = match parsed.as_ref().and_then(|value| value["error"]["code"].as_i64()) {
+        Some(-32700) => (400, None),
+        Some(crate::mcp::TOKEN_INVALID_CODE) => (401, Some(WWW_AUTHENTICATE)),
+        _ => (200, None),
     };
-    let quantity = quantity.map(|asked| parsed.as_ref().map_or(asked, |value| settled_quantity(asked, value)));
+    let quantity = is_call.then(|| parsed.as_ref().map_or(0, |value| settled_quantity(name.as_deref(), asked, value)));
     // E36a conformance finding: this transport speaks 2026-07-28 (every reply says so in
     // `Mcp-Protocol-Version`), so an `initialize` that asks for it is answered with it rather than
     // negotiated down to the newest stdio version, which would contradict the header.
@@ -288,6 +338,7 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
         mcp_name: name,
         mcp_quantity: quantity,
         allow: None,
+        www_authenticate,
     }
 }
 
@@ -349,7 +400,7 @@ mod tests {
         assert_eq!(reply.status, 200);
         assert_eq!(reply.mcp_method, "tools/call");
         assert_eq!(reply.mcp_name.as_deref(), Some("state.commitments.list"));
-        assert_eq!(reply.mcp_quantity, None);
+        assert_eq!(reply.mcp_quantity, Some(0), "a read settles nothing (invariant 10)");
         let value: Value = serde_json::from_str(&reply.body).unwrap();
         assert_eq!(value["result"]["_meta"]["ttlMs"], crate::mcp::READ_TTL_MS);
         assert_eq!(value["result"]["_meta"]["cacheScope"], crate::mcp::CACHE_SCOPE);
@@ -409,6 +460,77 @@ mod tests {
         assert_eq!(taken(text(r#"{"accepted":true}"#)), Some(2), "no usage: the requested count");
         assert_eq!(taken(r#"{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"missing_argument: idempotency_key is required"}}"#.into()), Some(0));
         assert_eq!(taken(r#"{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"{}"}],"isError":true}}"#.into()), Some(0));
+    }
+
+    /// E34 settlement contract (`docs/api/billing.md`, "Hosted `/mcp`"): every `tools/call` reply
+    /// says what the core took, one case per row of the contract.
+    #[test]
+    fn every_tools_call_reply_says_what_the_core_took() {
+        struct Canned(String);
+        impl McpHandler for Canned {
+            fn handle_line_as(&self, _: &str, _: Option<&str>) -> Option<String> {
+                Some(self.0.clone())
+            }
+        }
+        let settled = |tool: &str, reply: Value| {
+            let body = json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": { "name": tool, "arguments": {} } }).to_string();
+            handle(&Canned(reply.to_string()), &post(&body, Some("tools/call"), Some(tool))).mcp_quantity
+        };
+        let ran = |payload: Value| json!({ "jsonrpc": "2.0", "id": 9, "result": { "content": [{ "type": "text", "text": payload.to_string() }], "isError": false } });
+        // A note that was written: 1.
+        assert_eq!(settled("memory.append_note", ran(json!({ "accepted": true, "note_id": 42 }))), Some(1));
+        // A billable model op that ran: 1.
+        assert_eq!(settled("translate.text", ran(json!({ "text": "bonjour" }))), Some(1));
+        // A JSON-RPC error, an isError result: 0.
+        assert_eq!(settled("memory.append_note", json!({ "jsonrpc": "2.0", "id": 9, "error": { "code": -32602, "message": "missing_argument: text" } })), Some(0));
+        assert_eq!(settled("translate.text", json!({ "jsonrpc": "2.0", "id": 9, "result": { "content": [{ "type": "text", "text": "{\"error\":\"unavailable\"}" }], "isError": true } })), Some(0));
+        // L2 input_required, and a declined confirmation: 0.
+        assert_eq!(settled("memory.append_note", json!({ "jsonrpc": "2.0", "id": 9, "result": { "resultType": "input_required", "inputRequests": [], "content": [{ "type": "text", "text": "{}" }], "isError": false } })), Some(0));
+        assert_eq!(settled("memory.append_note", ran(json!({ "ran": false, "declined": true }))), Some(0));
+        // L3 approval_required, and a write recorded as a pending intent: 0.
+        assert_eq!(settled("actions.execute", json!({ "jsonrpc": "2.0", "id": 9, "result": { "resultType": "approval_required", "approval": { "approval_id": 3 }, "content": [{ "type": "text", "text": "{\"pending\":true,\"approval_id\":3}" }], "isError": false } })), Some(0));
+        assert_eq!(settled("translate.text", ran(json!({ "accepted": true, "pending": true, "level": "L2" }))), Some(0));
+        // An idempotent replay: 0, whichever way the payload says it.
+        assert_eq!(settled("memory.append_note", ran(json!({ "accepted": true, "replayed": true }))), Some(0));
+        assert_eq!(settled("memory.ingest", ran(json!({ "usage": { "unit": "events", "quantity": 0 }, "result": { "replayed": true } }))), Some(0));
+        // A read: 0, whatever it returned (invariant 10).
+        assert_eq!(settled("memory.recall", ran(json!({ "usage": { "unit": "read", "quantity": 1 } }))), Some(0));
+        assert_eq!(settled("state.commitments.list", ran(json!({ "items": [] }))), Some(0));
+        // An unknown tool: 0.
+        assert_eq!(settled("conformance.no_such_tool", ran(json!({}))), Some(0));
+        // Anything that is not a tools/call carries no quantity.
+        let list = handle(&Canned(r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#.into()), &post(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#, Some("tools/list"), None));
+        assert_eq!(list.mcp_quantity, None);
+        // A tools/call notification runs nothing.
+        let note = handle(&server(), &post(r#"{"jsonrpc":"2.0","method":"tools/call","params":{"name":"memory.append_note","arguments":{"text":"x"}}}"#, Some("tools/call"), Some("memory.append_note")));
+        assert_eq!((note.status, note.mcp_quantity), (202, Some(0)));
+    }
+
+    /// E34: a call refused for its bearer is HTTP 401 with `WWW-Authenticate: Bearer`, and the
+    /// JSON-RPC error stays the body.
+    #[test]
+    fn an_unauthenticated_call_is_401_with_www_authenticate() {
+        let live = Arc::new(crate::live_tokens::LiveTokens::new(
+            || {
+                let mut registry = crate::memory_api::TokenRegistry::new();
+                registry.issue("good-token");
+                Ok(registry)
+            },
+            || None,
+        ));
+        let server = server().with_live_session(live, None, true);
+        let body = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"state.commitments.list","arguments":{}}}"#;
+        for bearer in [None, Some("wrong")] {
+            let reply = handle(&server, &HttpRequest { bearer, ..post(body, Some("tools/call"), Some("state.commitments.list")) });
+            assert_eq!(reply.status, 401, "{bearer:?}");
+            assert_eq!(reply.www_authenticate, Some(WWW_AUTHENTICATE));
+            assert!(WWW_AUTHENTICATE.starts_with("Bearer "));
+            assert_eq!(reply.mcp_quantity, Some(0));
+            let value: Value = serde_json::from_str(&reply.body).unwrap();
+            assert_eq!(value["error"]["code"], crate::mcp::TOKEN_INVALID_CODE);
+        }
+        let authed = handle(&server, &HttpRequest { bearer: Some("good-token"), ..post(body, Some("tools/call"), Some("state.commitments.list")) });
+        assert_eq!((authed.status, authed.www_authenticate), (200, None));
     }
 
     #[test]

@@ -22,8 +22,9 @@
 //!
 //! Config via env: `SHOGUN_DB_PATH` (default `./shogun.db`, which does not exist unless you put
 //! the app's store there, so the default alone always exits), `SHOGUN_API_TOKEN` (issues one client
-//! token; without it every call is 401), `SHOGUN_API_PORT` (default 7464, ephemeral fallback if
-//! busy). The port actually bound is written to `api.port` next to the DB for `shogun` to find.
+//! token; without it every call is 401), `SHOGUN_API_PORT` (default 7464; a busy port
+//! stops the server build from starting (threat model R3), the Mac app's build falls back to an
+//! ephemeral port). The port actually bound is written to `api.port` next to the DB for `shogun` to find.
 
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,7 +40,7 @@ use shogun_mcp::mcp::McpServer;
 use shogun_mcp::memory_api::TokenRegistry;
 use shogun_mcp::memory_api_settings;
 use shogun_mcp::startup_report;
-use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
+use shogun_mcp::server::{bind_exact, serve_on, AppState, MetricsSource, DEFAULT_PORT};
 
 /// The live SLO metrics source served at `GET /v1/metrics` (NFR-SLO-00). Wraps the shared
 /// registry the runtime records into; here it starts empty, so every SLO reads as unmeasured until
@@ -241,18 +242,28 @@ fn principal_keys(root: &std::path::Path) -> Arc<dyn shogun_core::tenancy::KeyPr
 /// (E3). None of the desktop gates (memory_api.json, plan files, Keychain, heartbeat) apply.
 /// REST and the MCP face (`POST /mcp`) both resolve the principal per request from the bearer.
 async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
-    use shogun_core::tenancy::{PrincipalStore, TokenPrincipalMap};
+    use shogun_core::tenancy::{ChainedResolver, DerivedBearers, PrincipalStore, TokenPrincipalMap};
     let keys = principal_keys(&root);
-    let resolver = TokenPrincipalMap::from_env().unwrap_or_else(|e| {
+    let listed = TokenPrincipalMap::from_env().unwrap_or_else(|e| {
         eprintln!("{FACE}: {e}");
         std::process::exit(1);
     });
-    if resolver.is_empty() {
+    // E34 / threat model R4: the gateway's derived `sgw1` bearers, verified against the shared
+    // secret. With it, `SHOGUN_PRINCIPAL_TOKENS` is not needed at all.
+    let derived = DerivedBearers::from_env().unwrap_or_else(|e| {
+        eprintln!("{FACE}: {e}");
+        std::process::exit(1);
+    });
+    if listed.is_empty() && derived.is_none() {
         eprintln!(
-            "{FACE}: no principal tokens loaded ({}) — every memory call is 401 until one is set",
+            "{FACE}: no principal tokens loaded ({} or {}) — every memory call is 401 until one is set",
+            DerivedBearers::ENV_VAR,
             TokenPrincipalMap::ENV_VAR
         );
+    } else if derived.is_some() {
+        eprintln!("{FACE}: derived gateway bearers accepted ({})", DerivedBearers::ENV_VAR);
     }
+    let resolver = ChainedResolver { listed, derived };
     let max_open = std::env::var("SHOGUN_MULTI_MAX_OPEN")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -270,13 +281,32 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(DEFAULT_PORT);
-    let listener = bind_local(port).await?;
+    // Threat model R3: the hosted sidecar never moves to another port when its own is taken.
+    let listener = bind_exact_or_exit(port).await;
     let addr = listener.local_addr()?;
     println!(
         "shogun-memory-api listening on http://{addr}  (multi-principal root: {}, max open: {max_open})",
         root.display()
     );
     serve_on(listener, state.with_port(addr.port())).await
+}
+
+/// Bind exactly `port` on loopback or end the process with a message that names the port and the
+/// fix (threat model R3): a server build never answers on a port other than the one configured.
+async fn bind_exact_or_exit(port: u16) -> tokio::net::TcpListener {
+    match bind_exact(port).await {
+        Ok(listener) => listener,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!(
+                "{FACE}: port {port} on 127.0.0.1 is already in use, so this server will not start. Stop the process that holds it, or set SHOGUN_API_PORT to a free port (and point the gateway's SHOGUN_SIDECAR_URL at it). It never moves to another port on its own."
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("{FACE}: could not listen on 127.0.0.1:{port} ({}).", e.kind());
+            std::process::exit(1);
+        }
+    }
 }
 
 /// The executor of remotely approved actions in multi-principal mode (E15 follow-up): each
@@ -561,9 +591,14 @@ async fn main() -> std::io::Result<()> {
             )
         });
 
-    let listener = bind_local(port).await?;
+    // The Mac app's server moves to an ephemeral port when 7464 is busy (FR-API-01) and records
+    // it in `api.port`; the server build refuses to start instead (threat model R3).
+    #[cfg(feature = "desktop")]
+    let listener = shogun_mcp::server::bind_local(port).await?;
+    #[cfg(not(feature = "desktop"))]
+    let listener = bind_exact_or_exit(port).await;
     let addr = listener.local_addr()?;
-    if addr.port() != port {
+    if addr.port() != port && port != 0 {
         eprintln!(
             "{FACE}: port {port} is in use, so this server is on {} instead; `shogun api status` reports it.",
             addr.port()
@@ -610,7 +645,7 @@ mod tests {
                         )
                     }))
                     .with_metrics(metrics);
-                let listener = bind_local(0).await.unwrap();
+                let listener = bind_exact(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 tx.send(port).unwrap();
                 let _ = serve_on(listener, state).await;

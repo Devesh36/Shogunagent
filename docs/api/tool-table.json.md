@@ -56,12 +56,16 @@ MCP tool annotations are computed from `level` by one rule (`apps/api/src/wellkn
 | `level` | `readOnlyHint` | `destructiveHint` | `idempotentHint` | `openWorldHint` |
 |---|---|---|---|---|
 | `read` | `true` | `false` | `true` | `false` |
-| `L1` | `false` | `false` | `true` | `false` |
+| `L1` | `false` | `false` | `false` | `false` |
 | `L2` | `false` | `false` | `false` | `false` |
 | `L3` | `false` | `true` | `false` | `true` |
 
 `L3` is the only tier that leaves the device (invariant 3), so it is the only one with
-`openWorldHint: true`. The SKILL.md sentence "`readOnlyHint: true` is L1; `destructiveHint: true`
+`openWorldHint: true`. The rule is the core's (`shogun_mcp::core_tools::annotations`, frozen by
+`wire-freeze`, invariant 11); the card follows it, and `apps/api/test/wellknown.test.ts` compares
+every core tool's card annotations with `crates/shogun-mcp/tests/snapshots/core_tools.json`. Until
+E34 the card said `idempotentHint: true` for `L1`, so `memory.ingest` / `memory.append_note`
+disagreed with the core's `tools/list`; the card was corrected, no wire name changed. The SKILL.md sentence "`readOnlyHint: true` is L1; `destructiveHint: true`
 with `openWorldHint: true` is L3" is a consequence of this table, not a second source.
 
 ## Validation

@@ -34,6 +34,8 @@ ALLOWLIST = {
     "crates/shogun-core/src/tenancy/key_provider/gcp.rs",    # Authorization: Bearer <workload token> for Cloud KMS
     "crates/shogun-core/src/tenancy/key_provider/vault.rs",  # X-Vault-Token header; the pod's service-account JWT in the Kubernetes login body
     "crates/shogun-integrations/src/keychain.rs",           # hands the value to the macOS Keychain (feature `desktop`, macOS only)
+    # E34 / threat model R4 (decision: docs/api/billing.md, "How the gateway names the principal to the sidecar").
+    "crates/shogun-core/src/tenancy/derived_bearer.rs",     # keys HMAC-SHA256 with SHOGUN_SIDECAR_BEARER_SECRET to verify the gateway's sgw1 bearers; never logged or stored
 }
 
 EXPOSE_RE = re.compile(r"\.expose\s*\(")

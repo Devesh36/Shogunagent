@@ -99,7 +99,8 @@ Common (sidecar):
 | `SHOGUN_KMS_TIMEOUT_SECS` | Deadline of one KMS round trip (default 10) |
 | `SHOGUN_MULTI_ROOT` / `--multi <dir>` | The principals directory (the wrapped keys live in it) |
 | `SHOGUN_MULTI_MAX_OPEN` | Open stores kept per process (default 64) |
-| `SHOGUN_PRINCIPAL_TOKENS` | `principal:token[:agent_id],...` (secret) |
+| `SHOGUN_SIDECAR_BEARER_SECRET` | Verifies the gateway's derived `sgw1.<principal>.<key_id>.<mac>` bearers, >= 32 characters, same value as the gateway's (secret). With it `SHOGUN_PRINCIPAL_TOKENS` is not needed |
+| `SHOGUN_PRINCIPAL_TOKENS` | `principal:token[:agent_id],...` (secret; optional with `SHOGUN_SIDECAR_BEARER_SECRET`, a listed token wins) |
 | `SHOGUN_ADMIN_TOKEN` | The operator's admin bearer for approvals and grants (secret) |
 | `SHOGUN_APPROVAL_SIGNING_KEY` | Approval token key shared with the gateway, >= 32 characters (secret) |
 | `SHOGUN_APPROVAL_BASE_URL` | Where a human approves an L3 request |

@@ -1490,7 +1490,14 @@ pub struct TokenRegistry {
     /// The token list could not be read (a live reload failed). Every call is refused, and so is
     /// process trust: an unreadable list must not read as "no token issued yet".
     unavailable: bool,
+    /// Bearers that verify on their own instead of being listed (E34: the gateway's derived `sgw1`
+    /// sidecar bearers, checked by the multi-principal resolver). Asked only for a bearer no
+    /// record matched; a `true` grants full scope, like a listed multi-mode token.
+    verifier: Option<BearerVerifier>,
 }
+
+/// A check for an unlisted bearer ([`TokenRegistry::with_verifier`]).
+pub type BearerVerifier = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 impl TokenRegistry {
     pub fn new() -> Self {
@@ -1504,7 +1511,16 @@ impl TokenRegistry {
             records: Vec::new(),
             grants: Vec::new(),
             unavailable: true,
+            verifier: None,
         }
+    }
+
+    /// Also accept bearers `verifier` answers `true` for (E34, multi-principal mode only), with
+    /// full scope. Listed records are scanned first, whole, as before.
+    #[must_use]
+    pub fn with_verifier(mut self, verifier: BearerVerifier) -> Self {
+        self.verifier = Some(verifier);
+        self
     }
 
     /// Register everything a Keychain token list holds: each token's verifier and scope, and each
@@ -1643,6 +1659,9 @@ impl TokenRegistry {
                 match (matched, read_only) {
                     (1, 1) => AuthResult::Granted(TokenScope::Read),
                     (1, _) => AuthResult::Granted(TokenScope::Full),
+                    _ if self.verifier.as_ref().is_some_and(|verify| verify(token)) => {
+                        AuthResult::Granted(TokenScope::Full)
+                    }
                     _ => AuthResult::DeniedInvalidToken,
                 }
             }

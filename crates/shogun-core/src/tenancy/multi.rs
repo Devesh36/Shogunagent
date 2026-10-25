@@ -143,7 +143,13 @@ pub fn token_registry(resolver: &dyn PrincipalResolver) -> TokenRegistry {
 /// The server state for `--multi`: per-request backends, a full-plan entitlement (the hosted
 /// gates are the wallet and the caps, not a plan), the in-process approval queue, no desktop gates.
 pub fn app_state(store: Arc<PrincipalStore>, resolver: Arc<dyn PrincipalResolver>, clock: Clock) -> AppState {
-    let tokens = Arc::new(token_registry(resolver.as_ref()));
+    let mut registry = token_registry(resolver.as_ref());
+    // E34: derived `sgw1` bearers are not listed; the registry asks the resolver about them.
+    if resolver.verifies_unlisted() {
+        let verify = resolver.clone();
+        registry = registry.with_verifier(Arc::new(move |token: &str| verify.resolve(token).is_some()));
+    }
+    let tokens = Arc::new(registry);
     // Approval ids are never reused across restarts: the in-process queue starts above every id
     // an earlier process could have handed out (a thousand per millisecond of uptime), so a
     // decision the principal's store persisted (V103) never names a later approval.

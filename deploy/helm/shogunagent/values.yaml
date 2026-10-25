@@ -105,6 +105,7 @@ approvals:
 
 secrets:
   # A Secret you manage, with any of these keys (all optional unless your setup needs them):
+  #   SHOGUN_SIDECAR_BEARER_SECRET (replaces SHOGUN_PRINCIPAL_TOKENS, E34 / R4),
   #   SHOGUN_PRINCIPAL_TOKENS, SHOGUN_ADMIN_TOKEN, SHOGUN_APPROVAL_SIGNING_KEY,
   #   WEBHOOK_SIGNING_SECRET, OPENAI_API_KEY, ANTHROPIC_API_KEY, LICENSE_PUBKEY_B64,
   #   RELAY_DATABASE_URL, AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (only without IRSA),

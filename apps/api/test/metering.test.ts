@@ -184,6 +184,18 @@ describe("metered /mcp", () => {
     expect(res.headers.get("x-usage-cost-micro-usd")).toBe("2100");
   });
 
+  it("relays actions.execute free: queueing an L3 action is never billed, and needs no router price (E34)", async () => {
+    const rig = makeAgentRig();
+    const { key } = await registerAgent(rig);
+    const res = await mcp(rig, key, { "mcp-method": "tools/call", "mcp-name": "actions.execute" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-usage-unit")).toBe("run");
+    expect(res.headers.get("x-usage-cost-micro-usd")).toBe("0");
+    expect(await wallet(rig, key)).toEqual({ balance: FREE_ALLOWANCE_MICROS, reserved: 0, available: FREE_ALLOWANCE_MICROS });
+    // A router run is still priced by the router, and refused without a price.
+    expect((await mcp(rig, key, { "mcp-method": "tools/call", "mcp-name": "router.run", "mcp-tool-id": "acme.search" })).status).toBe(400);
+  });
+
   it("books cost-bearing calls against the licence ledger's global breaker too (E3-T4)", async () => {
     const usage = new InMemoryUsageStore();
     const rig = makeAgentRig({ usage, spendBreaker: { capMicros: 1_200, prices: DEFAULT_BATCH_PRICES } });

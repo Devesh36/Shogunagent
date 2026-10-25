@@ -63,6 +63,19 @@ export const INGEST_TOOLS: ReadonlySet<string> = new Set(["memory.ingest", "memo
 
 export const RUN_TOOLS: ReadonlySet<string> = new Set(["router.run", "actions.execute"]);
 
+/** Run tools whose call is free (E34, invariant 10): `actions.execute` runs `local_search` (a
+ * read), refuses the desktop-only kinds, and only QUEUES a send / post / comment for a human's
+ * approval (L3). Nothing billable happens at the call; the external send, when a human approves
+ * it, is carried out by the principal's core with the principal's own connector credentials, and
+ * is billed where it executes (a router run, when it goes through the router, E32). Classified as a
+ * `run` still, so it needs the `run` scope; priced at $0 instead of asking the router. */
+export const FREE_RUN_TOOLS: ReadonlySet<string> = new Set(["actions.execute"]);
+
+/** The provider price (µ$) a `run` call has without asking the router: 0 for a free run tool. */
+export function fixedRunPriceMicros(name: string | undefined): number | undefined {
+  return name !== undefined && FREE_RUN_TOOLS.has(name) ? 0 : undefined;
+}
+
 /** Classify one MCP request by its method and (for `tools/call`) tool name. */
 export function classifyCall(method: string | undefined, name: string | undefined): MeterUnit {
   if (method !== TOOLS_CALL) return "protocol";
@@ -114,7 +127,7 @@ export function pricingDocument(ctx: PricingContext): Record<string, unknown> {
     units: {
       ingest: { per: "event", micro_usd: RATE_MICROS.ingest, usd_per_1000: RATE_MICROS.ingest * 1000 / MICRO_USD_PER_USD, tools: [...INGEST_TOOLS] },
       model_op: { per: "operation", micro_usd: RATE_MICROS.model_op, usd_per_1000: RATE_MICROS.model_op * 1000 / MICRO_USD_PER_USD, tools: "any tools/call not listed under read, ingest or run" },
-      run: { per: "run", micro_usd: null, formula: `ceil(provider_price_micro_usd * (1 + ${RUN_MARKUP_BPS / 10_000}))`, markup_bps: RUN_MARKUP_BPS, first_party_markup_bps: 0, charged: "once, by the wallet, on the provider's measured price; failures and empty results 0", tools: [...RUN_TOOLS] },
+      run: { per: "run", micro_usd: null, formula: `ceil(provider_price_micro_usd * (1 + ${RUN_MARKUP_BPS / 10_000}))`, markup_bps: RUN_MARKUP_BPS, first_party_markup_bps: 0, charged: "once, by the wallet, on the provider's measured price; failures and empty results 0", tools: [...RUN_TOOLS], free_at_call: { tools: [...FREE_RUN_TOOLS], why: "actions.execute queues an L3 action for a human's approval (free, invariant 10) or runs a read; the approved send is billed where it executes" } },
       storage: { per: "gb_month", micro_usd: RATE_MICROS.storage, billed: "by the storage sweep, not per call" },
       read: { per: "call", micro_usd: 0, tools: [...FREE_TOOLS, ...FREE_PREFIXES.map((p) => `${p}*`)] },
       protocol: { per: "request", micro_usd: 0, methods: "every MCP method other than tools/call" },
