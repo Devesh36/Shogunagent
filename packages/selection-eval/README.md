@@ -44,7 +44,7 @@ Surfaces (`surfaces/*.json`), each a list of `{vendor, tool_name, description, a
 | `mcp-registry` | one entry per MCP server | written from `SKILL.md` + the core tool names (plan §7.1) | supermemory server instructions (verbatim, research note B2); Mem0 OpenMemory and Zep (paraphrased from the competitor note); Exa (verbatim from the Monid fixture) |
 | `claude-code-plugin` | one per plugin / skill | `SKILL.md` frontmatter `description`, **read at run time** | supermemory skill frontmatter and README (verbatim, note B6); Mem0, Zep (paraphrased); a web-search plugin |
 | `openai-plugin` | one per plugin (`description_for_model`) | written from `SKILL.md` + the router connector | supermemory `searchMemories` / `addMemory` (verbatim, note B5); Mem0, Zep (paraphrased); web search |
-| `router-discover` | one per catalog entry | `apps/router/connectors/shogunagent/endpoints/*.ts` summary + description (verbatim) plus `memory.ingest` | Monid fixture entries (verbatim: tinyfish, contextdev, exa, hunter); supermemory (verbatim); Mem0, Zep (paraphrased) |
+| `router-discover` | one per catalog entry | first-party connector endpoints (`apps/router/connectors/{shogunagent,gmail,calendar,github,linear,slack}/endpoints/*.ts`) summary + description (verbatim) plus `memory.ingest` | Monid fixture entries (verbatim: tinyfish, contextdev, exa, hunter); supermemory (verbatim); Mem0, Zep (paraphrased) |
 
 Competitor text is quoted verbatim wherever the research notes quote it (`verbatim: true`, `source` names the note and section); paraphrases are marked `verbatim: false`. Keep it that way: the eval is only honest if the competitors' listings are theirs.
 

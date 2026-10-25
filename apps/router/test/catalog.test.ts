@@ -12,11 +12,19 @@ describe("catalog compile (E8-T2)", () => {
     const firstParty = catalog.entries().filter((e) => e.first_party);
     expect(monid.length).toBeGreaterThanOrEqual(10);
     expect(firstParty.map((e) => e.tool_id).sort()).toEqual([
+      "calendar.events.create",
+      "calendar.events.list",
+      "github.issues.create",
+      "github.issues.list",
+      "gmail.drafts.create",
+      "gmail.messages.send",
+      "linear.issues.create",
       "shogunagent.actions.execute",
       "shogunagent.memory.recall",
       "shogunagent.state.commitments.list",
       "shogunagent.state.open_loops.list",
       "shogunagent.state.people.get",
+      "slack.messages.post",
     ]);
     for (const e of catalog.entries()) {
       expect(e.categories.length).toBeGreaterThan(0);
@@ -60,7 +68,9 @@ describe("catalog compile (E8-T2)", () => {
       if (!def) throw new Error(entry.tool_id);
       for (const fx of def.endpoint.fixtures) {
         const deps = makeDeps({ catalog, responder: () => fx.response });
-        const out = await run(deps, { input: { tool_id: entry.tool_id, input: fx.input as Record<string, unknown>, idempotency_key: `${entry.tool_id}:${fx.scenario}` }, bearer: bearer() });
+        // L2 answers its one confirmation, as an agent would after input_required.
+        const confirm = entry.scope.level === "L2" ? { inputResponses: { confirm: true } } : {};
+        const out = await run(deps, { input: { tool_id: entry.tool_id, input: fx.input as Record<string, unknown>, idempotency_key: `${entry.tool_id}:${fx.scenario}`, ...confirm }, bearer: bearer() });
         replayed++;
         if (entry.scope.level === "L3") {
           expect(out.body.resultType).toBe("approval_required");
@@ -76,6 +86,6 @@ describe("catalog compile (E8-T2)", () => {
         if (fx.expect?.output !== undefined && "result" in out.body) expect(out.body.result).toEqual(fx.expect.output);
       }
     }
-    expect(replayed).toBeGreaterThanOrEqual(17);
+    expect(replayed).toBeGreaterThanOrEqual(38);
   });
 });

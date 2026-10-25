@@ -54,7 +54,7 @@ curl -s -X POST http://localhost:8787/v1/router/discover \
       "personal": { "formula": "personal = 0.6*success_rate + 0.25*price(cost_micro_usd / successes) + 0.15*hint_success_rate, …", "components": { "success_rate": 0.6, "cost_per_success": 0.25, "hint_success": 0.15 }, "min_runs": 5, "basis": "none", "cluster": "commit user" }
     },
     "catalog_hash": "…",
-    "considered": 17
+    "considered": 25
   },
   "usage": { "unit": "call", "quantity": 1, "cost_micro_usd": 0 },
   "latency_ms": 1,
@@ -127,6 +127,20 @@ curl -s -X POST http://localhost:8787/mcp -H 'content-type: application/json' \
 Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the content-hashed catalog with `pnpm --filter @shogunagent/router build:catalog` (writes `dist/catalog.json` and `dist/catalog.<hash12>.json`; the compiler rejects duplicate ids, unknown categories, missing scope class or health, bad usage numbers and fixtures that fail their schema).
 
 - `shogunagent` (first-party, `caller_bearer` auth to the state REST face; base URL from `SHOGUNAGENT_API_BASE_URL`): `state.commitments.list`, `state.open_loops.list`, `state.people.get`, `memory.recall` — reads, L1, $0 — and `actions.execute` — `external_send`, L3, $0.002.
+- First-party connectors to the user's services (E22), each with `provider.json`, fixtures and replay tests, credentials named by `credential_env` and injected at the transport only, $0.002 per call (README §7):
+
+  | tool_id | class | level | credential_env |
+  |---|---|---|---|
+  | `gmail.drafts.create` | `user_data_write` | L2 (`input_required` once) | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `gmail.messages.send` | `external_send` | L3 (approval URL) | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `calendar.events.list` | `read` | L1 | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `calendar.events.create` | `external_send` | L3 | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `github.issues.list` | `read` | L1 | `GITHUB_TOKEN` |
+  | `github.issues.create` | `external_send` | L3 | `GITHUB_TOKEN` |
+  | `linear.issues.create` | `external_send` | L3 | `LINEAR_OAUTH_TOKEN` |
+  | `slack.messages.post` | `external_send` | L3 | `SLACK_TOKEN` |
+
+  In the hosted router the transport resolves the calling principal's own OAuth token for these variables; the definitions only name them. `test/connectors.test.ts` asserts the levels, that no L3 run reaches the transport, that the draft asks once, header-injection safety for Gmail and credential injection at fetch time only.
 - `monid` (passthrough, `src/passthrough/monid.ts`): endpoints imported from a Monid-style catalog JSON, executed through Monid's `POST /v1/run` with the router's `MONID_API_KEY` injected at the transport, priced at Monid's price + 5%. The fixture catalog holds 12 endpoints from 11 upstream providers (search, scrape, enrichment, SEO, image generation, and one L3 `provision-numbers`).
 
 ## Listing pipeline (E21)

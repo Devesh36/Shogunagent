@@ -1,0 +1,17 @@
+{
+  "format": "shogunagent-provider/1",
+  "provider_id": "slack",
+  "legal_name": "Select, Inc.",
+  "contact": { "url": "https://shogunai.si" },
+  "payout_account_ref": "first-party:select",
+  "pricing": [
+    { "endpoint": "messages.post", "model": "per_call", "cost_micro_usd": 2000 }
+  ],
+  "data_handling": {
+    "retention": "user_account",
+    "retention_days": 0,
+    "zero_retention": false,
+    "regions": ["global"],
+    "statement": "The router relays each call to the Slack Web API and keeps no request or response body. A posted message is stored in the user's Slack workspace under Slack's terms and is visible to the channel's members until it is deleted."
+  }
+}
