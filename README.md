@@ -207,10 +207,20 @@ The router ranks third-party tools and our own connectors by the same published 
 ## Repository layout
 
 ```
-README.md            This document (English)
-README.ja.md         This document (Japanese)
-reports/             Full strategy report (Markdown and bilingual HTML)
-research_notes/      Seven research notes with inline sources
+README.md                  This document (English)
+README.ja.md               This document (Japanese)
+CLAUDE.md                  Rules for working in this repository
+crates/                    Rust workspace migrated from ShogunAI (engine, MCP/REST/CLI, evals)
+apps/api/                  Gateway and relay (Hono on Cloudflare Workers + Postgres)
+packages/config/           Shared config
+scripts/                   Invariant guards and the feature-matrix runner
+docs/implementation-plan.md  Epics and tasks per phase, with acceptance criteria
+docs/MIGRATION.md          What was migrated from ShogunAI, what was not, and why
+docs/migrations/           Rollback notes per schema migration
+docs/mcp/                  Memory API architecture notes
+docs/shogunai-origin/      Reference copies of ShogunAI design docs
+reports/                   Full strategy report (Markdown and bilingual HTML)
+research_notes/            Seven research notes with inline sources
 ```
 
 ## Open questions

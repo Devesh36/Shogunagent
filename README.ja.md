@@ -208,10 +208,20 @@ CI から回すハーネス。タスク記述を与えたとき、Claude・GPT�
 ## リポジトリ構成
 
 ```
-README.md            本文書（英語）
-README.ja.md         本文書（日本語）
-reports/             方針レポート全文（Markdown と日英 HTML）
-research_notes/      出典付きの調査ノート 7 本
+README.md                  本文書（英語）
+README.ja.md               本文書（日本語）
+CLAUDE.md                  このリポジトリで作業する際のルール
+crates/                    ShogunAI から移行した Rust ワークスペース（エンジン、MCP/REST/CLI、評価）
+apps/api/                  ゲートウェイと中継（Cloudflare Workers + Postgres 上の Hono）
+packages/config/           共有設定
+scripts/                   不変条件ガードと feature matrix 実行スクリプト
+docs/implementation-plan.md  フェーズごとのエピックとタスク、受け入れ条件
+docs/MIGRATION.md          ShogunAI から何を移行し、何を移行せず、なぜか
+docs/migrations/           マイグレーションごとのロールバック手順
+docs/mcp/                  Memory API のアーキテクチャ・ノート
+docs/shogunai-origin/      ShogunAI 設計文書の参照コピー
+reports/                   方針レポート全文（Markdown と日英 HTML）
+research_notes/            出典付きの調査ノート 7 本
 ```
 
 ## 未解決の問い
