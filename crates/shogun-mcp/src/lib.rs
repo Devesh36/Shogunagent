@@ -27,6 +27,8 @@ pub mod export_api;
 pub mod memfs_tool;
 /// The stateless Streamable HTTP transport, as pure request → reply logic (E4-T1).
 pub mod mcp_http;
+#[cfg(test)]
+mod jsonrpc_prop_tests;
 /// MRTR and URL-mode elicitation: how L2 / L3 look on the MCP face (E4-T2).
 pub mod mrtr;
 pub mod governance_api;

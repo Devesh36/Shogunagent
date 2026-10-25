@@ -14,6 +14,7 @@
  *                              persists across a restart, which is said loudly at boot and is only
  *                              acceptable because this entry is never production.
  * - METRICS_LOG_INTERVAL_SEC — structured `metrics {…}` log line period (default 60; 0 = off).
+ *   (E37: the OTLP span exporter, when configured in boot.ts, is flushed every 5 s here.)
  *
  * Every refusal here exits non-zero; the Worker answers 503 instead (it cannot exit). Nothing in
  * this file is imported by the Worker bundle.
@@ -29,6 +30,7 @@ import { InMemoryOAuthStore } from "./oauth/store.js";
 import { InMemoryEnterpriseStore } from "./enterprise/store.js";
 import { BootError, SERVER_TIMEOUTS, agentLaneLine, billingJobs, createRelay, formLaneLine, intFromEnv, postgresStore, relayConfigFromEnv, startPeriodicSweep, trialLaneLine, type RelayStore } from "./boot.js";
 import { operational } from "./logging.js";
+import { FLUSH_INTERVAL_MS } from "./observability.js";
 import { TokenBucketLimiter } from "./ratelimit.js";
 import { postgresClient } from "./sql.js";
 import { InMemoryUsageStore, utcDate } from "./usage.js";
@@ -120,6 +122,15 @@ if (metricsEverySec > 0) {
     })();
   }, metricsEverySec * 1000);
   timer.unref();
+}
+
+// E37: the opt-in OTLP export. Spans are buffered by the middleware and posted from here on Node
+// (the Worker flushes through `waitUntil`). A failed post drops the batch and counts it.
+if (relay.traceExporter) {
+  const exporter = relay.traceExporter;
+  const timer = setInterval(() => { void exporter.flush(); }, FLUSH_INTERVAL_MS);
+  timer.unref();
+  operational.info("otlp_trace_export enabled");
 }
 
 // The periodic sweep (audit M9): store retention maintenance, then book the provider's actual

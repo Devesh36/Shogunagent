@@ -624,3 +624,6 @@ pub use v2::{export_v2, import_v2, is_export_v2, namespace_id, ExportV2};
 mod tests;
 #[cfg(test)]
 mod tests_v2;
+
+#[cfg(test)]
+mod prop_tests;

@@ -110,7 +110,38 @@ fn settled_quantity(asked: u64, reply: &Value) -> u64 {
 }
 
 /// Handle one request against `handler`.
+/// The longest value a reply's `Mcp-Method` / `Mcp-Name` header carries.
+pub const MAX_METERING_HEADER_CHARS: usize = 128;
+
+/// What a reply's metering header says when the value it would echo cannot be a header value.
+pub const INVALID_METERING_VALUE: &str = "invalid";
+
+/// A value that is safe to put in a reply header: visible ASCII only (no space, no control
+/// character, nothing above `~`) and at most [`MAX_METERING_HEADER_CHARS`]. Anything else becomes
+/// [`INVALID_METERING_VALUE`].
+///
+/// E38 fuzzing found that a refused request echoed the body's `method` / `params.name` verbatim:
+/// a method with a newline made the axum adapter's response builder fail (a 500 instead of the
+/// 400 the transport chose), and an 8 MiB method was copied into a response header. The
+/// metering names are tool and method identifiers; nothing legitimate is lost here.
+pub fn metering_header_value(value: String) -> String {
+    if value.is_empty() || value.len() > MAX_METERING_HEADER_CHARS || !value.bytes().all(|b| b.is_ascii_graphic()) {
+        INVALID_METERING_VALUE.to_string()
+    } else {
+        value
+    }
+}
+
+/// Handle one request against `handler`. The reply's metering headers are always valid header
+/// values ([`metering_header_value`]).
 pub fn handle(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> HttpReply {
+    let mut reply = handle_unchecked(handler, request);
+    reply.mcp_method = metering_header_value(reply.mcp_method);
+    reply.mcp_name = reply.mcp_name.map(metering_header_value);
+    reply
+}
+
+fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> HttpReply {
     let refuse = |status: u16, body: String, method: String, name: Option<String>| HttpReply {
         status,
         content_type: JSON,
@@ -446,5 +477,26 @@ mod tests {
             let value: Value = serde_json::from_str(&handle(&server, &request).body).unwrap();
             assert_eq!(value["error"]["code"], crate::mcp::TOKEN_INVALID_CODE, "{bearer:?}: {value}");
         }
+    }
+
+    /// E38: a refused request whose body names a method or tool that cannot be a header value
+    /// gets `invalid` in the reply header, not an echo the adapter cannot send.
+    #[test]
+    fn a_refusal_never_echoes_an_unsendable_method_or_name() {
+        let newline = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list\r\nx-injected: 1","params":{"name":"a\nb"}}"#;
+        let reply = handle(&server(), &post(newline, Some("tools/list"), None));
+        assert_eq!(reply.status, 400);
+        assert_eq!(reply.mcp_method, INVALID_METERING_VALUE);
+        assert_eq!(reply.mcp_name.as_deref(), Some(INVALID_METERING_VALUE));
+        let long = format!(r#"{{"jsonrpc":"2.0","id":1,"method":"{}"}}"#, "m".repeat(10_000));
+        let reply = handle(&server(), &post(&long, Some("tools/list"), None));
+        assert_eq!(reply.status, 400);
+        assert_eq!(reply.mcp_method, INVALID_METERING_VALUE);
+        // A normal method and tool pass through unchanged.
+        let ok = handle(
+            &server(),
+            &post(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memory.search","arguments":{"query":"x"}}}"#, Some("tools/call"), Some("memory.search")),
+        );
+        assert_eq!((ok.mcp_method.as_str(), ok.mcp_name.as_deref()), ("tools/call", Some("memory.search")));
     }
 }

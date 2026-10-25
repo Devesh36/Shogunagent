@@ -45,6 +45,13 @@ const SUCCESS = "urn:oasis:names:tc:SAML:2.0:status:Success";
 const BEARER = "urn:oasis:names:tc:SAML:2.0:cm:bearer";
 const ACCEPTED_SIGNATURE_ALGS = ["http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"] as const;
 const ACCEPTED_DIGEST_ALGS = ["http://www.w3.org/2001/04/xmlenc#sha256", "http://www.w3.org/2001/04/xmlenc#sha512"] as const;
+/** The transforms a reference may name. A `Transform` without an accepted `Algorithm` is refused:
+ * xml-crypto 6 silently SKIPS one with no `Algorithm` (E38 fuzzing surfaced its deprecation
+ * warning), and a signature whose transforms are not exactly what was signed must not verify. */
+const ACCEPTED_TRANSFORMS = [
+  "http://www.w3.org/2000/09/xmldsig#enveloped-signature", "http://www.w3.org/2001/10/xml-exc-c14n#",
+  "http://www.w3.org/2001/10/xml-exc-c14n#WithComments", "http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
+] as const;
 const EMAIL_ATTRIBUTES = ["email", "mail", "emailaddress", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress", "urn:oid:0.9.2342.19200300.100.1.3"];
 
 export type SamlErrorCode =
@@ -162,6 +169,10 @@ function verifiedAssertionXml(xml: string, assertion: Element, certificates: rea
   if (refs.length !== 1 || !refs[0]) throw new SamlError("saml_reference_mismatch");
   const digest = child(refs[0], NS.ds, "DigestMethod")?.getAttribute("Algorithm") ?? "";
   if (!(ACCEPTED_DIGEST_ALGS as readonly string[]).includes(digest)) throw new SamlError("saml_algorithm_refused");
+  const transforms = child(refs[0], NS.ds, "Transforms");
+  for (const t of transforms ? children(transforms, NS.ds, "Transform") : []) {
+    if (!(ACCEPTED_TRANSFORMS as readonly string[]).includes(t.getAttribute("Algorithm") ?? "")) throw new SamlError("saml_algorithm_refused");
+  }
   const id = assertion.getAttribute("ID") ?? "";
   if (!id || refs[0].getAttribute("URI") !== `#${id}`) throw new SamlError("saml_reference_mismatch");
   for (const cert of certificates) {
