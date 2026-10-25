@@ -1,0 +1,39 @@
+name: audit
+
+# Dependency advisories, daily and whenever the dependency files change. Advisory ignores live
+# in .cargo/audit.toml with the reason for each.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  push:
+    branches: ["main"]
+    paths: ["Cargo.lock", "Cargo.toml", "crates/**/Cargo.toml", ".cargo/**", "pnpm-lock.yaml", "**/package.json"]
+  pull_request:
+    paths: ["Cargo.lock", "Cargo.toml", "crates/**/Cargo.toml", ".cargo/**", "pnpm-lock.yaml", "**/package.json"]
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit --locked
+      - run: python3 scripts/cargo-audit.py
+
+  pnpm-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high

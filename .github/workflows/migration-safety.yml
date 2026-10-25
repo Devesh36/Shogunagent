@@ -1,0 +1,59 @@
+name: MIGRATION SAFETY
+
+# A migration is frozen once it is on main: refinery aborts with DivergentVersion when an applied
+# migration's name or checksum changes, which would stop every principal store from opening on
+# upgrade. This workflow checks that migrations on the base are untouched (filenames, versions,
+# additive DDL, rollback notes) and that every schema version upgrades atomically to the latest.
+# No `paths:` filter, so it can be a required check on every PR.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migration-safety-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  frozen:
+    name: MIGRATION SAFETY — MUST PASS
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: migrations additive, named, documented, and frozen against the base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          python3 scripts/check-migrations.py --self-test
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="origin/$BASE_REF"
+          else
+            base="$BEFORE"
+          fi
+          python3 scripts/check-migrations.py --immutable-against "$base" --immutable-against-releases
+
+  upgrade:
+    name: MIGRATION UPGRADE — every version upgrades
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: every schema version upgrades atomically to the latest
+        run: cargo test -p shogun-memory --test upgrade_lineage --locked -- --nocapture
