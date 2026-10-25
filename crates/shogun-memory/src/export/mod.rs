@@ -543,3 +543,6 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod prop_tests;

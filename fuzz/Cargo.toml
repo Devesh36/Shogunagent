@@ -1,0 +1,44 @@
+# libFuzzer targets for the parsers that take untrusted input (plan E38). NIGHTLY ONLY: cargo-fuzz
+# needs `-Zsanitizer`. Not a member of the main workspace (root Cargo.toml `exclude`), so stable
+# `cargo build/test --workspace --locked` never sees it. The same properties run on stable in the
+# ordinary test suite:
+#   crates/shogun-mcp/src/jsonrpc_prop_tests.rs       (MCP JSON-RPC, stdio and Streamable HTTP)
+#   crates/shogun-memory/src/export/prop_tests.rs      (export v1 import)
+#   apps/api/test/saml-fuzz.test.ts                    (SAML Response, malformed XML)
+#
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run mcp_jsonrpc -- -max_total_time=300
+#   cargo +nightly fuzz run export_import -- -max_total_time=300
+[package]
+name = "shogunagent-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+shogun-agents = { path = "../crates/shogun-agents" }
+shogun-mcp = { path = "../crates/shogun-mcp" }
+shogun-memory = { path = "../crates/shogun-memory" }
+
+# Its own workspace: never pulled into the root one.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "mcp_jsonrpc"
+path = "fuzz_targets/mcp_jsonrpc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "export_import"
+path = "fuzz_targets/export_import.rs"
+test = false
+doc = false
+bench = false
