@@ -1,0 +1,50 @@
+{
+  "id": "openai-plugin",
+  "title": "OpenAI Plugin listing (description_for_model)",
+  "framing": "Each tool below is a plugin as listed for a model (its description_for_model). Calling a tool means using that plugin for the task.",
+  "candidates": [
+    {
+      "vendor": "shogunagent",
+      "tool_name": "shogunagent",
+      "description": "Plugin for the user's state of work. Use it to find what the user committed to — promises, deliverables, deadlines they owe someone (state.commitments.list); what is pending with a person or project — unanswered questions, blockers, things others owe the user (state.open_loops.list); who someone is to the user and the history between them (state.people.get); and cited context on a topic from the user's own memory before you act (memory.recall, memory.get_context_pack). Use it to record what an agent did or learned at a checkpoint so the next agent starts from it (memory.ingest). Use it to queue an email, message or calendar event for the user's explicit approval; nothing is sent until a human approves (actions.execute). Every fact carries its source quote and a confidence score. Reads are free. Do not use it to store conversation transcripts or generic preferences, or to search the public web.",
+      "annotations": { "auth": "bearer sa_live_… or none for discover/inspect/narrow reads", "cost": "reads free; ingest per 1K events; actions $0.002 per executed action" },
+      "source": "Written for this eval from SKILL.md and apps/router/connectors/shogunagent/endpoints/*.ts.",
+      "verbatim": false
+    },
+    {
+      "vendor": "supermemory",
+      "tool_name": "searchMemories",
+      "description": "Search the configured namespace for relevant facts, preferences, history, and source context. Use when explicitly asked to search or recall, or when past context could materially improve the response; do not invoke reflexively on every turn. Hybrid results mix learned memories (memory field) and source chunks (chunk field). Only an ID on a result containing a memory field is a memory ID that can be passed to memoryForget.",
+      "source": "research_notes/ShogunAgent AIエージェント向けサービス戦略/supermemory_deep_dive.md §B5 (packages/tools/src/tools-descriptions.ts, searchMemories).",
+      "verbatim": true
+    },
+    {
+      "vendor": "supermemory",
+      "tool_name": "addMemory",
+      "description": "Add (remember) memories/details/information about the user or other facts or entities. Run when explicitly asked or when the user mentions any information generalizable beyond the context of the current conversation.",
+      "source": "research_notes/ShogunAgent AIエージェント向けサービス戦略/supermemory_deep_dive.md §B5 (packages/tools/src/tools-descriptions.ts, addMemory).",
+      "verbatim": true
+    },
+    {
+      "vendor": "mem0",
+      "tool_name": "mem0",
+      "description": "Mem0 memory tools: add_memory stores memories, facts and preferences about a user or agent; search_memories retrieves the relevant memories for a query with filters (user_id, agent_id, metadata). Memories are extracted and consolidated per user across sessions, with optional graph memory for entity linking.",
+      "source": "Paraphrased from research_notes/ShogunAgent AIエージェント向けサービス戦略/memory_tech_benchmarks_architecture.md ('Mem0 MCP add_memory / search_memories with filters') and memory_competitor_landscape.md (Mem0 row).",
+      "verbatim": false
+    },
+    {
+      "vendor": "zep",
+      "tool_name": "zep",
+      "description": "Zep memory for agents: add messages and data as episodes to a user's temporal knowledge graph; get a context block of relevant facts and entities for the current thread to put in your prompt; search the graph for nodes and edges. Facts carry valid-from and valid-to times so you can tell what is currently true.",
+      "source": "Paraphrased from research_notes/ShogunAgent AIエージェント向けサービス戦略/memory_competitor_landscape.md (Zep / Graphiti row).",
+      "verbatim": false
+    },
+    {
+      "vendor": "websearch",
+      "tool_name": "web_search",
+      "description": "Search the public web and read pages. Returns ranked links with snippets for a query, or the readable text of a single public URL as Markdown. Use for current facts, news, documentation and finding pages to read. Not for the user's own notes or documents.",
+      "source": "Written for this eval after the web-search and fetch entries in apps/router/connectors/monid/catalog.fixture.json.",
+      "verbatim": false
+    }
+  ]
+}

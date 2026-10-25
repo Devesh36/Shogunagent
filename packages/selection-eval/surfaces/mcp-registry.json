@@ -1,0 +1,54 @@
+{
+  "id": "mcp-registry",
+  "title": "MCP Registry listing (server.json description)",
+  "framing": "Each tool below is an MCP server as listed in the MCP Registry. Calling a tool means connecting to that server for the task.",
+  "candidates": [
+    {
+      "vendor": "shogunagent",
+      "tool_name": "io.shogunagent/state-layer",
+      "description": "The state layer for AI agents. Read what is true about the user's work right now — the people they work with, their projects, what they committed to and what is still pending with someone — each fact with the sentence it rests on and a confidence score. Recall budgeted, cited context from the user's own event log before you act. Write what you did or learned (memory.ingest) so the next agent, or your next session, starts from it. Queue an email, message or calendar event that leaves the user's world for the human's explicit approval (actions.execute); nothing is sent until they approve. Use it when a task depends on who the user is working with, what they promised, what they are waiting on, or what to hand to the next agent. Reads are free. Not a transcript store, not a preference store, not a web-search tool.",
+      "annotations": {
+        "tools": ["memory.search", "memory.get_context", "memory.get_context_pack", "memory.get_events", "memory.read_session", "memory.get_wrap", "memory.get_periods", "memory.recall", "calendar.upcoming", "profile.whoami", "state.commitments.list", "state.open_loops.list", "state.people.list", "state.projects.list", "state.people.get", "state.projects.get", "wiki.evidence", "actions.status", "memory.append_note", "memory.ingest", "actions.execute"],
+        "readOnlyHint_on_reads": true,
+        "cost": "reads free; memory.ingest per 1K events; actions.execute $0.002 per executed action"
+      },
+      "source": "Written for this eval from SKILL.md (frontmatter and 'When to use') and the core tool names in docs/implementation-plan.md §7.1.",
+      "verbatim": false
+    },
+    {
+      "vendor": "supermemory",
+      "tool_name": "supermemory-mcp",
+      "description": "Supermemory is the authenticated user's persistent memory and knowledge layer across conversations and spaces. Use these tools whenever the user wants to recall something... even if they do not mention Supermemory by name. Use the active or account-default space when none is named...",
+      "annotations": {
+        "tools": ["search_memory", "get_profile", "list_documents", "get_document", "list_memories", "list_spaces", "who_am_i", "select-space", "set-active-tag", "memory-graph", "fetch-graph-data", "add_memory", "forget_memory", "guided-save", "save-memory", "upload-file", "prepare-file-upload"],
+        "readOnlyHint": { "search_memory": true, "add_memory": false }
+      },
+      "source": "research_notes/ShogunAgent AIエージェント向けサービス戦略/supermemory_deep_dive.md §B2 (server instructions quoted from apps/mcp/src/server/server.ts; ellipses are the note's).",
+      "verbatim": true
+    },
+    {
+      "vendor": "mem0",
+      "tool_name": "openmemory-mcp",
+      "description": "OpenMemory MCP by Mem0: a local, Docker-based MCP memory server exposing add, search, list and delete_all memory tools to Cursor, Claude Desktop, Windsurf and Cline. Memory stays on the user's machine; a hosted no-Docker variant is also offered. Memories are extracted and consolidated facts and preferences per user or agent, retrievable by semantic search.",
+      "annotations": { "tools": ["add_memories", "search_memory", "list_memories", "delete_all_memories"] },
+      "source": "Paraphrased from research_notes/ShogunAgent AIエージェント向けサービス戦略/memory_competitor_landscape.md (Mem0 profile and comparison table: 'OpenMemory MCP (add, search, list, delete_all)').",
+      "verbatim": false
+    },
+    {
+      "vendor": "zep",
+      "tool_name": "zep-context-mcp",
+      "description": "Zep Context MCP Server: managed temporal knowledge-graph memory for agents, built on the Graphiti engine. Ingest episodes (messages, documents) into a per-user graph; retrieve a context block of relevant facts and entities for the current thread to put in the prompt; search the graph over entities and relationships, with custom entity and edge types. Facts carry the time they became valid and invalid.",
+      "annotations": { "tools": ["add_episode", "search_graph", "get_context_block", "manage_groups"] },
+      "source": "Paraphrased from research_notes/ShogunAgent AIエージェント向けサービス戦略/memory_competitor_landscape.md (Zep / Graphiti row: 'Episodes ingest → graph search / context block; Context MCP Server seats') and memory_tech_benchmarks_architecture.md (Graphiti MCP: episode/entity/relationship management, search, group management).",
+      "verbatim": false
+    },
+    {
+      "vendor": "exa",
+      "tool_name": "exa-search-mcp",
+      "description": "Neural web search that returns pages matching a described need. Search the web by describing what you want rather than by keywords; returns pages with highlights. Use for research-style discovery. Not for exact-phrase lookups and not for the user's own notes.",
+      "annotations": { "tools": ["search"], "readOnlyHint": true, "openWorldHint": true },
+      "source": "apps/router/connectors/monid/catalog.fixture.json (exa/search summary + description).",
+      "verbatim": true
+    }
+  ]
+}

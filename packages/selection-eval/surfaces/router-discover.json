@@ -1,0 +1,135 @@
+{
+  "id": "router-discover",
+  "title": "Router discover (tool-level catalog entries: summary + description)",
+  "framing": "Each tool below is an entry the router's discover returned for the task, from its catalog of first-party and third-party connectors. Calling a tool means running that entry.",
+  "candidates": [
+    {
+      "vendor": "shogunagent",
+      "tool_name": "state.commitments.list",
+      "description": "Find what the user committed to: promises, deliverables and deadlines they made to others. Lists the user's commitments — things the user said they would do, with the person they owe it to, the due date when known, the status (open, done, overdue) and the quoted evidence each one rests on. Use for: what did the user commit to, what does the user owe someone, what is due this week, which promises are overdue, what has the user promised to deliver. Free read (L1); results are the user's own state, scoped to your agent key.",
+      "annotations": { "exclusions": "Not for tasks other people owe the user (use state.open_loops.list), calendar events, or raw notes.", "categories": ["state", "memory"], "scope": "read / L1", "cost_micro_usd": 0, "first_party": true },
+      "source": "apps/router/connectors/shogunagent/endpoints/state.commitments.list.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "state.open_loops.list",
+      "description": "What is pending with a person or project: unanswered questions, blockers, things others owe the user. Lists the user's open loops — threads waiting on someone else, unanswered questions, blockers and follow-ups, each with the person or project it belongs to, when it was last seen and the quoted evidence. Use for: what is pending with this person, what is the user waiting on, what is blocked, what should the user follow up on, what did someone promise the user. Free read (L1); scoped to your agent key.",
+      "annotations": { "exclusions": "Not for the user's own promises (use state.commitments.list), calendar events, or full message history.", "categories": ["state", "memory"], "scope": "read / L1", "cost_micro_usd": 0, "first_party": true },
+      "source": "apps/router/connectors/shogunagent/endpoints/state.open_loops.list.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "state.people.get",
+      "description": "Who is this person to the user: role, organisation, relationship, recent context and what is pending with them. Returns one person from the user's world model by id or name: role, organisation, how the user knows them, last contact, the open loops and commitments between them, and the evidence. Use for: who is X, what do I know about X, prepare me for a meeting with X, what is my history with X. Free read (L1); scoped to your agent key.",
+      "annotations": { "exclusions": "Not for searching the public web about a person (use an enrichment tool), listing everyone (use state.people.list), or contact details the user never recorded.", "categories": ["state", "memory"], "scope": "read / L1", "cost_micro_usd": 0, "first_party": true },
+      "source": "apps/router/connectors/shogunagent/endpoints/state.people.get.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "memory.recall",
+      "description": "Recall what the user saw, said or did about a topic: a ranked, cited context pack from their own memory. Searches the user's event log and derived memory for a topic and returns a compact context pack: the most relevant excerpts with timestamps, sources and the people and projects involved. Use for: what do I know about X, what happened with X last week, remind me what was decided about X, give me context before replying. Free read (L1); scoped to your agent key.",
+      "annotations": { "exclusions": "Not for public web facts (use a search tool), storing new memory (use memory.ingest), or verbatim chat transcripts.", "categories": ["memory", "state"], "scope": "read / L1", "cost_micro_usd": 0, "first_party": true },
+      "source": "apps/router/connectors/shogunagent/endpoints/memory.recall.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "memory.ingest",
+      "description": "Record what an agent did or learned so the next agent starts from it. Appends events — a task's outcome, a decision, a checkpoint of what is done and what is still open, the turns that changed something — to the user's event log under your thread_key; the engine extracts people, projects, commitments and open loops from them with provenance. Use for: save a checkpoint for the next session, hand off to another agent, record this decision and its follow-ups, make this outcome visible to the user's other agents. Write (L1); metered per 1K events; idempotency_key required.",
+      "annotations": { "exclusions": "Not for verbatim transcripts, generic preferences, or an agent's own scratch notes (use namespace agent_scratch).", "categories": ["state", "memory"], "scope": "user_data_write / L1", "cost": "per 1K events", "first_party": true },
+      "source": "Written for this eval from SKILL.md ('Continuity', rules 2 and 3) and docs/implementation-plan.md §7.1 (memory.ingest, write L1 metered). No router endpoint file exists for it yet.",
+      "verbatim": false
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "actions.execute",
+      "description": "Send an email, post a message or create a calendar event on the user's behalf, after a human approves it. Queues an action that leaves the user's world — send an email reply, post a chat message, create a calendar event — for explicit human approval, then executes it through the user's connected services and records the outcome as state. Use for: reply to this thread, tell X that Y, put this on the calendar. Always L3: the call returns an approval URL; nothing is sent until a human approves. First-party tool run, $0.002 per executed action.",
+      "annotations": { "exclusions": "Not for drafting (draft locally and keep it as state), reading mail or messages (use the read tools), or anything the user has not asked to send.", "categories": ["approval", "communication", "state"], "scope": "external_send / L3", "cost_micro_usd": 2000, "first_party": true },
+      "source": "apps/router/connectors/shogunagent/endpoints/actions.execute.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "tinyfish",
+      "tool_name": "web-search",
+      "description": "Search the public web and return ranked result links with snippets. Web search over public pages for a query string: returns titles, URLs and snippets. Use for current facts, news and finding pages to read. Not for reading a page's full text (use a fetch or scrape endpoint) and not for the user's own documents.",
+      "annotations": { "categories": ["web_search"], "scope": "read / L1" },
+      "source": "apps/router/connectors/monid/catalog.fixture.json (tinyfish/web-search summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "tinyfish",
+      "tool_name": "fetch",
+      "description": "Fetch one public URL and return its readable text. Reads a single public web page by URL and returns its main text with the title. Use after a web search to read the page. Not for pages behind a login, and not a crawler.",
+      "annotations": { "categories": ["scrape"], "scope": "read / L1" },
+      "source": "apps/router/connectors/monid/catalog.fixture.json (tinyfish/fetch summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "contextdev",
+      "tool_name": "web/scrape/markdown",
+      "description": "Read the text content of a web page URL as Markdown. Converts one public page into clean Markdown: headings, lists, links, tables. The cheapest way to read a page's content. Not for JavaScript-heavy apps that need a browser, and not for the user's own files.",
+      "annotations": { "categories": ["scrape"], "scope": "read / L1" },
+      "source": "apps/router/connectors/monid/catalog.fixture.json (contextdev/web/scrape/markdown summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "exa",
+      "tool_name": "search",
+      "description": "Neural web search that returns pages matching a described need. Search the web by describing what you want rather than by keywords; returns pages with highlights. Use for research-style discovery. Not for exact-phrase lookups and not for the user's own notes.",
+      "annotations": { "categories": ["web_search"], "scope": "read / L1" },
+      "source": "apps/router/connectors/monid/catalog.fixture.json (exa/search summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "hunter",
+      "tool_name": "email-finder",
+      "description": "Find a professional email address from a name and company domain. Looks up the most likely work email for a person given first name, last name and domain, with a confidence score. Use for outreach research. Not for personal addresses and not a sender.",
+      "annotations": { "categories": ["enrichment"], "scope": "read / L1" },
+      "source": "apps/router/connectors/monid/catalog.fixture.json (hunter/email-finder summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "supermemory",
+      "tool_name": "searchMemories",
+      "description": "Search the configured namespace for relevant facts, preferences, history, and source context. Use when explicitly asked to search or recall, or when past context could materially improve the response; do not invoke reflexively on every turn. Hybrid results mix learned memories (memory field) and source chunks (chunk field). Only an ID on a result containing a memory field is a memory ID that can be passed to memoryForget.",
+      "annotations": { "categories": ["memory"], "scope": "read / L1" },
+      "source": "research_notes/ShogunAgent AIエージェント向けサービス戦略/supermemory_deep_dive.md §B5 (packages/tools/src/tools-descriptions.ts, searchMemories).",
+      "verbatim": true
+    },
+    {
+      "vendor": "supermemory",
+      "tool_name": "addMemory",
+      "description": "Add (remember) memories/details/information about the user or other facts or entities. Run when explicitly asked or when the user mentions any information generalizable beyond the context of the current conversation.",
+      "annotations": { "categories": ["memory"], "scope": "user_data_write / L2" },
+      "source": "research_notes/ShogunAgent AIエージェント向けサービス戦略/supermemory_deep_dive.md §B5 (packages/tools/src/tools-descriptions.ts, addMemory).",
+      "verbatim": true
+    },
+    {
+      "vendor": "mem0",
+      "tool_name": "search_memories",
+      "description": "Search a user's or agent's memories for a query and return the relevant ones, with filters (user_id, agent_id, metadata). Memories are extracted and consolidated facts and preferences across sessions.",
+      "annotations": { "categories": ["memory"], "scope": "read / L1" },
+      "source": "Paraphrased from research_notes/ShogunAgent AIエージェント向けサービス戦略/memory_tech_benchmarks_architecture.md ('Mem0 MCP add_memory / search_memories with filters').",
+      "verbatim": false
+    },
+    {
+      "vendor": "mem0",
+      "tool_name": "add_memory",
+      "description": "Store memories, facts and preferences about a user or agent from the conversation so they are available in later sessions. Scoped by user_id / agent_id; optional metadata and graph entity linking.",
+      "annotations": { "categories": ["memory"], "scope": "user_data_write / L2" },
+      "source": "Paraphrased from research_notes/ShogunAgent AIエージェント向けサービス戦略/memory_tech_benchmarks_architecture.md and memory_competitor_landscape.md (Mem0 row: add / search / get_all / delete).",
+      "verbatim": false
+    },
+    {
+      "vendor": "zep",
+      "tool_name": "get_context_block",
+      "description": "Get a context block of relevant facts and entities from the user's temporal knowledge graph for the current thread, ready to put in the prompt. Facts carry valid-from and valid-to times. Pair with adding messages as episodes to the graph.",
+      "annotations": { "categories": ["memory"], "scope": "read / L1" },
+      "source": "Paraphrased from research_notes/ShogunAgent AIエージェント向けサービス戦略/memory_competitor_landscape.md (Zep / Graphiti row: 'Episodes ingest → graph search / context block').",
+      "verbatim": false
+    }
+  ]
+}
