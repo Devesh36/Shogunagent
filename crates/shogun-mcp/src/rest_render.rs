@@ -487,6 +487,8 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
                 include_account_labels: matches!(tokens.authenticate(req.token.as_deref()),
                     crate::memory_api::AuthResult::Granted(crate::memory_api::TokenScope::Full)),
                 include_low: req.include_low,
+                // The REST face carries `?include_scratch` in the call scope (server.rs), not here.
+                include_scratch: false,
                 id,
                 key: mail_path_key(tool, &req.path),
                 mail: crate::backend::MailListQuery {

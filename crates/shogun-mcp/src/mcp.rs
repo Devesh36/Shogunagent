@@ -917,6 +917,10 @@ impl<B: MemoryBackend> McpServer<B> {
                         ),
                         Err(policy) => return error(id, -32602, policy.as_str()),
                     };
+                    let request = crate::backend::SearchRequestV1 {
+                        include_scratch: args.get("include_scratch").and_then(Value::as_bool).unwrap_or(false),
+                        ..request
+                    };
                     match self.backend.search(&request) {
                         Ok(response) => serde_json::to_string(&response)
                             .unwrap_or_else(|_| r#"{"error":"search_unavailable"}"#.to_string()),
@@ -935,6 +939,7 @@ impl<B: MemoryBackend> McpServer<B> {
                     let read_params = ReadParams {
                         include_account_labels: scope == TokenScope::Full,
                         include_low: args.get("include_low").and_then(Value::as_bool).unwrap_or(false),
+                        include_scratch: args.get("include_scratch").and_then(Value::as_bool).unwrap_or(false),
                         id: args.get("id").and_then(Value::as_i64),
                         // A mail get-by-key: `thread_key` (triage) or `key` (label).
                         // `state.split.evidence` names its table the way state.update does.

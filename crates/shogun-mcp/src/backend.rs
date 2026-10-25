@@ -104,6 +104,9 @@ pub struct SearchRequestV1 {
     pub depth: SearchDepthV1,
     pub range: Option<SearchTimeRangeV1>,
     pub source_kind: Option<MemorySourceFamilyV1>,
+    /// E2-T5: also return rows in the agents' `agent_scratch:*` namespaces. Off by default: a
+    /// search sees the shared world only.
+    pub include_scratch: bool,
 }
 
 impl SearchRequestV1 {
@@ -125,6 +128,7 @@ impl Default for SearchRequestV1 {
             depth: SearchDepthV1::Warm,
             range: None,
             source_kind: None,
+            include_scratch: false,
         }
     }
 }
@@ -490,6 +494,9 @@ pub struct ReadParams {
     pub app_bundle_id: Option<String>,
     pub person_id: Option<String>,
     pub project_id: Option<String>,
+    /// E2-T5: also return rows in the agents' `agent_scratch:*` namespaces (`memory.get_context_pack`,
+    /// `state.*`). Off by default: reads see the shared world only.
+    pub include_scratch: bool,
 }
 
 /// The result of a write tool (append_note = L1, meeting.record_now = L2). `Some(id)` when a row was

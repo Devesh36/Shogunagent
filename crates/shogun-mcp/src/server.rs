@@ -68,6 +68,24 @@ pub struct AppState {
     port: Option<u16>,
     /// Per-client limit on model-starting calls (2026-10-20 cost audit), keyed by token id.
     llm_limiter: Arc<crate::rate_limit::LlmRateLimiter>,
+    /// Multi-principal mode (E2-T2): the backend and the writer come from the request's bearer.
+    /// `None` is the single-principal server: `backend`, written as the owner.
+    principals: Option<Arc<dyn BackendResolver>>,
+}
+
+/// Multi-principal mode (E2-T2): which store and which writer a bearer token names. `apps/api`
+/// supplies the real agent keys in E3; the sidecar's `TokenPrincipalMap` stands in until then.
+pub trait BackendResolver: Send + Sync {
+    /// The backend for `token`, with the actor its writes record. `Err` carries the status and
+    /// the JSON body to answer with (401 for a token no principal owns, 503 for a store that
+    /// cannot be opened).
+    fn resolve(&self, token: &str) -> Result<ResolvedBackend, (u16, String)>;
+}
+
+/// One principal's backend and the actor (`agent:<id>`) the request's writes carry.
+pub struct ResolvedBackend {
+    pub backend: Arc<dyn MemoryBackend>,
+    pub actor: String,
 }
 
 impl AppState {
@@ -97,7 +115,36 @@ impl AppState {
             port: None,
             memory_gate: None,
             llm_limiter: Arc::new(crate::rate_limit::LlmRateLimiter::in_memory()),
+            principals: None,
         }
+    }
+
+    /// Serve many principals from one process (E2-T2): every memory request resolves its backend
+    /// and writer from the bearer through `resolver`; the backend given to [`AppState::new`] is
+    /// never read. Auth stays with the token registry, which must know the same tokens.
+    #[must_use]
+    pub fn with_backend_resolver(mut self, resolver: Arc<dyn BackendResolver>) -> Self {
+        self.principals = Some(resolver);
+        self
+    }
+
+    /// The backend and call scope for one request. Single-principal: the fixed backend, written as
+    /// the owner. Multi-principal: the resolver's answer, or the status and body to refuse with.
+    fn backend_for(
+        &self,
+        token: Option<&str>,
+        include_scratch: bool,
+    ) -> Result<(Arc<dyn MemoryBackend>, shogun_memory::actor::CallScope), (u16, String)> {
+        use shogun_memory::actor::{CallScope, Namespace, ReadScope, WriteContext};
+        let read = ReadScope { include_scratch };
+        let Some(resolver) = &self.principals else {
+            return Ok((self.backend.clone(), CallScope { write: WriteContext::owner(), read }));
+        };
+        let token = token.ok_or_else(|| (401, r#"{"error":"unauthorized"}"#.to_string()))?;
+        let resolved = resolver.resolve(token)?;
+        let write = WriteContext::new(&resolved.actor, Namespace::World)
+            .map_err(|_| (500, r#"{"error":"invalid_actor"}"#.to_string()))?;
+        Ok((resolved.backend, CallScope { write, read }))
     }
 
     /// Count model-starting calls against `limiter` (2026-10-20 cost audit). The standalone
@@ -282,6 +329,8 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
     let include_low = include_low_opt_in(raw_query);
+    // E2-T5: `?include_scratch` widens reads to the agents' scratch namespaces for this call.
+    let include_scratch = query_flag(raw_query, "include_scratch");
     let for_generation = query_flag(raw_query, "for_generation");
     // `?url=` (the web reads, issue #555) rides the same slot as `?q=`: one string per read.
     let query = raw_query
@@ -394,14 +443,22 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     return render(429, body);
                 }
             }
-            match routed {
+            // The store this request reads and writes, and the writer it records (E2-T2 / E2-T4).
+            // Only a route that touches memory needs one; status, metrics and approval polling
+            // answer without it.
+            let (backend, scope) = match state.backend_for(rreq.token.as_deref(), include_scratch) {
+                Ok(resolved) => resolved,
+                Err((status, body)) if tool.is_some() => return render(status, body),
+                Err(_) => (state.backend.clone(), shogun_memory::actor::CallScope::default()),
+            };
+            shogun_memory::actor::with_call_scope(scope, || match routed {
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
                 // A local action is answered here, before the queue (issue #779): a search runs,
                 // the screen-side kinds are refused. Sends take the approval queue.
                 Routed::Action => match rest::slack_proposal(
-                    rreq.body.as_deref(), state.backend.as_ref(),
+                    rreq.body.as_deref(), backend.as_ref(),
                     crate::forms_api::FormsAuth { token: rreq.token.clone(), admitted_by_token: true, client: None }, "api",
-                ).or_else(|| rest::local_answer(rreq.body.as_deref(), state.backend.as_ref())) {
+                ).or_else(|| rest::local_answer(rreq.body.as_deref(), backend.as_ref())) {
                     Some(answer) => answer,
                     None => with_approvals(&state, |queue, surface| {
                     rest::act(
@@ -444,7 +501,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                 // (L1, direct), which refuses on its own anything that starts capture sooner.
                 Routed::Write { tool: crate::memory_api::Tool::CaptureSetPaused, .. } => {
                     match crate::capture_pause_api::unpause_request(
-                        state.backend.as_ref(),
+                        backend.as_ref(),
                         rreq.body.as_deref(),
                     ) {
                         Some(pause) => with_approvals(&state, |queue, surface| {
@@ -456,7 +513,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                                 surface,
                             )
                         }),
-                        None => rest::respond_with(&rreq, &tokens, &ent, state.backend.as_ref()),
+                        None => rest::respond_with(&rreq, &tokens, &ent, backend.as_ref()),
                     }
                 }
                 // Issue #657: a capture_exclusions.set that drops an exclusion resumes capture, so
@@ -466,7 +523,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     tool: crate::memory_api::Tool::CaptureExclusionsSet,
                     ..
                 } => match crate::capture_exclusions_api::loosening(
-                    state.backend.as_ref(),
+                    backend.as_ref(),
                     rreq.body.as_deref(),
                 ) {
                     Some(change) => with_approvals(&state, |queue, surface| {
@@ -478,7 +535,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                             surface,
                         )
                     }),
-                    None => rest::respond_with(&rreq, &tokens, &ent, state.backend.as_ref()),
+                    None => rest::respond_with(&rreq, &tokens, &ent, backend.as_ref()),
                 },
                 // Issue #110: selecting a subscription CLI is the opt-in to a consumer plan's data
                 // handling, so it is an L3 request queued for the user. Switching to an API key or
@@ -488,7 +545,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     tool: crate::memory_api::Tool::AgentSourceSet,
                     ..
                 } => match crate::agent_source_api::loosening(
-                    state.backend.as_ref(),
+                    backend.as_ref(),
                     rreq.body.as_deref(),
                 ) {
                     Some(request) => with_approvals(&state, |queue, surface| {
@@ -500,7 +557,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                             surface,
                         )
                     }),
-                    None => rest::respond_with(&rreq, &tokens, &ent, state.backend.as_ref()),
+                    None => rest::respond_with(&rreq, &tokens, &ent, backend.as_ref()),
                 },
                 // Issue #782: turning Visual recall on, or keeping saved screens longer, starts or
                 // lengthens keeping images of the screen, so it is an L3 request queued for the
@@ -510,7 +567,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     if crate::visual_recall_settings_api::is_settings_write(tool) =>
                 {
                     match crate::visual_recall_settings_api::loosening(
-                        state.backend.as_ref(),
+                        backend.as_ref(),
                         tool,
                         rreq.body.as_deref(),
                     ) {
@@ -523,7 +580,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                                 surface,
                             )
                         }),
-                        None => rest::respond_with(&rreq, &tokens, &ent, state.backend.as_ref()),
+                        None => rest::respond_with(&rreq, &tokens, &ent, backend.as_ref()),
                     }
                 }
                 // Issue #779: a Gmail archive / unarchive the thread's label has no standing
@@ -533,7 +590,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     let raw = rreq.body.as_deref().unwrap_or("");
                     let body = rest::mail_write_body(tool, &rreq.path, raw);
                     match crate::mail_archive_api::needs_approval(
-                        state.backend.as_ref(),
+                        backend.as_ref(),
                         tool,
                         Some(body.as_deref().unwrap_or(raw)),
                     ) {
@@ -546,7 +603,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                                 surface,
                             )
                         }),
-                        None => rest::respond_with(&rreq, &tokens, &ent, state.backend.as_ref()),
+                        None => rest::respond_with(&rreq, &tokens, &ent, backend.as_ref()),
                     }
                 }
                 Routed::ApprovalStatus { id } => {
@@ -582,8 +639,8 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     rest::plan_locked_body(state.plan_lock.as_ref().and_then(|lock| lock())),
                 ),
                 // reads/writes/status/errors go through the backend renderer.
-                _ => rest::respond_with(&rreq, &tokens, &ent, state.backend.as_ref()),
-            }
+                _ => rest::respond_with(&rreq, &tokens, &ent, backend.as_ref()),
+            })
         }
     };
 
