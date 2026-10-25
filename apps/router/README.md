@@ -41,15 +41,17 @@ curl -s -X POST http://localhost:8787/v1/router/discover \
         "categories": ["state", "memory"],
         "permission_level": "L1",
         "score": 0.787,
-        "scoreBreakdown": { "task_fit": 0.8089, "price": 1, "health": 0.999, "latency": 0.8929, "personal": 0 },
+        "scoreBreakdown": { "task_fit": 0.8089, "price": 1, "health": 0.999, "latency": 0.8929, "personal": 0.9729 },
         "price": { "model": "per_call", "unit": "call", "cost_micro_usd": 0, "quote_micro_usd": 0 },
         "p50_ms": 40,
-        "p95_ms": 120
+        "p95_ms": 120,
+        "personal": { "value": 0.9729, "runs": 0, "successes": 0, "basis": "none", "level": null, "cluster": "commit user" }
       }
     ],
     "ranking": {
-      "formula": "score = task_fit × (0.45*price + 0.30*health + 0.25*latency + 0*personal). …",
-      "weights": { "price": 0.45, "health": 0.3, "latency": 0.25, "personal": 0 }
+      "formula": "score = task_fit × (0.3825*price + 0.255*health + 0.2125*latency + 0.15*personal). …",
+      "weights": { "price": 0.3825, "health": 0.255, "latency": 0.2125, "personal": 0.15 },
+      "personal": { "formula": "personal = 0.6*success_rate + 0.25*price(cost_micro_usd / successes) + 0.15*hint_success_rate, …", "components": { "success_rate": 0.6, "cost_per_success": 0.25, "hint_success": 0.15 }, "min_runs": 5, "basis": "none", "cluster": "commit user" }
     },
     "catalog_hash": "…",
     "considered": 17
@@ -61,7 +63,20 @@ curl -s -X POST http://localhost:8787/v1/router/discover \
 }
 ```
 
-Ranking (`src/discover.ts`): `task_fit` is BM25 over id, summary (×2), categories (×2), description and notes, normalised by the query's bound to [0, 1), with exclusion text left out of the index; `price = 1 / (1 + ln(1 + quote_micro_usd / 1000))` ($0 → 1, strictly decreasing); `health` = observed success rate (declared baseline until 20 runs); `latency = 1 / (1 + p95_ms / 1000)`; `personal` = 0 until Phase 2 reads `tool_runs`. Ties break on lower quote, then `tool_id`. `budget_micro_usd` drops tools whose quote exceeds it; `categories` restricts; `limit` ≤ 50.
+Ranking (`src/discover.ts`): `task_fit` is BM25 over id, summary (×2), categories (×2), description and notes, normalised by the query's bound to [0, 1), with exclusion text left out of the index; `price = 1 / (1 + ln(1 + quote_micro_usd / 1000))` ($0 → 1, strictly decreasing); `health` = observed success rate (declared baseline until 20 runs); `latency = 1 / (1 + p95_ms / 1000)`; `personal` is described below. Ties break on lower quote, then `tool_id`. `budget_micro_usd` drops tools whose quote exceeds it; `categories` restricts; `limit` ≤ 50.
+
+#### Personal factor (E20)
+
+`discover` called with an agent key as the bearer is personalised from that principal's own run history (`src/personal.ts`); without a key, or with an invalid one, it is the same for everyone.
+
+- **What is learned.** Every `ToolRunRecord` (body-less, `actor` is a hash of the key) also goes to `PersonalRanker`, which keeps per principal a row per tool × task cluster: counted runs, successes, runs that followed a hint and how many of those succeeded, and cost spent. Counted outcomes are `ok` (success), `empty`, `provider_error`, `transport_error`; permission stops, input errors, auth/payment stops, replays and anonymous runs are not evidence about the tool.
+- **Task clusters** use the same BM25 tokenizer as task fit: the cluster of a task phrase is its 3 most distinctive stemmed terms (highest catalog IDF), sorted — `"what did the user commit to"` → `"commit user"`. No model call.
+- **Value.** `personal = 0.6·success_rate + 0.25·price(cost_micro_usd / successes) + 0.15·hint_success_rate` over the rows of the task's cluster when it has ≥ 5 runs, otherwise over the tool's rows across clusters when those have ≥ 5 runs (`level: "task_cluster" | "tool"`). `price(·)` is the same price curve as the ranking; `hint_success_rate` falls back to `success_rate` when no hint was followed.
+- **Weight.** `PERSONAL_WEIGHT = 0.15`. The E8 mix (0.45 price, 0.30 health, 0.25 latency) is scaled by 0.85, so the published weights are 0.3825 / 0.255 / 0.2125 / 0.15 and `score = task_fit × (…)` as before.
+- **Neutral.** With fewer than 5 counted runs (`basis: "none"`), `personal` equals the candidate's own `0.45·price + 0.30·health + 0.25·latency`, so its score is exactly the unpersonalised score — the term has no effect until there is evidence.
+- **Explained.** Every candidate carries `personal: { value, runs, successes, basis: "principal" | "none", level, cluster }`, and `ranking.personal` publishes the formula, components and minimum.
+- **Isolated.** `PersonalStore` (`record(principal, …)`, `profile(principal)`) has no cross-principal read. `InMemoryPersonalStore` is the development stub; in production the store is the principal's own ShogunAgent state — `tool_runs` (V94) in that principal's file, reached through the state sidecar — never a hosted shared database. `test/personal.test.ts` shows that principal A's history never changes principal B's ranking.
+- **No self-preferencing.** The factor is computed the same way for first- and third-party tools; `test/personal.test.ts` shows a first-party tool with a worse history ranked below a third-party tool with a better one at equal fit and price.
 
 ### inspect
 
@@ -120,6 +135,7 @@ Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the conte
 |---|---|---|
 | `MeteringClient` (`identify`, `reserve`, `settle`) | `InMemoryMeteringClient` — `sa_` keys, $1 default balance, 401 for anonymous metered runs, x402-shaped 402 | apps/api wallet (E9) |
 | `RunLogSink` | `InMemoryRunLogSink` | `tool_runs` (V94) in the principal's store |
+| `PersonalStore` (behind `PersonalRanker`, E20) | `InMemoryPersonalStore` | the principal's `tool_runs` (V94) via the sidecar — never a hosted shared DB |
 | `IdempotencyStore` | `InMemoryIdempotencyStore` (24 h TTL, bounded) | the principal's store — never a hosted DB (invariant 2) |
 | `HealthStore` | `InMemoryHealthStore` (observed after 20 runs) | shared status store (`/.well-known/status.json`) |
 | `Transport` | `createFetchTransport({ env })` | same; `createReplayTransport` for tests |

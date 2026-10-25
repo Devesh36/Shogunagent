@@ -19,6 +19,7 @@ import type { IdempotencyStore } from "./idempotency.js";
 import type { Logger } from "./logging.js";
 import type { MeteringClient } from "./metering.js";
 import { ERROR_STATUS, errorBody, type ErrorBody, type NextAction } from "./responses.js";
+import type { PersonalRanker } from "./personal.js";
 import { clampTaskHint, type RunLogSink, type RunOutcome } from "./runlog.js";
 import { authorize, type Level } from "./scope.js";
 import type { Secret } from "./secret.js";
@@ -31,6 +32,11 @@ export interface RunDeps {
   transport: Transport;
   metering: MeteringClient;
   runLog: RunLogSink;
+  /**
+   * The personal learner (E20): receives the same run records as `runLog` and keeps each
+   * principal's tool × task-cluster outcomes in that principal's store. Optional.
+   */
+  personal?: PersonalRanker;
   idempotency: IdempotencyStore;
   health: HealthStore;
   logger: Logger;
@@ -116,7 +122,9 @@ export async function run(deps: RunDeps, call: RunCall): Promise<RunResult> {
   const finish = async (outcome: RunOutcome, cost: number, status: number, body: RunBody): Promise<RunResult> => {
     const latency = now() - start;
     body.latency_ms = latency;
-    await deps.runLog.record({ ts: start, actor, tool_id: toolId, task_hint: taskHint, outcome, cost_micro_usd: cost, latency_ms: latency, hint_followed: hintFollowed });
+    const record = { ts: start, actor, tool_id: toolId, task_hint: taskHint, outcome, cost_micro_usd: cost, latency_ms: latency, hint_followed: hintFollowed };
+    await deps.runLog.record(record);
+    if (deps.personal) await deps.personal.record(record);
     deps.logger.log({ kind: "run", tool_id: toolId, provider_id: deps.catalog.get(toolId)?.provider_id ?? "unknown", outcome, status, latency_ms: latency });
     return { status, body };
   };

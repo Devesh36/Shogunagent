@@ -1,7 +1,8 @@
 /** Public surface of @shogunagent/router for apps/api (E9 wires the wallet behind `MeteringClient`). */
 export { createApp } from "./app.js";
 export { compileCatalog, CatalogCompileError, type CatalogEntry, type CatalogManifest, type CompiledCatalog } from "./catalog.js";
-export { discover, RANKING_FORMULA, RANKING_WEIGHTS, type DiscoverCandidate, type ScoreBreakdown } from "./discover.js";
+export { discover, RANKING_FORMULA, RANKING_WEIGHTS, PERSONAL_WEIGHT, BASE_QUALITY_WEIGHTS, type DiscoverCandidate, type ScoreBreakdown, type PersonalContext } from "./discover.js";
+export { InMemoryPersonalStore, PersonalRanker, taskCluster, explainPersonal, personalValue, PERSONAL_MIN_RUNS, PERSONAL_COMPONENTS, type PersonalStore, type PersonalProfile, type PersonalRow, type PersonalObservation, type PersonalExplanation } from "./personal.js";
 export { inspect } from "./inspect.js";
 export { run, type RunBody, type RunDeps } from "./run.js";
 export { callVerb, type RouterDeps } from "./engine.js";

@@ -50,7 +50,8 @@ describe("discover ranking (E8-T3, invariant 13)", () => {
     }
     expect(b.task_fit).toBeGreaterThan(0);
     expect(b.price).toBe(1);
-    expect(b.personal).toBe(0);
+    expect(top.personal.basis).toBe("none");
+    expect(b.personal).toBeCloseTo(0.45 * b.price + 0.3 * b.health + 0.25 * b.latency, 3);
     const recomputed = b.task_fit * (RANKING_WEIGHTS.price * b.price + RANKING_WEIGHTS.health * b.health + RANKING_WEIGHTS.latency * b.latency + RANKING_WEIGHTS.personal * b.personal);
     expect(Math.abs(recomputed - top.score)).toBeLessThan(0.001);
     expect(Math.abs(combineScore(b) - top.score)).toBeLessThan(0.001);
