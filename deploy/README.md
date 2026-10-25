@@ -111,6 +111,7 @@ Common (sidecar):
 | `SHOGUN_CONNECT_GOOGLE_CLIENT_ID` / `SHOGUN_CONNECT_GOOGLE_CLIENT_SECRET` | Google "Web application" OAuth client for Gmail and Calendar (secret: the client secret) |
 | `SHOGUN_CONNECT_SLACK_CLIENT_ID` / `SHOGUN_CONNECT_SLACK_CLIENT_SECRET` | Slack app (user scopes); the secret is optional for a PKCE-enabled app (secret) |
 | `SHOGUN_CONNECT_LINEAR_CLIENT_ID` / `SHOGUN_CONNECT_LINEAR_CLIENT_SECRET` | Linear OAuth app; the secret is optional (secret) |
+| `SHOGUN_CONNECT_GITHUB_CLIENT_ID` / `SHOGUN_CONNECT_GITHUB_CLIENT_SECRET` | GitHub App with the device flow enabled (no callback); the secret is optional, sent on refresh when set (secret) |
 
 `env` (evaluation only): `SHOGUN_DB_KEY` (64 hex) for every principal, `SHOGUN_DB_KEY_<PRINCIPAL>`
 for one.
@@ -165,20 +166,35 @@ them to the gateway only (`docs/api/connector-tokens.md`):
   own `sgw1` bearer, gets one slot's access token. The sidecar refreshes it first when it expires
   within 60 seconds, under a per-(principal, slot) lock, and writes the new tokenset back. The
   refresh token never leaves the sidecar.
-- `POST /v1/internal/connectors/connect/{start,finish}`: the hosted connect flow (authorization
-  code + PKCE). The verifier stays in the sidecar's memory for ten minutes; the code is exchanged
-  here and the tokenset goes straight into the principal's store.
+- `POST /v1/internal/connectors/connect/{start,finish,poll}`: the hosted connect flow
+  (authorization code + PKCE for Google, Slack and Linear; GitHub's device flow, one poll per
+  human "Check"). The pending flow (verifier or device code) is sealed in the principal's token
+  store for ten minutes, so a sidecar restart keeps it; the code is exchanged here and the tokenset
+  goes straight into the principal's store.
+- `POST /v1/internal/connectors/{status,disconnect}`: the principal's connections, and removing
+  one (deleted from the store; revoked at Google and Slack through the core's egress). The same
+  vault answers `connections.list` / `connections.disconnect` on the sidecar's MCP, REST and CLI.
+- Every connect, refresh, revocation, disconnect and read-sync fetch writes a traceability row in
+  the principal's own store (`connector.<action>.<provider>.<outcome>`, the vendor host, zero
+  bytes; never a token).
 
 Settings: `SHOGUN_ADMIN_TOKEN` (the gateway's `SHOGUN_SIDECAR_ADMIN_TOKEN`), and for the connect
 flow `SHOGUN_CONNECT_REDIRECT_URI` plus one client per vendor (`SHOGUN_CONNECT_*`, §3.2). A
 malformed one stops the sidecar at start-up naming the variable; an unset vendor cannot be
 connected or refreshed (its stored tokens are still served while valid). The start-up line says
-which providers can be connected. GitHub is served for stored tokens only (the core connects it
-with the device flow, which has no web callback).
+which providers can be connected. GitHub needs only `SHOGUN_CONNECT_GITHUB_CLIENT_ID` (a GitHub App
+with "Enable Device Flow"); it has no callback.
+
+Read-sync (E44): `shogun-api --dream-tick` (the hourly tick) drains each principal's queue of
+Gmail, Calendar and Notion change notices before the review, fetching with the principal's own
+grant. Run it with the same `SHOGUN_TOKEN_STORE_DIR`, key provider and `SHOGUN_CONNECT_*` as the
+sidecar (it refreshes expired grants), on the same volume (the queue is a sealed file the two
+processes share under a lock file).
 
 Egress: the vendors' token endpoints are reached from the sidecar (`oauth2.googleapis.com`,
-`slack.com`, `api.linear.app`), through the core's single HTTP client; add them to the
-NetworkPolicy (§5.4) with `egress.extraRules`. Moving a principal's store between replicas moves
+`slack.com`, `api.linear.app`, `github.com`), and the read-sync's reads from the tick
+(`gmail.googleapis.com`, `www.googleapis.com`, `api.notion.com`), all through the core's single
+HTTP client; add them to the NetworkPolicy (§5.4) with `egress.extraRules`. Moving a principal's store between replicas moves
 its grants only if `SHOGUN_TOKEN_STORE_DIR` moves with it (keep it on the PVC, the default).
 
 ## 4. Regions

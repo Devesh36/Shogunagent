@@ -557,6 +557,7 @@ Not covered by `check-env-docs.mjs` (the sidecar is Rust); `deploy/README.md` is
 | `SHOGUN_CONNECT_GOOGLE_CLIENT_ID`, `SHOGUN_CONNECT_GOOGLE_CLIENT_SECRET` | env / secret | with Gmail / Calendar | E50: a Google "Web application" client; the secret is required |
 | `SHOGUN_CONNECT_SLACK_CLIENT_ID`, `SHOGUN_CONNECT_SLACK_CLIENT_SECRET` | env / secret | with Slack | E50: user scopes; the secret is optional for a PKCE-enabled app |
 | `SHOGUN_CONNECT_LINEAR_CLIENT_ID`, `SHOGUN_CONNECT_LINEAR_CLIENT_SECRET` | env / secret | with Linear | E50: the secret is optional |
+| `SHOGUN_CONNECT_GITHUB_CLIENT_ID`, `SHOGUN_CONNECT_GITHUB_CLIENT_SECRET` | env / secret | with GitHub | E50 follow-up: a GitHub App with the device flow enabled (no callback); the secret is optional, sent on refresh when set. Also read by `shogun-api --dream-tick` (with the other `SHOGUN_CONNECT_*`) to refresh grants for the read-sync |
 | `SHOGUN_REGION` | env | yes | set by the chart from `region` |
 | `SHOGUN_AWS_KMS_KEY_ID`, `SHOGUN_AWS_KMS_REGION`, `SHOGUN_AWS_KMS_ENDPOINT`, `SHOGUN_AWS_STS_ENDPOINT`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` | env | with `aws-kms` | IRSA preferred over static `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
 | `SHOGUN_GCP_KMS_KEY`, `SHOGUN_GCP_KMS_ENDPOINT`, `SHOGUN_GCP_ACCESS_TOKEN_FILE` | env | with `gcp-kms` | Workload Identity preferred |
@@ -706,17 +707,30 @@ Owner decisions still open:
       through the core's egress under a per-(principal, slot) lock and writes it back; the hosted
       connect flow (`POST /v1/connectors/{provider}/connect` → the human's page → the vendor →
       `/v1/connectors/callback`, the code exchanged and stored by the sidecar) for Gmail, Calendar,
-      Slack and Linear. Still needed before any of them is listed in the hosted catalog: (a) the
-      vendor OAuth apps (Google "Web application" client with the restricted `gmail.modify` scope
-      verified and its security assessment passed, a Slack app with user scopes, a Linear OAuth
-      app), their ids and secrets in the sidecar's `SHOGUN_CONNECT_*` and the callback registered
-      with each; (b) the Worker → sidecar path above, with `SHOGUN_SIDECAR_ADMIN_TOKEN` and
-      `CONNECTOR_CONNECT_SECRET` on the relay; (c) the sidecar's NetworkPolicy egress to the
-      vendors' token endpoints (`deploy/README.md` §3.3); (d) one staging run per provider: connect,
-      run a tool, let the token expire and run again (refresh), revoke at the vendor and see
-      `connector_not_connected`. GitHub stays out until the core has a hosted GitHub flow (device
-      flow on the sidecar, or a GitHub App web flow). A disconnect and status read on all three
-      faces is a follow-up, not a launch blocker for the four connectable tools.
+      Slack and Linear, and GitHub's device flow (the human types a code at
+      `github.com/login/device` and presses Check); pending flows sealed in the principal's store
+      (a restart keeps them); status and disconnect on every face (`connections.list` /
+      `connections.disconnect`, `GET /v1/connectors`, `POST /v1/connectors/{provider}/disconnect`,
+      revoking at Google and Slack); an audit row per connect, refresh, revocation, disconnect and
+      read-sync fetch in the principal's traceability log (threat model R10 closed). Still needed
+      before any of them is listed in the hosted catalog: (a) the vendor OAuth apps (Google "Web
+      application" client with the restricted `gmail.modify` scope verified and its security
+      assessment passed, a Slack app with user scopes, a Linear OAuth app, a GitHub App with the
+      device flow enabled), their ids and secrets in the sidecar's `SHOGUN_CONNECT_*` and the
+      callback registered with each redirect vendor; (b) the Worker → sidecar path above, with
+      `SHOGUN_SIDECAR_ADMIN_TOKEN` and `CONNECTOR_CONNECT_SECRET` on the relay; (c) the sidecar's
+      NetworkPolicy egress to the vendors' token endpoints and the read-sync's read hosts
+      (`deploy/README.md` §3.3); (d) one staging run per provider: connect (GitHub: the device
+      code), run a tool (Gmail: `gmail.messages.search` and `gmail.messages.get` too), let the token
+      expire and run again (refresh), check the audit rows on the principal's traceability log,
+      disconnect from an agent (`POST /v1/connectors/{provider}/disconnect`) and see the vendor
+      revocation and `connector_not_connected`.
+- [ ] **Connector read-sync (E44)** for Gmail, Calendar and Notion change notices: `shogun-api
+      --dream-tick` (scheduled hourly) runs with the sidecar's token store, key provider and
+      `SHOGUN_CONNECT_*`, on the same volume; one staging run with a Gmail and a Calendar ingest
+      hook shows the notice `queued` and, after the tick, the message or event stored once
+      (`connector read-sync: … stored=…`). Notion stays without content until the core has a hosted
+      Notion sign-in (`docs/api/ingest-sources.md` §2.8).
 - [ ] **The deploy workflow** (`.github/workflows/deploy.yml`, §3.1) is written and has never run:
       create the `staging` and `production` environments with their reviewers, secrets and
       variables, then do one dry run per component and environment before the first real deploy;

@@ -13,7 +13,9 @@ connects an account in the first place. All of it is built:
 | The router's client (`caller_connector` auth) | `apps/router/src/transport.ts` | `apps/router/test/hardening.test.ts` |
 | apps/api's route for the router | `apps/api/src/connector-tokens.ts` | `apps/api/test/connector-tokens.test.ts` (drives the router's real client in-process) |
 | The sidecar vault apps/api calls (open, refresh, write back) | `crates/shogun-mcp/src/connector_vault.rs` (routes), `crates/shogun-integrations/src/hosted_connect.rs` (vault), composed in `shogun-api --multi` | `hosted_connect` unit tests, `crates/shogun-core/tests/connector_vault.rs` (the real server) |
-| The hosted connect flow | `apps/api/src/connector-connect.ts` + the sidecar's connect routes | `apps/api/test/connector-connect.test.ts` |
+| The hosted connect flow (OAuth redirect; GitHub's device flow) | `apps/api/src/connector-connect.ts` + the sidecar's connect routes; `crates/shogun-integrations/src/device_flow.rs` | `apps/api/test/connector-connect.test.ts`, `hosted_connect` and `device_flow` unit tests |
+| Status and disconnect on every face | the sidecar's `status` / `disconnect` routes; `connections.list` / `connections.disconnect` (MCP, REST, CLI) served from the vault (`crates/shogun-core/src/db_backend.rs`); the gateway's `GET /v1/connectors`, `POST /v1/connectors/{provider}/disconnect` | `crates/shogun-core/tests/connector_vault.rs` (REST and MCP faces), `apps/api/test/connector-connect.test.ts` |
+| Audit rows (connect, refresh, revoke, disconnect, read-sync fetch) | `hosted_connect::AuditSink`, written by `shogun_core::tenancy::connector_sync::record_audit` into the principal's traceability log | `hosted_connect` unit tests, `crates/shogun-core/tests/connector_vault.rs` |
 
 What still stands between this and the hosted catalog is under "Before the hosted catalog lists
 these tools" below.
@@ -95,6 +97,9 @@ sends with, and a principal purge (E39) removes it.
 POST /v1/internal/connectors/token            { "slot": "gmail-tokenset" }
 POST /v1/internal/connectors/connect/start    { "provider": "gmail", "state": "<gateway's sealed state>" }
 POST /v1/internal/connectors/connect/finish   { "state": "<same>", "code": "<the vendor's code>" }
+POST /v1/internal/connectors/connect/poll     { "state": "<same>" }            (GitHub's device flow)
+POST /v1/internal/connectors/status           {}
+POST /v1/internal/connectors/disconnect       { "provider": "calendar" }
 Authorization: Bearer <SHOGUN_ADMIN_TOKEN>
 X-Shogun-Principal-Authorization: Bearer <the principal's sidecar bearer>
 ```
@@ -117,16 +122,45 @@ X-Shogun-Principal-Authorization: Bearer <the principal's sidecar bearer>
   (GitHub always, below) serves a stored token while valid and `503 connect_not_configured` after.
   The grant is never deleted by a failed refresh: an operator's misconfigured client must not
   disconnect everyone.
-- **Connect**: `start` generates a PKCE pair, keeps the verifier in the sidecar's memory for ten
-  minutes keyed by a hash of the gateway's opaque state (at most 4096 pending flows; a full table is
-  `503`, never an eviction), and answers `200 { authorize_url, expires_at }`. `finish` is single use
-  and bound to the principal that started it (another principal's finish burns the flow and is
-  `404 connect_flow_unknown`); it exchanges the code with the verifier and the hosted callback URL,
-  checks that every scope the connector needs was granted (Google: and that a refresh token came
-  back), and stores the tokenset in the principal's store. It answers
-  `200 { connected: true, provider, slot }`; neither the code nor the token goes back to the gateway.
-  `400 connect_rejected` when the vendor refused the code or the scopes; `503
-  connect_not_configured` when the provider has no client on this sidecar.
+- **Connect**: `start` generates a PKCE pair and keeps the verifier **sealed in the principal's own
+  token store** (slot `connector-connect-flows`, under the principal's key) for ten minutes, keyed
+  by a hash of the gateway's opaque state, so a sidecar restart does not lose a flow in progress (at
+  most 8 pending per principal; a ninth start drops that principal's oldest, never another's). It
+  answers `200 { authorize_url, expires_at }`. `finish` is single use and searches only the calling
+  principal's flows (another principal's finish finds nothing: `404 connect_flow_unknown`, no vendor
+  call); it exchanges the code with the verifier and the hosted callback URL, checks that every
+  scope the connector needs was granted (Google: and that a refresh token came back), and stores
+  the tokenset in the principal's store. It answers `200 { connected: true, provider, slot }`;
+  neither the code nor the token goes back to the gateway. `400 connect_rejected` when the vendor
+  refused the code or the scopes; `503 connect_not_configured` when the provider has no client on
+  this sidecar.
+- **GitHub (device flow)**: `start` for `github` asks GitHub for a device code
+  (`github.com/login/device/code`, the core's egress), seals the device code in the same slot and
+  answers `200 { authorize_url: "https://github.com/login/device", expires_at, device: { user_code,
+  verification_uri, interval_ms } }`. Each `connect/poll` is at most one call to GitHub's token
+  endpoint per interval (a poll inside the interval answers `pending` without calling; `slow_down`
+  lengthens it): `200 { status: "pending", device, expires_at }`, then
+  `200 { connected: true, provider: "github", slot: "github-tokenset" }`. A denied or expired code
+  is `400 connect_rejected` and ends the flow. The steps are the ones the Mac app's device flow uses
+  (`shogun_integrations::device_flow`).
+- **Status**: `200 { connectors: [{ service, provider, state, connected, connectable, expires_at }] }`
+  for every service on the Connections list: `connected` (a valid token, or an expired one the
+  sidecar can refresh), `needs_reauth`, `disconnected`, or `coming_soon` (a service the hosted
+  deployment does not serve). A free read; no vendor call; never a token or an account identity.
+- **Disconnect**: deletes the grant and any pending flow for that provider, and revokes the grant at
+  the vendor where the core can with the token alone: Google (`oauth2.googleapis.com/revoke`,
+  RFC 7009) and Slack (`auth.revoke`). Linear's and GitHub's revocation need the app's secret or are
+  not verified here, so they are deleted only (`vendor_revoke: "not_supported"`; the human can also
+  remove the app at the vendor). A revocation that fails still deletes (`"failed"`). Answers
+  `200 { disconnected: true, provider, slot, removed, vendor_revoke }`; idempotent
+  (`removed: false`, `"nothing_stored"`). `provider` is a router provider id or a Connections
+  service id (`calendar` or `gcal`).
+- **Audit**: every connect (and device start), refresh, revocation, disconnect and read-sync fetch
+  writes one traceability row in the principal's own store: route `mcp`, purpose
+  `connector.<action>.<provider>.<outcome>` (`connector.refresh.gmail.ok`,
+  `connector.connect.github.rejected`, …), the vendor host as destination (`local` for the deletion
+  itself), zero bytes and the digest of nothing. No token, code, verifier, body or account identity
+  can reach it (threat model R10). An audit fault never fails the call.
 - Every answer is `Cache-Control: no-store`. Nothing is logged but the server's fixed lines.
 
 ## Connecting an account (the hosted connect flow, E50)
@@ -141,14 +175,19 @@ POST /v1/connectors/{provider}/connect          Authorization: Bearer <agent key
         "expires_at": "<ISO, 15 minutes>", "next_action": "ask_human", "message": "…" }
 ```
 
-`provider` is `gmail`, `calendar`, `slack` or `linear` (`404 unknown_connector` otherwise). The
-request starts nothing.
+`provider` is `gmail`, `calendar`, `slack`, `linear` or `github` (`404 unknown_connector`
+otherwise). The request starts nothing.
 
 1. The human opens `connect_url` (`GET`): a page saying which account will be connected for which
    principal, and a **Continue** button bound to a CSRF cookie. Nothing happens on opening it.
 2. **Continue** (`POST`, same origin, CSRF checked) seals a fresh OAuth state (principal, key,
    provider, expiry, and the hash of a flow cookie it sets for `/v1/connectors/callback`), asks the
    principal's sidecar to start the flow, and redirects (`303`) to the vendor's consent page.
+   For **GitHub**, Continue starts the device flow instead and shows the code to type at
+   `https://github.com/login/device`; each press of **Check**
+   (`POST /v1/connectors/connect/{link}/check`: the page's CSRF pair, the sealed state, and the flow
+   cookie of the browser that pressed Continue) is one poll through the sidecar. There is no
+   callback.
 3. The vendor redirects to `GET /v1/connectors/callback?state&code`. The gateway opens the state,
    requires the flow cookie of the browser that pressed Continue (a consent URL forwarded to someone
    else cannot attach their account to this principal), and hands `state` and `code` to the sidecar's
@@ -165,12 +204,30 @@ the sidecar, into the principal's store. Every page is `no-store`, `no-referrer`
 | `calendar` | `https://www.googleapis.com/auth/calendar.events` (list and insert) | the same Google flow |
 | `slack` | `chat:write` (user token) | Slack `oauth.v2_user` + PKCE (`AuthConfig::slack` / `slack_public`) |
 | `linear` | `read`, `issues:create` (user actor) | Linear PKCE (`AuthConfig::linear`) |
-| `github` | — | not connectable here: the core connects GitHub with the device flow (`shogun_core::github_device`), which has no web callback. The token route serves a stored GitHub grant while it is valid. |
+| `github` | the GitHub App's permissions (no scopes) | GitHub's device flow (`shogun_integrations::device_flow`, the same steps as the Mac app's `shogun_core::github_device`), polled once per human Check; refreshed with `SHOGUN_CONNECT_GITHUB_CLIENT_ID` (secret optional) |
 
 The sidecar's OAuth clients and the callback URL are `SHOGUN_CONNECT_*` (`deploy/README.md` §3.3):
 the callback must be `<gateway public base URL>/v1/connectors/callback`, registered with each vendor.
 The connect routes are served only when the gateway has the sidecar vault and
 `CONNECTOR_CONNECT_SECRET`.
+
+## The principal's connections (status and disconnect, every face)
+
+An agent reads which accounts its principal has connected, and removes one, the same way on every
+face (invariant 4). Status is a free read; disconnect only removes access, so any face may ask
+(L1 on the core, `write` on the gateway). Reconnecting is always the human's (the flow above).
+
+| Face | Status | Disconnect |
+|---|---|---|
+| Core MCP | `connections.list` | `connections.disconnect` `{ "service": "gcal" }` |
+| Core REST | `GET /v1/connections` | `POST /v1/connections/disconnect` `{ "service": "gcal" }` |
+| CLI | `shogun connections list` | `shogun connections disconnect gcal` |
+| Gateway REST (hosted agents) | `GET /v1/connectors` (`read`) | `POST /v1/connectors/{provider}/disconnect` (`write`) |
+
+On a hosted sidecar the core faces answer from the vault (`hosted: true`, each service's `state`,
+`connected`, `connectable`, `expires_at`; `app_running`, `gmail` and `composio` are `null`); on the
+Mac they keep answering from the desktop's Connections files. The gateway routes call the sidecar's
+`status` / `disconnect` and copy the known fields only.
 
 ## Guarantees the router keeps
 
@@ -206,19 +263,22 @@ reads or writes it.
 
 ## Before the hosted catalog lists these tools
 
-The code path is complete; what remains is operational, and the pre-launch checklist
-(`docs/deploy/production.md` §9) keeps the first-party tools out of the hosted catalog until it is
-done:
+The code path is complete (including GitHub's device flow, status and disconnect on every face, the
+audit rows and flows that survive a restart); what remains is operational, and the pre-launch
+checklist (`docs/deploy/production.md` §9) keeps the first-party tools out of the hosted catalog
+until it is done:
 
 - **OAuth clients.** A Google "Web application" client (verification of the restricted
   `gmail.modify` scope, with its security assessment, before external users), a Slack app with user
-  scopes and the hosted redirect, a Linear OAuth app; their ids and secrets in the sidecar's
-  `SHOGUN_CONNECT_*`, the callback registered with each.
+  scopes and the hosted redirect, a Linear OAuth app, a GitHub App with the device flow enabled;
+  their ids and secrets in the sidecar's `SHOGUN_CONNECT_*`, the callback registered with each
+  redirect vendor.
 - **The Worker → sidecar path** (E34) live in each region, with `SHOGUN_SIDECAR_ADMIN_TOKEN` and
   `CONNECTOR_CONNECT_SECRET` on the gateway, and the sidecar's egress open to the vendors' token
-  endpoints (`oauth2.googleapis.com`, `slack.com`, `api.linear.app`; `deploy/README.md` §5.4).
-- **GitHub**: either a hosted device-flow variant (the sidecar polls; the human enters a code at
-  `github.com/login/device`) or a GitHub App web flow in the core; until then leave the GitHub tools
-  out of the hosted catalog.
-- **A disconnect and a status read** for agents and humans (today a reconnect overwrites the grant,
-  and a purge removes all of them), exposed on MCP, REST and CLI alike (invariant 4).
+  endpoints (`oauth2.googleapis.com`, `slack.com`, `api.linear.app`, `github.com`; and, for the
+  read-sync, `gmail.googleapis.com`, `www.googleapis.com`, `api.notion.com`; `deploy/README.md`
+  §5.4).
+- **Notion**: the core has no hosted Notion sign-in (its Notion sign-in is the Mac app's loopback
+  registration with Notion's MCP server, whose tokens do not open the REST API; a Notion public
+  integration's token exchange uses HTTP Basic auth the core's exchange does not speak). There is
+  no Notion router connector and no Notion connect link until that exchange is added to the core.
