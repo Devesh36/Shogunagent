@@ -72,6 +72,8 @@ export interface LogVars {
     // E50: the sidecar vault and the hosted connect flow (connector-tokens.ts, connector-connect.ts).
     | "connector_vault_rejected_gateway" | "connector_vault_not_provisioned" | "connector_principal_refused"
     | "connector_connect_link_created" | "connector_connect_page" | "connector_connect_started" | "connector_connected" | "connector_connect_refused"
+    // E50 follow-ups: GitHub's device flow, the status read and the disconnect.
+    | "connector_device_pending" | "connector_status_served" | "connector_disconnected" | "connector_vault_unavailable"
     // E30 x402 (billing/x402.ts): fixed words, never a payment payload.
     | "x402_rejected" | "x402_replayed" | "x402_verified" | "x402_settled" | "x402_settle_failed"
     // E26 enterprise (enterprise/*.ts): fixed words, never a token, an assertion, a claim or a SCIM body.

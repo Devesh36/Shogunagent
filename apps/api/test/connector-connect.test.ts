@@ -91,8 +91,8 @@ describe("POST /v1/connectors/{provider}/connect (the agent's side)", () => {
     expect((await f.askLink(undefined)).status).toBe(401);
     expect((await f.askLink(await f.key("prn_r", ["read"]))).status).toBe(403);
     const k = await f.key("prn_a");
-    for (const provider of ["github", "notion", "monid"]) expect((await f.askLink(k, provider)).status).toBe(404);
-    for (const provider of ["calendar", "slack", "linear"]) expect((await f.askLink(k, provider)).status).toBe(202);
+    for (const provider of ["notion", "monid"]) expect((await f.askLink(k, provider)).status).toBe(404);
+    for (const provider of ["calendar", "slack", "linear", "github"]) expect((await f.askLink(k, provider)).status).toBe(202);
   });
 
   it("is not served without CONNECTOR_CONNECT_SECRET", async () => {
@@ -198,5 +198,125 @@ describe("the human's flow", () => {
     f.sidecar.forced = undefined;
     f.sidecar.down = true;
     expect((await continueFlow(f, connect_url)).res.status).toBe(503);
+  });
+});
+
+describe("GitHub's device flow (E50 follow-up)", () => {
+  /** Continue on a GitHub link: the page with the code, its CSRF and state, and the flow cookie. */
+  async function startDevice(f: F, k: string) {
+    const { connect_url } = (await (await f.askLink(k, "github")).json()) as { connect_url: string };
+    const path = new URL(connect_url).pathname;
+    const page = await f.rig.app.request(path);
+    const csrfCookie = cookieValue(page, CONNECT_CSRF_COOKIE) ?? "";
+    const csrf = /name="csrf" value="([0-9a-f]+)"/.exec(await page.text())?.[1] ?? "";
+    const res = await f.rig.app.request(path, {
+      method: "POST",
+      headers: { cookie: `${CONNECT_CSRF_COOKIE}=${csrfCookie}`, origin: BASE, "content-type": "application/x-www-form-urlencoded" },
+      body: `csrf=${csrf}`,
+    });
+    const html = await res.text();
+    const state = /name="state" value="([^"]+)"/.exec(html)?.[1] ?? "";
+    return { path, res, html, csrf, csrfCookie, state, flow: cookieValue(res, CONNECT_FLOW_COOKIE) ?? "", setCookie: res.headers.get("set-cookie") ?? "" };
+  }
+
+  const check = (f: F, path: string, s: { csrf: string; csrfCookie: string; state: string }, flow: string | undefined) =>
+    f.rig.app.request(`${path}/check`, {
+      method: "POST",
+      headers: { cookie: `${CONNECT_CSRF_COOKIE}=${s.csrfCookie}${flow ? `; ${CONNECT_FLOW_COOKIE}=${flow}` : ""}`, origin: BASE, "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ csrf: s.csrf, state: s.state }).toString(),
+    });
+
+  it("shows the human the code, and each Check is one poll through the sidecar", async () => {
+    const f = fixture();
+    const k = await f.key("prn_g");
+    const d = await startDevice(f, k);
+    expect(d.res.status).toBe(200);
+    expect(d.html).toContain("WDJB-MJHT");
+    expect(d.html).toContain('href="https://github.com/login/device"');
+    expect(d.html).not.toContain("<script");
+    expect(d.state.length).toBeGreaterThan(40);
+    expect(d.state).not.toContain("prn_g");
+    expect(d.setCookie).toContain(`Path=${"/v1/connectors/connect"}`);
+    expect(f.sidecar.calls.at(-1)).toMatchObject({ path: "/v1/internal/connectors/connect/start", body: { provider: "github" } });
+
+    // Not yet approved: the same page, with a note; one poll reached the sidecar.
+    f.sidecar.devicePolls = ["pending", "approved"];
+    const pending = await check(f, d.path, d, d.flow);
+    expect(pending.status).toBe(200);
+    expect(await pending.text()).toContain("has not confirmed the code yet");
+    expect(f.sidecar.calls.filter((c) => c.path.endsWith("/connect/poll"))).toHaveLength(1);
+    // Approved: connected into the link's principal; the router then gets the token.
+    const done = await check(f, d.path, d, d.flow);
+    expect(done.status).toBe(200);
+    expect(await done.text()).toContain("GitHub connected");
+    expect(f.sidecar.grants.get("prn_g")?.get("github-tokenset")?.accessToken).toBe("ghu_connected_by_device_1");
+    const token = await f.rig.app.request(CONNECTOR_TOKEN_PATH, {
+      method: "POST",
+      headers: { authorization: `Bearer ${ROUTER_TOKEN}`, "x-caller-authorization": `Bearer ${k}`, "content-type": "application/json" },
+      body: JSON.stringify({ slot: "github-tokenset", provider_id: "github" }),
+    });
+    expect(((await token.json()) as { access_token: string }).access_token).toBe("ghu_connected_by_device_1");
+    for (const line of f.rig.logLines) {
+      expect(line).not.toContain("WDJB-MJHT");
+      expect(line).not.toContain(d.state);
+    }
+    // Used: a further check finds no flow.
+    expect((await check(f, d.path, d, d.flow)).status).toBe(410);
+  });
+
+  it("refuses a check from another browser, without the CSRF pair, or with another link's state", async () => {
+    const f = fixture();
+    const d = await startDevice(f, await f.key("prn_g"));
+    const polls = () => f.sidecar.calls.filter((c) => c.path.endsWith("/connect/poll")).length;
+    expect((await check(f, d.path, d, undefined)).status).toBe(403);
+    expect((await check(f, d.path, d, "another-browsers-flow")).status).toBe(403);
+    expect((await check(f, d.path, { ...d, csrf: "00" }, d.flow)).status).toBe(403);
+    // Another principal's link with this state: the claims do not match.
+    const other = await startDevice(f, await f.key("prn_h"));
+    expect((await check(f, other.path, { ...other, state: d.state }, d.flow)).status).toBe(400);
+    expect(polls()).toBe(0);
+    // A denied code ends the flow.
+    f.sidecar.devicePolls = ["denied"];
+    const denied = await check(f, d.path, d, d.flow);
+    expect(denied.status).toBe(400);
+    expect(await denied.text()).toContain("did not approve the code");
+    // The state expires with the gateway's ten minutes.
+    f.rig.setNow(new Date(NOW + 11 * 60_000));
+    expect((await check(f, other.path, other, other.flow)).status).toBe(410);
+  });
+});
+
+describe("the principal's connections (E50 follow-up)", () => {
+  it("lists states only (never an identity) for a read key, free", async () => {
+    const f = fixture();
+    f.sidecar.grant("prn_s", "gmail-tokenset", { accessToken: "ya29.never-shown-0001", expiresAt: NOW + 3_600_000 });
+    const res = await f.rig.app.request("/v1/connectors", { headers: { authorization: `Bearer ${await f.key("prn_s", ["read"])}` } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const body = (await res.json()) as { connectors: Record<string, unknown>[]; usage: { cost_micro_usd: number } };
+    expect(body.connectors.find((r) => r.service === "gmail")).toEqual({ service: "gmail", provider: "gmail", state: "connected", connected: true, connectable: true, expires_at: NOW + 3_600_000 });
+    expect(body.connectors.find((r) => r.service === "gdrive")?.state).toBe("coming_soon");
+    expect(JSON.stringify(body)).not.toContain("ya29");
+    expect(JSON.stringify(body)).not.toContain("someone@example.test");
+    expect(body.usage.cost_micro_usd).toBe(0);
+    expect(f.sidecar.calls.at(-1)).toMatchObject({ path: "/v1/internal/connectors/status", body: {} });
+    expect((await f.rig.app.request("/v1/connectors")).status).toBe(401);
+  });
+
+  it("disconnects with a write key, at the vendor where it can, and refuses unknown connectors", async () => {
+    const f = fixture();
+    f.sidecar.grant("prn_s", "gcal-tokenset", { accessToken: "ya29.cal", expiresAt: NOW + 3_600_000 });
+    const writer = await f.key("prn_s", ["write"]);
+    const disconnect = (k: string, provider: string) => f.rig.app.request(`/v1/connectors/${provider}/disconnect`, { method: "POST", headers: { authorization: `Bearer ${k}` } });
+    expect((await disconnect(await f.key("prn_s", ["read"]), "calendar")).status).toBe(403);
+    const res = await disconnect(writer, "calendar");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ disconnected: true, provider: "calendar", slot: "gcal-tokenset", removed: true, vendor_revoke: "revoked" });
+    expect(f.sidecar.grants.get("prn_s")?.has("gcal-tokenset")).toBe(false);
+    expect(await (await disconnect(writer, "calendar")).json()).toMatchObject({ removed: false, vendor_revoke: "nothing_stored" });
+    expect((await disconnect(writer, "notion")).status).toBe(404);
+    f.sidecar.down = true;
+    expect((await disconnect(writer, "gmail")).status).toBe(503);
+    expect(f.rig.logLines.some((l) => l.includes("event=connector_disconnected"))).toBe(true);
   });
 });

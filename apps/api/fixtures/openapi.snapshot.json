@@ -5804,7 +5804,7 @@
         "tags": [
           "providers"
         ],
-        "summary": "Ask for a link a human opens to connect their own account for a first-party connector (gmail, calendar, slack, linear). An agent cannot connect an account: it hands connect_url to its human (next_action ask_human), who signs in at the provider; the token goes into the principal's own store, never to the agent. Free.",
+        "summary": "Ask for a link a human opens to connect their own account for a first-party connector (gmail, calendar, slack, linear, github). An agent cannot connect an account: it hands connect_url to its human (next_action ask_human), who signs in at the provider (GitHub: types a code at github.com/login/device); the token goes into the principal's own store, never to the agent. Free.",
         "operationId": "post_v1_connectors_provider_connect",
         "parameters": [
           {
@@ -5817,7 +5817,8 @@
                 "gmail",
                 "calendar",
                 "slack",
-                "linear"
+                "linear",
+                "github"
               ]
             }
           }
@@ -5995,6 +5996,291 @@
         },
         "security": [],
         "x-anonymous": true
+      }
+    },
+    "/v1/connectors/connect/{link}/check": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "GitHub's device flow: the human's Check after typing the code at github.com/login/device (CSRF-bound form, sealed state, the browser that pressed Continue). One poll through the principal's sidecar; HTML. Not for agents.",
+        "operationId": "post_v1_connectors_connect_link_check",
+        "parameters": [
+          {
+            "name": "link",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "410": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/connectors": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "The principal's first-party connector accounts: per service its state (connected, needs_reauth, disconnected, coming_soon), whether it can be connected here and when the stored token expires. Never a token or an account identity. Free read.",
+        "operationId": "get_v1_connectors",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "connectors": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "service": {
+                            "type": "string"
+                          },
+                          "provider": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "connected",
+                              "needs_reauth",
+                              "disconnected",
+                              "coming_soon"
+                            ]
+                          },
+                          "connected": {
+                            "type": "boolean"
+                          },
+                          "connectable": {
+                            "type": "boolean"
+                          },
+                          "expires_at": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "usage": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_key | invalid_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope | principal_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "connectors_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/connectors/{provider}/disconnect": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Disconnect one first-party connector account of the principal: the stored grant is deleted, and revoked at the vendor where it has an API (Google, Slack). Only removes access, so any agent with write may ask; reconnecting needs the human. Idempotent. Free.",
+        "operationId": "post_v1_connectors_provider_disconnect",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "gmail",
+                "calendar",
+                "slack",
+                "linear",
+                "github"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "disconnected": {
+                      "type": "boolean"
+                    },
+                    "provider": {
+                      "type": "string"
+                    },
+                    "slot": {
+                      "type": "string"
+                    },
+                    "removed": {
+                      "type": "boolean"
+                    },
+                    "vendor_revoke": {
+                      "type": "string",
+                      "enum": [
+                        "revoked",
+                        "failed",
+                        "not_supported",
+                        "nothing_stored"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_key | invalid_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope | principal_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "unknown_connector",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "connectors_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          },
+          {
+            "oauth": [
+              "write"
+            ]
+          }
+        ]
       }
     },
     "/v1/connectors/callback": {

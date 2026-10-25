@@ -68,6 +68,13 @@ export function validPrincipal(principal: string): boolean {
 export const SIDECAR_CONNECTOR_TOKEN_PATH = "/v1/internal/connectors/token";
 export const SIDECAR_CONNECT_START_PATH = "/v1/internal/connectors/connect/start";
 export const SIDECAR_CONNECT_FINISH_PATH = "/v1/internal/connectors/connect/finish";
+/** One poll of a device flow (GitHub): the human pressed "Check" (E50 follow-up). */
+export const SIDECAR_CONNECT_POLL_PATH = "/v1/internal/connectors/connect/poll";
+/** The principal's connections (a free read) and removing one (a narrowing action). */
+export const SIDECAR_STATUS_PATH = "/v1/internal/connectors/status";
+export const SIDECAR_DISCONNECT_PATH = "/v1/internal/connectors/disconnect";
+/** The only page a device flow sends a human to. */
+export const DEVICE_VERIFICATION_URI = "https://github.com/login/device";
 /** The header naming the principal to the sidecar, by the principal's own sidecar bearer. */
 export const SIDECAR_PRINCIPAL_HEADER = "x-shogun-principal-authorization";
 /** The router gives this route 5 s; the sidecar's answer (a refresh included) must fit inside. */
@@ -87,8 +94,15 @@ export type VaultTokenAnswer =
   | { kind: "refused" }
   | VaultUnavailable;
 
+/** What a human does for a device flow: open `verificationUri` and type `userCode`. */
+export interface DeviceStep {
+  userCode: string;
+  verificationUri: string;
+  intervalMs: number;
+}
+
 export type ConnectStartAnswer =
-  | { kind: "started"; authorizeUrl: string; expiresAt: number }
+  | { kind: "started"; authorizeUrl: string; expiresAt: number; device?: DeviceStep }
   | { kind: "not_configured" }
   | { kind: "refused" }
   | VaultUnavailable;
@@ -102,6 +116,33 @@ export type ConnectFinishAnswer =
   | { kind: "refused" }
   | VaultUnavailable;
 
+export type ConnectPollAnswer =
+  | { kind: "pending"; device: DeviceStep; expiresAt: number }
+  | { kind: "connected"; provider: string; slot: string }
+  | { kind: "flow_unknown" }
+  /** The human denied it at the provider, or the code expired. */
+  | { kind: "rejected" }
+  | { kind: "refused" }
+  | VaultUnavailable;
+
+/** One connection of the principal, as the sidecar reports it (never a token or an identity). */
+export interface ConnectorStatusRow {
+  service: string;
+  provider: string | null;
+  state: "connected" | "needs_reauth" | "disconnected" | "coming_soon";
+  connected: boolean;
+  connectable: boolean;
+  expires_at: number | null;
+}
+
+export type ConnectorStatusAnswer = { kind: "status"; connectors: ConnectorStatusRow[] } | { kind: "refused" } | VaultUnavailable;
+
+export type DisconnectAnswer =
+  | { kind: "disconnected"; provider: string; slot: string; removed: boolean; vendorRevoke: string }
+  | { kind: "unknown" }
+  | { kind: "refused" }
+  | VaultUnavailable;
+
 /** The principal as the sidecar needs it: its id and the key whose derived bearer names it. */
 export type VaultPrincipal = Pick<AgentPrincipal, "principalId" | "keyId">;
 
@@ -111,6 +152,39 @@ export interface ConnectorVault {
   accessToken(principal: VaultPrincipal, slot: ConnectorSlot): Promise<VaultTokenAnswer>;
   connectStart(principal: VaultPrincipal, provider: string, state: string): Promise<ConnectStartAnswer>;
   connectFinish(principal: VaultPrincipal, state: string, code: string): Promise<ConnectFinishAnswer>;
+  /** One poll of a device flow (GitHub). Optional: a vault without it serves no device flow. */
+  connectPoll?(principal: VaultPrincipal, state: string): Promise<ConnectPollAnswer>;
+  /** The principal's connections. Optional: absent = the status route answers 503. */
+  status?(principal: VaultPrincipal): Promise<ConnectorStatusAnswer>;
+  /** Remove one connection (revoked at the vendor where it can be). */
+  disconnect?(principal: VaultPrincipal, provider: string): Promise<DisconnectAnswer>;
+}
+
+const USER_CODE_RE = /^[A-Za-z0-9]{4}-[A-Za-z0-9]{4}$/;
+const STATES = new Set(["connected", "needs_reauth", "disconnected", "coming_soon"]);
+
+/** A device step the sidecar answered, checked: GitHub's own page and GitHub's code shape. */
+function deviceOf(raw: unknown): DeviceStep | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const d = raw as Record<string, unknown>;
+  if (d.verification_uri !== DEVICE_VERIFICATION_URI || typeof d.user_code !== "string" || !USER_CODE_RE.test(d.user_code)) return undefined;
+  const interval = typeof d.interval_ms === "number" && d.interval_ms > 0 ? d.interval_ms : 5_000;
+  return { userCode: d.user_code, verificationUri: DEVICE_VERIFICATION_URI, intervalMs: interval };
+}
+
+/** A status row, copied field by field (nothing the sidecar might add passes through). */
+function statusRowOf(raw: unknown): ConnectorStatusRow | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.service !== "string" || !/^[a-z]{2,16}$/.test(r.service) || typeof r.state !== "string" || !STATES.has(r.state)) return undefined;
+  return {
+    service: r.service,
+    provider: typeof r.provider === "string" && /^[a-z]{2,16}$/.test(r.provider) ? r.provider : null,
+    state: r.state as ConnectorStatusRow["state"],
+    connected: r.connected === true,
+    connectable: r.connectable === true,
+    expires_at: typeof r.expires_at === "number" ? r.expires_at : null,
+  };
 }
 
 /** The sidecar vault's settings: the `/mcp` relay's transport and bearer source, and the
@@ -184,6 +258,11 @@ export function sidecarConnectorVault(config: SidecarVaultConfig, fetchFn: Fetch
       const r = await post(SIDECAR_CONNECT_START_PATH, principal, { provider, state }, VAULT_CONNECT_TIMEOUT_MS);
       if (!isReply(r)) return r;
       if (r.status === 200 && typeof r.body.authorize_url === "string" && /^https:\/\//.test(r.body.authorize_url) && typeof r.body.expires_at === "number") {
+        if (r.body.device !== undefined) {
+          const device = deviceOf(r.body.device);
+          if (!device || r.body.authorize_url !== DEVICE_VERIFICATION_URI) return upstream;
+          return { kind: "started", authorizeUrl: r.body.authorize_url, expiresAt: r.body.expires_at, device };
+        }
         return { kind: "started", authorizeUrl: r.body.authorize_url, expiresAt: r.body.expires_at };
       }
       if (r.body.error === "connect_not_configured" || r.body.error === "unknown_connector") return { kind: "not_configured" };
@@ -198,6 +277,42 @@ export function sidecarConnectorVault(config: SidecarVaultConfig, fetchFn: Fetch
       }
       if (r.body.error === "connect_flow_unknown") return { kind: "flow_unknown" };
       if (r.body.error === "connect_rejected" || r.body.error === "invalid_request") return { kind: "rejected" };
+      if (r.status === 410) return { kind: "refused" };
+      return upstream;
+    },
+    async connectPoll(principal, state) {
+      const r = await post(SIDECAR_CONNECT_POLL_PATH, principal, { state }, VAULT_CONNECT_TIMEOUT_MS);
+      if (!isReply(r)) return r;
+      if (r.status === 200 && r.body.connected === true && typeof r.body.provider === "string" && typeof r.body.slot === "string") {
+        return { kind: "connected", provider: r.body.provider, slot: r.body.slot };
+      }
+      if (r.status === 200 && r.body.status === "pending" && typeof r.body.expires_at === "number") {
+        const device = deviceOf(r.body.device);
+        return device ? { kind: "pending", device, expiresAt: r.body.expires_at } : upstream;
+      }
+      if (r.body.error === "connect_flow_unknown") return { kind: "flow_unknown" };
+      if (r.body.error === "connect_rejected" || r.body.error === "invalid_request") return { kind: "rejected" };
+      if (r.status === 410) return { kind: "refused" };
+      return upstream;
+    },
+    async status(principal) {
+      const r = await post(SIDECAR_STATUS_PATH, principal, {}, VAULT_TOKEN_TIMEOUT_MS);
+      if (!isReply(r)) return r;
+      if (r.status === 200 && Array.isArray(r.body.connectors)) {
+        const rows = r.body.connectors.map(statusRowOf);
+        return rows.every((x): x is ConnectorStatusRow => x !== undefined) ? { kind: "status", connectors: rows } : upstream;
+      }
+      if (r.status === 410) return { kind: "refused" };
+      return upstream;
+    },
+    async disconnect(principal, provider) {
+      const r = await post(SIDECAR_DISCONNECT_PATH, principal, { provider }, VAULT_CONNECT_TIMEOUT_MS);
+      if (!isReply(r)) return r;
+      const b = r.body;
+      if (r.status === 200 && b.disconnected === true && typeof b.provider === "string" && typeof b.slot === "string" && typeof b.removed === "boolean" && typeof b.vendor_revoke === "string") {
+        return { kind: "disconnected", provider: b.provider, slot: b.slot, removed: b.removed, vendorRevoke: b.vendor_revoke };
+      }
+      if (b.error === "unknown_connector") return { kind: "unknown" };
       if (r.status === 410) return { kind: "refused" };
       return upstream;
     },

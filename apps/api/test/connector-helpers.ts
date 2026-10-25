@@ -34,6 +34,10 @@ export class FakeSidecar {
   goodCode = "vendor-code-1";
   /** The token the fake vendor issues on a finished flow. */
   connectedToken = "ya29.connected-by-flow-0001";
+  /** What GitHub answers the next device polls: "pending" until it is "approved" or "denied". */
+  devicePolls: ("pending" | "approved" | "denied")[] = [];
+  /** What the next disconnect's vendor revocation does. */
+  vendorRevoke = "revoked";
 
   grant(principal: string, slot: string, g: FakeGrant): void {
     let slots = this.grants.get(principal);
@@ -72,7 +76,35 @@ export class FakeSidecar {
       case "/v1/internal/connectors/connect/start": {
         const state = String(body.state);
         this.flows.set(state, { principal, provider: String(body.provider) });
+        if (body.provider === "github") {
+          return json(200, { authorize_url: "https://github.com/login/device", expires_at: 1, device: { user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", interval_ms: 5000 } });
+        }
         return json(200, { authorize_url: `https://accounts.vendor.test/auth?state=${encodeURIComponent(state)}&code_challenge=c&code_challenge_method=S256`, expires_at: 1 });
+      }
+      case "/v1/internal/connectors/connect/poll": {
+        const flow = this.flows.get(String(body.state));
+        if (!flow || flow.principal !== principal || flow.provider !== "github") return json(404, { error: "connect_flow_unknown" });
+        const next = this.devicePolls.shift() ?? "pending";
+        if (next === "pending") return json(200, { status: "pending", device: { user_code: "WDJB-MJHT", verification_uri: "https://github.com/login/device", interval_ms: 5000 }, expires_at: 1 });
+        this.flows.delete(String(body.state));
+        if (next === "denied") return json(400, { error: "connect_rejected" });
+        this.grant(principal, "github-tokenset", { accessToken: "ghu_connected_by_device_1", expiresAt: Date.now() + 3_600_000 });
+        return json(200, { connected: true, provider: "github", slot: "github-tokenset" });
+      }
+      case "/v1/internal/connectors/status": {
+        const slots = this.grants.get(principal) ?? new Map<string, FakeGrant>();
+        const row = (service: string, provider: string | null, slot: string | null) => ({
+          service, provider, state: slot === null ? "coming_soon" : slots.has(slot) ? "connected" : "disconnected", connected: slot !== null && slots.has(slot), connectable: slot !== null, expires_at: slot && slots.get(slot) ? slots.get(slot)?.expiresAt : null,
+          // A field the gateway must not pass on.
+          account_label: "someone@example.test",
+        });
+        return json(200, { connectors: [row("gmail", "gmail", "gmail-tokenset"), row("gcal", "calendar", "gcal-tokenset"), row("gdrive", null, null), row("github", "github", "github-tokenset")] });
+      }
+      case "/v1/internal/connectors/disconnect": {
+        const provider = String(body.provider);
+        const slot = provider === "calendar" ? "gcal-tokenset" : `${provider}-tokenset`;
+        const removed = this.grants.get(principal)?.delete(slot) ?? false;
+        return json(200, { disconnected: true, provider, slot, removed, vendor_revoke: removed ? this.vendorRevoke : "nothing_stored" });
       }
       case "/v1/internal/connectors/connect/finish": {
         const flow = this.flows.get(String(body.state));

@@ -14,6 +14,18 @@
  *   GET  /v1/connectors/callback?state&code         the provider's redirect
  *        → the code goes to the principal's sidecar, which exchanges it and stores the tokenset
  *
+ * GitHub has no redirect flow in the core: it connects with the device flow (E50 follow-up).
+ * Continue asks the sidecar to start it and shows the human the code to type at
+ * github.com/login/device; each press of "Check" is one poll through the sidecar:
+ *
+ *   POST /v1/connectors/connect/{link}/check         the human's "Check" (CSRF-bound form, the
+ *        sealed state, the flow cookie of the browser that pressed Continue)
+ *
+ * And the principal's connections, for an agent (free read) or to remove one (narrowing, `write`):
+ *
+ *   GET  /v1/connectors                               [agent key, `read`] → { connectors: [...] }
+ *   POST /v1/connectors/{provider}/disconnect         [agent key, `write`] → { disconnected, ... }
+ *
  * Nothing persists here. The link and the OAuth `state` are sealed (AES-256-GCM under keys derived
  * from `CONNECTOR_CONNECT_SECRET`) and carry the principal, the key and the provider; the PKCE
  * verifier lives in the sidecar's memory; the code passes through to the sidecar in one request
@@ -30,11 +42,11 @@ import type { Context, Hono, MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 
 import { agentError, agentPrincipalOf, type AgentScope, type AgentVars } from "./agent-keys.js";
-import { CONNECTOR_SLOT_BY_PROVIDER, type ConnectorVault, type VaultPrincipal } from "./connector-tokens.js";
+import { CONNECTOR_SLOT_BY_PROVIDER, type ConnectorVault, type DeviceStep, type VaultPrincipal } from "./connector-tokens.js";
 
-/** The providers the hosted flow connects: the ones the core has a web-capable OAuth flow for.
- * GitHub is connected with the device flow in the core and has no hosted callback yet. */
-export const CONNECTABLE_PROVIDERS = Object.freeze(["gmail", "calendar", "slack", "linear"] as const);
+/** The providers the hosted flow connects: the ones the core has a hosted flow for (an OAuth
+ * redirect for Google, Slack and Linear; the device flow for GitHub). */
+export const CONNECTABLE_PROVIDERS = Object.freeze(["gmail", "calendar", "slack", "linear", "github"] as const);
 export type ConnectableProvider = (typeof CONNECTABLE_PROVIDERS)[number];
 
 export const CONNECT_LINK_PATH = "/v1/connectors/connect";
@@ -47,7 +59,7 @@ export const CONNECT_CSRF_COOKIE = "shogun_connect_csrf";
 export const CONNECT_FLOW_COOKIE = "shogun_connect_flow";
 const MAX_FORM_BYTES = 4 * 1024;
 
-const PROVIDER_NAME: Record<ConnectableProvider, string> = { gmail: "Gmail", calendar: "Google Calendar", slack: "Slack", linear: "Linear" };
+const PROVIDER_NAME: Record<ConnectableProvider, string> = { gmail: "Gmail", calendar: "Google Calendar", slack: "Slack", linear: "Linear", github: "GitHub" };
 
 const PAGE_HEADERS: Record<string, string> = {
   "content-type": "text/html; charset=utf-8",
@@ -248,8 +260,84 @@ export function registerConnectorConnectRoutes(app: Hono<{ Variables: AgentVars 
         : html(c, 503, "Not connected", "<p>The connection could not be started. Try again in a moment.</p>");
     }
     c.set("relayLogEvent", "connector_connect_started");
+    if (started.device) {
+      // The device flow: no redirect. The flow cookie goes to this page's "Check" instead of the
+      // callback, and the sealed state rides the form (the browser that pressed Continue only).
+      const deviceCookie = `${CONNECT_FLOW_COOKIE}=${flow}; Path=${CONNECT_LINK_PATH}; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(CONNECT_STATE_TTL_MS / 1000)}${secure ? "; Secure" : ""}`;
+      const csrfCookie = cookieOf(c.req.header("cookie"), CONNECT_CSRF_COOKIE) ?? "";
+      return devicePage(c, 200, claims, link, csrfFor(deps.secret, csrfCookie, link), state, started.device, undefined, { "set-cookie": deviceCookie });
+    }
     const flowCookie = `${CONNECT_FLOW_COOKIE}=${flow}; Path=${CONNECT_CALLBACK_PATH}; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(CONNECT_STATE_TTL_MS / 1000)}${secure ? "; Secure" : ""}`;
     return new Response(null, { status: 303, headers: { location: started.authorizeUrl, "cache-control": "no-store", "referrer-policy": "no-referrer", "set-cookie": flowCookie } });
+  });
+
+  // --- the device flow's page: the code to type at GitHub, and a "Check" button ---
+  const devicePage = (
+    c: Context<{ Variables: AgentVars }>,
+    status: number,
+    claims: LinkClaims,
+    link: string,
+    csrf: string,
+    state: string,
+    device: DeviceStep,
+    note: string | undefined,
+    extra: Record<string, string> = {},
+  ): Response => {
+    const name = escapeHtml(PROVIDER_NAME[claims.prov]);
+    const form = `<form method="post" action="${CONNECT_LINK_PATH}/${escapeHtml(link)}/check"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}"><input type="hidden" name="state" value="${escapeHtml(state)}"><button type="submit">I entered the code: check</button></form>`;
+    return html(c, status, `Connect ${PROVIDER_NAME[claims.prov]}`,
+      `${note ? `<p><strong>${escapeHtml(note)}</strong></p>` : ""}<p>Open <a href="${escapeHtml(device.verificationUri)}" target="_blank" rel="noopener noreferrer">${escapeHtml(device.verificationUri)}</a>, sign in to ${name} and enter this code:</p><p style="font:600 2rem/1.2 ui-monospace,monospace;letter-spacing:.1em">${escapeHtml(device.userCode)}</p><p>Then come back and press the button. Nothing is connected unless you enter the code and approve at ${name}.</p><dl><dt>Principal</dt><dd>${escapeHtml(claims.p)}</dd><dt>Account</dt><dd>${name}</dd></dl>${form}`,
+      extra);
+  };
+
+  // --- "Check": one poll of the device flow through the principal's sidecar ---
+  app.post(`${CONNECT_LINK_PATH}/:link/check`, bodyLimit({ maxSize: MAX_FORM_BYTES, onError: (c) => c.text("Too large", 413) }), async (c) => {
+    const link = c.req.param("link");
+    const clearFlow = `${CONNECT_FLOW_COOKIE}=; Path=${CONNECT_LINK_PATH}; HttpOnly; SameSite=Strict; Max-Age=0${secure ? "; Secure" : ""}`;
+    const refuse = (status: number, title: string, message: string): Response => {
+      c.set("relayLogEvent", "connector_connect_refused");
+      return html(c, status, title, `<p>${escapeHtml(message)}</p>`, { "set-cookie": clearFlow });
+    };
+    const sentOrigin = c.req.header("origin");
+    if (sentOrigin !== undefined && sentOrigin !== origin) return refuse(403, "Not connected", "This form must be sent from the connect page.");
+    // The link may have expired by now; the state's own expiry is what counts here.
+    const linked = linkClaims(openClaims(deps.secret, "link", link));
+    const form = await c.req.parseBody().catch(() => ({} as Record<string, unknown>));
+    const csrfCookie = cookieOf(c.req.header("cookie"), CONNECT_CSRF_COOKIE);
+    const csrf = typeof form.csrf === "string" ? form.csrf : "";
+    const rawState = typeof form.state === "string" ? form.state : "";
+    if (!linked || !csrfCookie || !sameHex(csrf, csrfFor(deps.secret, csrfCookie, link))) {
+      return refuse(403, "Not connected", "The form expired or was not sent from the connect page. Open the link again.");
+    }
+    const claims = stateClaims(openClaims(deps.secret, "state", rawState));
+    if (!claims || claims.p !== linked.p || claims.k !== linked.k || claims.prov !== linked.prov) return refuse(400, "Not connected", "This check did not come from this connect page.");
+    if (claims.exp <= deps.now().getTime()) return refuse(410, "Not connected", "This sign-in took too long. Ask the agent for a new link.");
+    const flow = cookieOf(c.req.header("cookie"), CONNECT_FLOW_COOKIE);
+    if (!flow || !sameHex(sha256Hex(flow), claims.f)) {
+      return refuse(403, "Not connected", "This sign-in was started in another browser. Open the connect link in this browser and continue from there.");
+    }
+    if (!deps.vault.connectPoll) return refuse(503, "Not available", "This connector cannot be connected on this deployment yet. Ask the operator.");
+    const name = PROVIDER_NAME[claims.prov];
+    let polled;
+    try {
+      polled = await deps.vault.connectPoll(principalOfClaims(claims), rawState);
+    } catch {
+      polled = { kind: "unavailable" as const, reason: "transport" as const };
+    }
+    switch (polled.kind) {
+      case "connected":
+        c.set("relayLogEvent", "connector_connected");
+        return html(c, 200, `${name} connected`, `<p>${escapeHtml(name)} is connected for principal ${escapeHtml(claims.p)}. The agent can retry its run. You can close this page.</p>`, { "set-cookie": clearFlow });
+      case "pending":
+        c.set("relayLogEvent", "connector_device_pending");
+        return devicePage(c, 200, claims, link, csrf, rawState, polled.device, `${name} has not confirmed the code yet. Enter it at ${polled.device.verificationUri}, approve, then check again.`);
+      case "flow_unknown":
+        return refuse(410, "Not connected", "This sign-in was already used or has expired. Ask the agent for a new link.");
+      case "rejected":
+        return refuse(400, "Not connected", `${name} did not approve the code (denied or expired). Ask the agent for a new link to try again.`);
+      default:
+        return refuse(503, "Not connected", "The check did not get through. Wait a moment and press the button again.");
+    }
   });
 
   // --- the provider's redirect: hand the code to the principal's sidecar, keep nothing ---
@@ -287,5 +375,65 @@ export function registerConnectorConnectRoutes(app: Hono<{ Variables: AgentVars 
       default:
         return refuse(503, "Not connected", "The connection could not be completed. Ask the agent for a new link and try again in a moment.");
     }
+  });
+}
+
+// --- the principal's connections, for an agent (E50 follow-up) ---
+
+export interface ConnectorStatusDeps {
+  vault: ConnectorVault;
+  requireKey: (scopes: readonly AgentScope[]) => MiddlewareHandler<{ Variables: AgentVars }>;
+}
+
+/** `GET /v1/connectors` (a free read, `read` scope) and `POST /v1/connectors/{provider}/disconnect`
+ * (`write` scope: it only removes access, so any agent of the principal may ask, as on the core's
+ * MCP / REST / CLI `connections.disconnect`). Both go to the principal's sidecar; the answers carry
+ * states and fixed words only, never a token or an account identity. */
+export function registerConnectorStatusRoutes(app: Hono<{ Variables: AgentVars }>, deps: ConnectorStatusDeps): void {
+  const unavailable = (c: Context<{ Variables: AgentVars }>): Response => {
+    c.set("relayLogEvent", "connector_vault_unavailable");
+    return agentError(c, 503, "connectors_unavailable", "The connector credential store did not answer. Retry shortly.", "retry_after", { "retry-after": "5" });
+  };
+  const refused = (c: Context<{ Variables: AgentVars }>): Response => {
+    c.set("relayLogEvent", "connector_principal_refused");
+    return agentError(c, 403, "principal_unavailable", "This principal's store is closed on this deployment. Ask the operator.", "contact_operator");
+  };
+
+  app.get("/v1/connectors", deps.requireKey(["read"]), async (c) => {
+    const principal = agentPrincipalOf(c);
+    if (!principal) return agentError(c, 401, "missing_key", "Send your agent key as the bearer.", "register");
+    if (!deps.vault.status) return unavailable(c);
+    const answer = await deps.vault.status(principal).catch(() => ({ kind: "unavailable" as const, reason: "transport" as const }));
+    if (answer.kind === "refused") return refused(c);
+    if (answer.kind !== "status") return unavailable(c);
+    c.set("relayLogEvent", "connector_status_served");
+    return c.json({
+      connectors: answer.connectors,
+      connect: "POST /v1/connectors/{provider}/connect returns a link a human opens; an agent cannot connect an account itself.",
+      usage: { unit: "call", quantity: 1, cost_micro_usd: 0 },
+    }, 200, { "cache-control": "no-store" });
+  });
+
+  app.post("/v1/connectors/:provider/disconnect", deps.requireKey(["write"]), async (c) => {
+    const provider = c.req.param("provider");
+    if (!Object.hasOwn(CONNECTOR_SLOT_BY_PROVIDER, provider)) {
+      return agentError(c, 404, "unknown_connector", `Unknown connector. Known: ${Object.keys(CONNECTOR_SLOT_BY_PROVIDER).join(", ")}.`, "fix_input");
+    }
+    const principal = agentPrincipalOf(c);
+    if (!principal) return agentError(c, 401, "missing_key", "Send your agent key as the bearer.", "register");
+    if (!deps.vault.disconnect) return unavailable(c);
+    const answer = await deps.vault.disconnect(principal, provider).catch(() => ({ kind: "unavailable" as const, reason: "transport" as const }));
+    if (answer.kind === "refused") return refused(c);
+    if (answer.kind === "unknown") return agentError(c, 404, "unknown_connector", "This connector is not one the core serves.", "fix_input");
+    if (answer.kind !== "disconnected") return unavailable(c);
+    c.set("relayLogEvent", "connector_disconnected");
+    return c.json({
+      disconnected: true,
+      provider: answer.provider,
+      slot: answer.slot,
+      removed: answer.removed,
+      vendor_revoke: answer.vendorRevoke,
+      usage: { unit: "call", quantity: 1, cost_micro_usd: 0 },
+    }, 200, { "cache-control": "no-store" });
   });
 }
