@@ -234,7 +234,7 @@ mod tests {
         for group in &listed {
             assert!(ALL_GROUPS.contains(group), "{}", group.id());
         }
-        for group in [ToolGroup::Core, ToolGroup::Files, ToolGroup::Governance, ToolGroup::Import, ToolGroup::State, ToolGroup::Skills, ToolGroup::Wiki] {
+        for group in [ToolGroup::Core, ToolGroup::Files, ToolGroup::Handoff, ToolGroup::Governance, ToolGroup::Import, ToolGroup::State, ToolGroup::Skills, ToolGroup::Wiki] {
             assert!(listed.contains(&group), "{}", group.id());
         }
         let desktop_only = [

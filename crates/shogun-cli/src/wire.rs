@@ -242,6 +242,8 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Ingest { body } => post("/v1/memory/ingest".into(), body.clone()),
         Command::Recall { body } => post("/v1/memory/recall".into(), body.clone()),
         Command::Fs { body } => post("/v1/memory/fs".into(), body.clone()),
+        Command::HandoffCreate { body } => post("/v1/handoff".into(), body.clone()),
+        Command::HandoffAccept { body } => post("/v1/handoff/accept".into(), body.clone()),
         Command::Approvals(approvals) => match approvals {
             crate::command::ApprovalsCommand::List => get("/v1/approvals".into()),
             crate::command::ApprovalsCommand::Get { id } => get(format!("/v1/approvals/{id}")),

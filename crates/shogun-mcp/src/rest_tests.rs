@@ -2808,3 +2808,33 @@ fn export_v1_is_a_post_read_beside_the_markdown_export() {
     let (status, body) = respond_with(&with_body(r#"{"differential":true,"since_cursor":3}"#), &reg(), &ent(), &crate::backend::StubBackend);
     assert_eq!(status, 400, "{body}");
 }
+
+/// E35: the handoff on REST is `POST /v1/handoff` (a free read with a body) and
+/// `POST /v1/handoff/accept` (L1), both on the MCP parser; a refusal carries its code and
+/// `next_action`.
+#[test]
+fn handoff_routes_share_the_mcp_parser_at_the_same_levels() {
+    use crate::memory_api::{tool_level, ApiLevel};
+    let routed = route(&req(Method::Post, "/v1/handoff", Some("t")), &reg(), &ent());
+    assert_eq!(routed, Routed::Read { tool: Tool::HandoffCreate, id: None });
+    assert_eq!(tool_level(Tool::HandoffCreate), ApiLevel::Read);
+    let routed = route(&req(Method::Post, "/v1/handoff/accept", Some("t")), &reg(), &ent());
+    assert_eq!(routed, Routed::Write { tool: Tool::HandoffAccept, level: Level::L1 });
+    assert_eq!(tool_level(Tool::HandoffAccept), ApiLevel::Write(Level::L1));
+    assert_eq!(status_code(&route(&req(Method::Get, "/v1/handoff", Some("t")), &reg(), &ent())), 405);
+    let with_body = |path: &str, body: &str| RestRequest { body: Some(body.to_string()), ..req(Method::Post, path, Some("t")) };
+    let (status, body) = respond_with(&with_body("/v1/handoff", r#"{"to_agent":"agent:w"}"#), &reg(), &ent(), &crate::backend::StubBackend);
+    assert_eq!(status, 400, "{body}");
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((value["error"].as_str(), value["next_action"].as_str()), (Some("missing_task"), Some("fix_input")));
+    let (status, body) = respond_with(
+        &with_body("/v1/handoff", r#"{"task":"x","to_agent":"agent:w","from_agent":"agent:p"}"#),
+        &reg(),
+        &ent(),
+        &crate::backend::StubBackend,
+    );
+    assert_eq!((status, body.contains("recall_unavailable")), (503, true), "{body}");
+    let (status, body) =
+        respond_with(&with_body("/v1/handoff/accept", r#"{"handoff":{},"actor":"agent:w"}"#), &reg(), &ent(), &crate::backend::StubBackend);
+    assert_eq!((status, body.contains("invalid_handoff")), (400, true), "{body}");
+}

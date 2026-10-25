@@ -531,3 +531,103 @@ fn the_mcp_face_keeps_principals_apart() {
     let bob_audit: i64 = bob.query_row("SELECT count(*) FROM audit_log", [], |r| r.get(0)).unwrap();
     assert_eq!((bob_events, bob_audit), (0, 0));
 }
+
+/// E35: the A2A handoff is assembled in the core. Alice's agent packages the state of work from
+/// Alice's own store; Bob reads Alice's world through a handoff only with a Team grant (never
+/// otherwise), and Bob's agent accepts what it was handed into its own scratch — never Bob's world,
+/// never Alice's file — the same through REST and MCP, and a repeat replays.
+#[test]
+fn a_handoff_crosses_principals_only_through_a_team_grant_and_lands_in_scratch() {
+    use shogun_memory::state::{CommitmentDirection, CommitmentStatus, NewCommitment, Provenance};
+    let root = TempRoot::named("handoff");
+    let (port, store) = boot_multi(root.0.clone());
+
+    // Alice's world: one event and a confirmed commitment proven by it.
+    let event = ingest(port, TOKEN_A, "I'll send the zebrafish forecast to Aiko by Friday.", "world", "h1");
+    let alice = store.open(&PrincipalId::parse("alice").unwrap()).unwrap();
+    alice
+        .db()
+        .insert_commitment(
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "send the zebrafish forecast to Aiko",
+                due_at: None,
+                status: CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 1_000,
+            },
+            &[Provenance::new(event)],
+        )
+        .expect("commitment");
+    let read_only = |id: &str, key: [u8; 32]| {
+        shogun_memory::open_encrypted_existing_read_only(store.path_for(&PrincipalId::parse(id).unwrap()), &DbKey::new(key)).unwrap()
+    };
+    let alice_events = || -> i64 { read_only("alice", [0x5a; 32]).query_row("SELECT count(*) FROM event_log", [], |r| r.get(0)).unwrap() };
+    let before = alice_events();
+
+    // Alice's agent packages the state of work (REST); the sender defaults to the key's agent.
+    let body = serde_json::json!({ "task": "Draft the zebrafish forecast note", "to_agent": "agent:bob", "query": "zebrafish forecast" });
+    let created = post_json(port, "/v1/handoff", TOKEN_A, &body);
+    assert_eq!(created.status, 200, "{}", created.body);
+    let envelope = json(&created.body);
+    let handoff = envelope["result"]["handoff"].clone();
+    assert_eq!(handoff["format"], "shogunagent-handoff/v1");
+    assert_eq!(handoff["from_agent"], "agent:claude-code");
+    assert_eq!(envelope["usage"]["cost_micro_usd"], 0, "a handoff is a free read");
+    let fact = handoff["facts"].as_array().unwrap().iter().find(|f| f["text"] == "send the zebrafish forecast to Aiko").cloned()
+        .unwrap_or_else(|| panic!("the commitment travels: {handoff}"));
+    assert_eq!((fact["band"].as_str(), fact["provenance"][0]["event_id"].as_i64()), (Some("high"), Some(event)));
+    assert_eq!(envelope["result"]["a2a"]["part"]["data"], handoff);
+
+    // Bob cannot build a handoff from Alice's store without a team grant (the same 403 for every id).
+    let cross = post_json(port, "/v1/handoff?principal=alice", TOKEN_B, &body);
+    assert_eq!(cross.status, 403, "{}", cross.body);
+    assert!(!cross.body.contains("zebrafish"), "{}", cross.body);
+
+    // Bob's agent accepts the handoff it was sent, through MCP: into its own scratch only.
+    let accept = serde_json::json!({ "handoff": envelope["result"]["a2a"]["message"], "actor": "agent:bob" });
+    let reply = mcp_call(port, TOKEN_B, "handoff.accept", accept.clone());
+    let accepted = mcp_text(&reply);
+    assert_eq!(accepted["result"]["namespace"], "agent_scratch", "{accepted}");
+    assert_eq!(accepted["result"]["replayed"], false);
+    let stored = accepted["result"]["accepted"].as_u64().unwrap();
+    assert!(stored >= 2, "the task and the commitment: {accepted}");
+    assert_eq!(accepted["usage"]["quantity"].as_u64(), Some(stored));
+    // The same accept on REST replays: nothing appended, nothing billed.
+    let again = post_json(port, "/v1/handoff/accept", TOKEN_B, &accept);
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(json(&again.body)["result"]["replayed"], true, "{}", again.body);
+    assert_eq!(json(&again.body)["usage"]["quantity"], 0);
+    // Addressed to someone else, or expired: refused before anything is written.
+    let wrong = post_json(port, "/v1/handoff/accept", TOKEN_B, &serde_json::json!({ "handoff": handoff, "actor": "agent:mallory" }));
+    assert_eq!((wrong.status, json(&wrong.body)["error"].as_str()), (403, Some("handoff_not_for_you")), "{}", wrong.body);
+    let mut stale = handoff.clone();
+    stale["expires_at"] = serde_json::json!(1);
+    let expired = post_json(port, "/v1/handoff/accept", TOKEN_B, &serde_json::json!({ "handoff": stale, "actor": "agent:bob" }));
+    assert_eq!((expired.status, json(&expired.body)["error"].as_str()), (400, Some("handoff_expired")), "{}", expired.body);
+
+    // Bob's world holds none of it; his own recall with scratch does.
+    let world = post_json(port, "/v1/memory/recall", TOKEN_B, &serde_json::json!({ "query": "zebrafish forecast" }));
+    assert!(!world.body.contains("zebrafish"), "the handoff reached Bob's world: {}", world.body);
+    let scratch = post_json(port, "/v1/memory/recall", TOKEN_B, &serde_json::json!({ "query": "zebrafish forecast", "include_scratch": true }));
+    assert!(scratch.body.contains("zebrafish"), "{}", scratch.body);
+    let bob = read_only("bob", [0xb0; 32]);
+    let mut stmt = bob.prepare("SELECT DISTINCT namespace FROM event_log").unwrap();
+    let namespaces: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+    drop(stmt);
+    drop(bob);
+    assert_eq!(namespaces, vec!["agent_scratch:bob".to_string()], "only Bob's agent's scratch was written");
+    assert_eq!(alice_events(), before, "accepting wrote nothing into Alice's file");
+
+    // With a team and Alice's grant, Bob builds a handoff from Alice's world rows.
+    assert_eq!(post_json(port, "/v1/teams", ADMIN, &serde_json::json!({ "tenant": "acme", "team": "ops", "members": ["alice", "bob"] })).status, 200);
+    assert_eq!(post_json(port, "/v1/acl/grant", ADMIN, &serde_json::json!({ "kind": "principal", "grantee_principal": "bob", "principal": "alice" })).status, 200);
+    let granted = post_json(port, "/v1/handoff?principal=alice", TOKEN_B, &body);
+    assert_eq!(granted.status, 200, "{}", granted.body);
+    assert!(granted.body.contains("send the zebrafish forecast to Aiko"), "{}", granted.body);
+    // A cross-principal accept is a write: refused.
+    let cross_accept = post_json(port, "/v1/handoff/accept?principal=alice", TOKEN_B, &accept);
+    assert_eq!(cross_accept.status, 403, "{}", cross_accept.body);
+}

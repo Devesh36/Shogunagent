@@ -232,7 +232,8 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
             _ => {}
         }
     }
-    let quantity = (body_method == "tools/call" && body_name.as_deref() == Some("memory.ingest")).then(|| {
+    // `handoff.accept` (E35) appends through the same ingest path: it settles what it stored too.
+    let quantity = (body_method == "tools/call" && matches!(body_name.as_deref(), Some("memory.ingest" | "handoff.accept"))).then(|| {
         let arguments = &object.get("params").and_then(|params| params.get("arguments"));
         ["events", "turns"]
             .iter()

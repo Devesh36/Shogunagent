@@ -89,6 +89,12 @@ pub enum Command {
     /// `shogun fs <json>` → `memory.fs` (E6-T2): one memory-tool command (`view`, `create`,
     /// `str_replace`, `insert`, `delete`, `rename`) over `/memories`; `body` is validated at parse.
     Fs { body: String },
+    /// `shogun handoff create <json>` → `handoff.create` (E35): the A2A state-of-work handoff for
+    /// a task; `body` is the request JSON (task, to_agent, …), validated at parse.
+    HandoffCreate { body: String },
+    /// `shogun handoff accept <json>` → `handoff.accept` (E35): `{"handoff": …, "actor": …}` into
+    /// the caller's own scratch; `body` is validated at parse (expiry is the server's to judge).
+    HandoffAccept { body: String },
     /// `shogun approvals list|get <id>|decide <id> approve|reject` (E15).
     Approvals(ApprovalsCommand),
     /// `shogun audit [--since-ms N] [--limit N]` → `audit.list` (E18).
@@ -725,6 +731,8 @@ impl Command {
             Command::Ingest { .. } => Tool::MemoryIngest,
             Command::Recall { .. } => Tool::MemoryRecall,
             Command::Fs { .. } => Tool::MemoryFs,
+            Command::HandoffCreate { .. } => Tool::HandoffCreate,
+            Command::HandoffAccept { .. } => Tool::HandoffAccept,
             Command::Approvals(ApprovalsCommand::List) => Tool::ApprovalsList,
             Command::Approvals(ApprovalsCommand::Get { .. }) => Tool::ApprovalsGet,
             Command::Audit { .. } => Tool::AuditList,
@@ -951,6 +959,8 @@ COMMANDS:
     recall <query> [--budget-tokens N] [--include-scratch]
                               What memory holds on a question, within a token budget
     ingest <json>             Append events[] or turns[] under an idempotency_key (L1)
+    handoff create <json>     The state of work for a task as an A2A handoff (task, to_agent, ...)
+    handoff accept <json>     Accept a handoff into your own scratch (handoff, actor; L1)
     approvals [list]          Queued L2/L3 approvals, redacted (kind, tier, recipient class)
     approvals get <id>        One approval's redacted summary
     approvals decide <id> approve|reject [--as <kind:id>]
