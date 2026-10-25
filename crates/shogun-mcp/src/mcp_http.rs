@@ -94,6 +94,21 @@ fn wants_sse_only(accept: Option<&str>) -> bool {
     lower.contains(SSE) && !lower.contains(JSON) && !lower.contains("*/*")
 }
 
+/// The `Mcp-Quantity` a `memory.ingest` reply settles (E36a conformance finding): what the core
+/// actually took, not what the request carried. A refusal (a JSON-RPC error or an `isError`
+/// result) took nothing, and an idempotent replay reports `usage.quantity: 0`, so neither is
+/// settled as new events. A reply without a `usage.quantity` keeps the requested count.
+fn settled_quantity(asked: u64, reply: &Value) -> u64 {
+    if reply.get("error").is_some() || reply["result"]["isError"] == Value::Bool(true) {
+        return 0;
+    }
+    reply["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|payload| payload["usage"]["quantity"].as_u64())
+        .unwrap_or(asked)
+}
+
 /// Handle one request against `handler`.
 pub fn handle(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> HttpReply {
     let refuse = |status: u16, body: String, method: String, name: Option<String>| HttpReply {
@@ -210,9 +225,24 @@ pub fn handle(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> HttpReply 
             allow: None,
         };
     };
-    let status = match serde_json::from_str::<Value>(&reply) {
-        Ok(value) if value["error"]["code"].as_i64() == Some(-32700) => 400,
+    let parsed = serde_json::from_str::<Value>(&reply).ok();
+    let status = match &parsed {
+        Some(value) if value["error"]["code"].as_i64() == Some(-32700) => 400,
         _ => 200,
+    };
+    let quantity = quantity.map(|asked| parsed.as_ref().map_or(asked, |value| settled_quantity(asked, value)));
+    // E36a conformance finding: this transport speaks 2026-07-28 (every reply says so in
+    // `Mcp-Protocol-Version`), so an `initialize` that asks for it is answered with it rather than
+    // negotiated down to the newest stdio version, which would contradict the header.
+    let asked_stateless = body_method == "initialize"
+        && object.get("params").and_then(|p| p.get("protocolVersion")).and_then(Value::as_str)
+            == Some(crate::mcp::STATELESS_PROTOCOL_VERSION);
+    let reply = match parsed {
+        Some(mut value) if asked_stateless && value["result"].is_object() => {
+            value["result"]["protocolVersion"] = Value::String(crate::mcp::STATELESS_PROTOCOL_VERSION.into());
+            value.to_string()
+        }
+        _ => reply,
     };
     let (content_type, body) = if wants_sse_only(request.accept) {
         (SSE, format!("event: message\ndata: {reply}\n\n"))
@@ -311,11 +341,43 @@ mod tests {
         assert_eq!(wrong_name.status, 400);
         assert!(wrong_name.body.contains("mcp_name_mismatch"));
         // Correct headers: the stub backend has no ingest, which is the handler's answer, not
-        // the transport's; the quantity header says what the gateway should settle.
+        // the transport's; the quantity header says what the gateway should settle, and a
+        // refusal settles nothing.
         let ok = handle(&server(), &post(call, Some("tools/call"), Some("memory.ingest")));
         assert_eq!(ok.status, 200);
-        assert_eq!(ok.mcp_quantity, Some(2));
+        assert_eq!(ok.mcp_quantity, Some(0), "{}", ok.body);
         assert_eq!(ok.mcp_name.as_deref(), Some("memory.ingest"));
+    }
+
+    #[test]
+    fn initialize_asking_for_the_stateless_version_gets_it() {
+        let ask = |version: &str| {
+            let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": version } }).to_string();
+            let reply = handle(&server(), &post(&body, Some("initialize"), None));
+            serde_json::from_str::<Value>(&reply.body).unwrap()["result"]["protocolVersion"].clone()
+        };
+        assert_eq!(ask(crate::mcp::STATELESS_PROTOCOL_VERSION), crate::mcp::STATELESS_PROTOCOL_VERSION);
+        // Older clients still negotiate as before.
+        assert_eq!(ask("2025-03-26"), "2025-03-26");
+        assert_eq!(ask("1999-01-01"), crate::mcp::SUPPORTED_PROTOCOL_VERSIONS[0]);
+    }
+
+    #[test]
+    fn the_quantity_header_settles_what_the_core_took() {
+        struct Canned(String);
+        impl McpHandler for Canned {
+            fn handle_line_as(&self, _: &str, _: Option<&str>) -> Option<String> {
+                Some(self.0.clone())
+            }
+        }
+        let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"memory.ingest","arguments":{"events":[{"content":"a"},{"content":"b"}],"source":"s","actor":"a","idempotency_key":"k"}}}"#;
+        let taken = |reply: String| handle(&Canned(reply), &post(call, Some("tools/call"), Some("memory.ingest"))).mcp_quantity;
+        let text = |payload: &str| json!({ "jsonrpc": "2.0", "id": 4, "result": { "content": [{ "type": "text", "text": payload }], "isError": false } }).to_string();
+        assert_eq!(taken(text(r#"{"usage":{"quantity":2,"unit":"events"}}"#)), Some(2));
+        assert_eq!(taken(text(r#"{"usage":{"quantity":0,"unit":"events"},"result":{"replayed":true}}"#)), Some(0), "an idempotent replay adds nothing");
+        assert_eq!(taken(text(r#"{"accepted":true}"#)), Some(2), "no usage: the requested count");
+        assert_eq!(taken(r#"{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"missing_argument: idempotency_key is required"}}"#.into()), Some(0));
+        assert_eq!(taken(r#"{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"{}"}],"isError":true}}"#.into()), Some(0));
     }
 
     #[test]

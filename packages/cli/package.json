@@ -8,7 +8,8 @@
   "type": "module",
   "engines": { "node": ">=22.13.0" },
   "bin": { "shogunagent": "bin/shogunagent.mjs" },
-  "files": ["bin", "dist", "README.md"],
+  "files": ["bin", "dist", "README.md", "CHANGELOG.md"],
+  "publishConfig": { "access": "public" },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
