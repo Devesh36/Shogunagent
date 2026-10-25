@@ -12,7 +12,7 @@
 
 use std::sync::Once;
 
-use crate::memory_api::{tool_group, Tool, ToolGroup, ALL_GROUPS};
+use crate::memory_api::{tool_group, tool_is_served, Tool, ToolGroup, ALL_GROUPS};
 
 /// The environment variable the stdio binary reads.
 pub const ENV_VAR: &str = "SHOGUN_MCP_TOOLSETS";
@@ -21,6 +21,9 @@ pub const ENV_VAR: &str = "SHOGUN_MCP_TOOLSETS";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Toolsets {
     all: bool,
+    /// With `all`: list every group that exists, served by this build or not (the desktop
+    /// build's `all`). For the tool-table tests; no flag or env value selects it.
+    every: bool,
     groups: Vec<ToolGroup>,
 }
 
@@ -32,10 +35,22 @@ impl Default for Toolsets {
 }
 
 impl Toolsets {
-    /// Every group.
+    /// Every group this build serves ([`ALL_GROUPS`], E4-T6).
     pub fn all() -> Self {
         Self {
             all: true,
+            every: false,
+            groups: Vec::new(),
+        }
+    }
+
+    /// Every group that exists, served or not ([`crate::memory_api::EVERY_GROUP`]): what the
+    /// desktop build's [`Toolsets::all`] lists. For tests of the whole tool table; a call to a
+    /// listed-but-unserved tool answers what the backend answers, as a call by name always did.
+    pub fn every() -> Self {
+        Self {
+            all: true,
+            every: true,
             groups: Vec::new(),
         }
     }
@@ -44,6 +59,7 @@ impl Toolsets {
     pub fn core() -> Self {
         Self {
             all: false,
+            every: false,
             groups: vec![ToolGroup::Core],
         }
     }
@@ -104,9 +120,11 @@ impl Toolsets {
         self.all
     }
 
-    /// Whether `tools/list` shows this tool.
+    /// Whether `tools/list` shows this tool. `all` lists the groups this build serves
+    /// ([`crate::memory_api::ALL_GROUPS`], E4-T6): every group on the desktop build, the
+    /// server's on the default build. A named group is always one this build parsed.
     pub fn lists(&self, tool: Tool) -> bool {
-        self.all || self.groups.contains(&tool_group(tool))
+        (self.all && (self.every || tool_is_served(tool))) || self.groups.contains(&tool_group(tool))
     }
 }
 
@@ -170,6 +188,7 @@ mod tests {
         assert!(Toolsets::default().is_all());
     }
 
+    #[cfg(feature = "desktop")]
     #[test]
     fn groups_add_to_core_and_all_wins() {
         let (toolsets, unknown) = Toolsets::parse(Some(" Mail , meeting,mail"));
@@ -184,10 +203,66 @@ mod tests {
     }
 
     #[test]
+    fn served_groups_add_to_core_and_all_lists_exactly_the_served_tools() {
+        let (toolsets, unknown) = Toolsets::parse(Some(" Import , state,import"));
+        assert_eq!(unknown, 0);
+        assert!(!toolsets.is_all());
+        assert!(toolsets.lists(Tool::MemorySearch), "core is always listed");
+        assert!(toolsets.lists(Tool::MemoryImportPreview));
+        assert!(toolsets.lists(Tool::StateExport));
+        assert!(!toolsets.lists(Tool::WikiList));
+        let (toolsets, _) = Toolsets::parse(Some("core,all"));
+        for &tool in ALL_TOOLS {
+            assert_eq!(toolsets.lists(tool), tool_is_served(tool), "{}", tool.wire_name());
+        }
+    }
+
+    /// E4-T6: the server lists core, import, state, skills and wiki and nothing the Mac app
+    /// alone serves; the desktop build lists every group.
+    #[test]
+    fn all_lists_only_the_groups_this_build_serves() {
+        let listed: Vec<ToolGroup> = ALL_TOOLS
+            .iter()
+            .filter(|t| Toolsets::all().lists(**t))
+            .map(|t| tool_group(*t))
+            .fold(Vec::new(), |mut groups, group| {
+                if !groups.contains(&group) {
+                    groups.push(group);
+                }
+                groups
+            });
+        for group in &listed {
+            assert!(ALL_GROUPS.contains(group), "{}", group.id());
+        }
+        for group in [ToolGroup::Core, ToolGroup::Import, ToolGroup::State, ToolGroup::Skills, ToolGroup::Wiki] {
+            assert!(listed.contains(&group), "{}", group.id());
+        }
+        let desktop_only = [
+            ToolGroup::Meeting,
+            ToolGroup::Mail,
+            ToolGroup::VisualRecall,
+            ToolGroup::Voice,
+            ToolGroup::Web,
+            ToolGroup::Export,
+            ToolGroup::Translate,
+            ToolGroup::Settings,
+            ToolGroup::Forms,
+        ];
+        for group in desktop_only {
+            assert_eq!(listed.contains(&group), cfg!(feature = "desktop"), "{}", group.id());
+            assert_eq!(ToolGroup::from_id(group.id()).is_some(), cfg!(feature = "desktop"), "{}", group.id());
+        }
+        // Every wire name still resolves on every build: hidden is not disabled.
+        for &tool in ALL_TOOLS {
+            assert_eq!(Tool::from_wire(tool.wire_name()), Some(tool));
+        }
+    }
+
+    #[test]
     fn unknown_ids_are_counted_and_ignored() {
-        let (toolsets, unknown) = Toolsets::parse(Some("mail,nope,settngs"));
+        let (toolsets, unknown) = Toolsets::parse(Some("import,nope,settngs"));
         assert_eq!(unknown, 2);
-        assert!(toolsets.lists(Tool::MailTriageList));
+        assert!(toolsets.lists(Tool::MemoryImportPreview));
         assert!(!toolsets.lists(Tool::UiLanguageGet));
         let (toolsets, unknown) = Toolsets::parse(Some("nope"));
         assert_eq!((toolsets, unknown), (Toolsets::core(), 1));
@@ -215,7 +290,7 @@ mod tests {
     fn toolset_flag_is_validated_and_full_means_all() {
         assert_eq!(toolset_arg(args_of(&["--client", "x"])), Ok(None));
         assert_eq!(toolset_arg(args_of(&["--toolset", "full"])), Ok(Some("full".into())));
-        assert_eq!(toolset_arg(args_of(&["--toolset=core,mail"])), Ok(Some("core,mail".into())));
+        assert_eq!(toolset_arg(args_of(&["--toolset=core,state"])), Ok(Some("core,state".into())));
         assert!(toolset_arg(args_of(&["--toolset"])).is_err());
         assert!(toolset_arg(args_of(&["--toolset", "nope"])).is_err());
         assert!(Toolsets::for_stdio(Some("full")).is_all());

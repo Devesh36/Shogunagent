@@ -16,6 +16,15 @@
 pub use shogun_agents::entitlement;
 
 pub mod activity_api;
+/// The frozen core tool set: agent-facing descriptions, generated annotations, cost classes
+/// (E4-T3 / T4 / T5).
+pub mod core_tools;
+/// `memory.ingest` / `memory.recall`: one parser and envelope for every face (E4-T3).
+pub mod ingest_api;
+/// The stateless Streamable HTTP transport, as pure request → reply logic (E4-T1).
+pub mod mcp_http;
+/// MRTR and URL-mode elicitation: how L2 / L3 look on the MCP face (E4-T2).
+pub mod mrtr;
 pub mod ai_search_api;
 pub mod api_port;
 pub mod approval_store;

@@ -314,6 +314,9 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
     if let Some(response) = activity_response(&routed, req, backend) {
         return response;
     }
+    if let Some(response) = ingest_response(&routed, req, backend) {
+        return response;
+    }
     if let Some(response) = steer_response(&routed, req, backend) {
         return response;
     }
@@ -877,6 +880,37 @@ fn activity_response<B: MemoryBackend + ?Sized>(
     Some(match backend.activity(&request) {
         Ok(json) => (200, render_structured(*tool, &json)),
         Err(_) => (503, r#"{"error":"memory_unavailable"}"#.to_string()),
+    })
+}
+
+/// `memory.ingest` / `memory.recall` on REST (E4-T3): `POST /v1/memory/ingest` (an L1 write
+/// under an idempotency key) and `POST /v1/memory/recall` (a read with a body), the MCP
+/// arguments as the body. One parser, one backend call and one envelope with MCP
+/// ([`crate::ingest_api::serve`]). `None` for every other route.
+fn ingest_response<B: MemoryBackend + ?Sized>(
+    routed: &Routed,
+    req: &RestRequest,
+    backend: &B,
+) -> Option<(u16, String)> {
+    let tool = match routed {
+        Routed::Read { tool, .. } | Routed::Write { tool, .. }
+            if crate::ingest_api::is_ingest_tool(*tool) =>
+        {
+            *tool
+        }
+        _ => return None,
+    };
+    let args = serde_json::from_str::<serde_json::Value>(req.body.as_deref().unwrap_or("{}"))
+        .unwrap_or(serde_json::Value::Null);
+    Some(match crate::ingest_api::serve(tool, &args, backend) {
+        Ok(text) => (200, text),
+        Err(crate::ingest_api::Refusal::BadArguments(message)) => {
+            let code = message.split(':').next().unwrap_or("invalid_request").to_string();
+            (400, serde_json::json!({ "error": code, "message": message }).to_string())
+        }
+        Err(crate::ingest_api::Refusal::Unavailable(code)) => {
+            (503, serde_json::json!({ "error": code }).to_string())
+        }
     })
 }
 

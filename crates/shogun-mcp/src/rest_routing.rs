@@ -97,6 +97,24 @@ pub(super) fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
                 id: None,
             },
         ),
+        // E4-T3: an agent's events / turns (an L1 write under an idempotency key) and the
+        // budgeted recall (a read that takes a JSON body, so a POST like the events read).
+        ["v1", "memory", "ingest"] => method_is(
+            method,
+            Method::Post,
+            Routed::Write {
+                tool: Tool::MemoryIngest,
+                level: Level::L1,
+            },
+        ),
+        ["v1", "memory", "recall"] => method_is(
+            method,
+            Method::Post,
+            Routed::Read {
+                tool: Tool::MemoryRecall,
+                id: None,
+            },
+        ),
         // Memory import (#384 / #391). The preview is a read that takes a body, so it is a POST;
         // the commit and the undo are L1 local writes.
         ["v1", "memory", "import", "preview"] => method_is(

@@ -1,0 +1,418 @@
+{
+  "core_count": 21,
+  "schema": "shogunagent/wire-freeze/v1",
+  "tools": [
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "memory.search",
+      "properties": [
+        "depth",
+        "from_ms",
+        "limit",
+        "mode",
+        "query",
+        "source_kind",
+        "to_ms"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "memory.get_context",
+      "properties": [],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "memory.get_context_pack",
+      "properties": [
+        "query"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "memory.get_events",
+      "properties": [
+        "ids",
+        "max_chars"
+      ],
+      "required": [
+        "ids"
+      ]
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "memory.read_session",
+      "properties": [
+        "app",
+        "from_ms",
+        "limit",
+        "to_ms"
+      ],
+      "required": [
+        "from_ms",
+        "to_ms"
+      ]
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "memory.get_wrap",
+      "properties": [],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "memory.get_periods",
+      "properties": [
+        "from_ms",
+        "page_size",
+        "to_ms"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": false,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "memory.recall",
+      "properties": [
+        "budget_tokens",
+        "include_scratch",
+        "query"
+      ],
+      "required": [
+        "query"
+      ]
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "calendar.upcoming",
+      "properties": [
+        "page_size"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "profile.whoami",
+      "properties": [],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "state.commitments.list",
+      "properties": [
+        "include_low",
+        "limit",
+        "offset"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "state.open_loops.list",
+      "properties": [
+        "include_low",
+        "limit",
+        "offset"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "state.people.list",
+      "properties": [
+        "include_low",
+        "limit",
+        "offset"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "state.projects.list",
+      "properties": [
+        "include_low",
+        "limit",
+        "offset"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "state.people.get",
+      "properties": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "state.projects.get",
+      "properties": [
+        "id"
+      ],
+      "required": [
+        "id"
+      ]
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "wiki.evidence",
+      "properties": [
+        "query"
+      ],
+      "required": [
+        "query"
+      ]
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "cost": "free",
+      "deprecated": null,
+      "level": "read",
+      "name": "actions.status",
+      "properties": [
+        "approval_id"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "cost": "ingest",
+      "deprecated": null,
+      "level": "write L1",
+      "name": "memory.append_note",
+      "properties": [
+        "text"
+      ],
+      "required": []
+    },
+    {
+      "additionalProperties": false,
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "cost": "ingest",
+      "deprecated": null,
+      "level": "write L1",
+      "name": "memory.ingest",
+      "properties": [
+        "actor",
+        "events",
+        "idempotency_key",
+        "metadata",
+        "namespace",
+        "source",
+        "thread_key",
+        "turns"
+      ],
+      "required": [
+        "source",
+        "actor",
+        "idempotency_key"
+      ]
+    },
+    {
+      "additionalProperties": null,
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "readOnlyHint": false
+      },
+      "cost": "run",
+      "deprecated": null,
+      "level": "per action (L1 / L3 by kind)",
+      "name": "actions.execute",
+      "properties": [
+        "body",
+        "bundle_id",
+        "channel",
+        "kind",
+        "latest_message_id",
+        "latest_reply_ts",
+        "path",
+        "query",
+        "subject",
+        "target",
+        "text",
+        "thread_id",
+        "thread_ts",
+        "to"
+      ],
+      "required": [
+        "kind"
+      ]
+    }
+  ]
+}

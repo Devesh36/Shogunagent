@@ -109,6 +109,14 @@ pub enum Tool {
     /// Undo one import: its record and every item it stored (L1, local).
     MemoryImportDelete,
     MemoryAppendNote,
+    /// Append events or conversation turns an agent hands over to the event log (E4-T3 / E5-T1):
+    /// the same sanitize / redact / dedup append path capture and integrations use, under an
+    /// `idempotency_key` that replays on a repeat. Local write to the principal's own memory (L1).
+    MemoryIngest,
+    /// A budgeted read of what memory holds on a question (E4-T3 / E5-T3): the context-pack
+    /// assembly (facts + dated evidence) cut to `budget_tokens`, High facts as facts and Medium
+    /// ones prefixed `possibly:`. A read; free (invariant 10).
+    MemoryRecall,
     ActionsExecute,
     /// Poll a body-free L3 approval outcome.
     ActionsStatus,
@@ -445,6 +453,8 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryImportList,
     Tool::MemoryImportDelete,
     Tool::MemoryAppendNote,
+    Tool::MemoryIngest,
+    Tool::MemoryRecall,
     Tool::ActionsExecute,
     Tool::ActionsStatus,
     Tool::ActionsQuestions,
@@ -603,6 +613,8 @@ impl Tool {
             Tool::MemoryImportList => "memory.import.list",
             Tool::MemoryImportDelete => "memory.import.delete",
             Tool::MemoryAppendNote => "memory.append_note",
+            Tool::MemoryIngest => "memory.ingest",
+            Tool::MemoryRecall => "memory.recall",
             Tool::ActionsExecute => "actions.execute",
             Tool::ActionsStatus => "actions.status",
             Tool::ActionsQuestions => "actions.questions",
@@ -792,6 +804,8 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         | Tool::VisualRecallGetFrame
         | Tool::VisualRecallFrameTextLines
         | Tool::CaptureExclusionsGet
+        // A budgeted read of the context-pack assembly: nothing is written (E4-T3).
+        | Tool::MemoryRecall
         | Tool::ProfileWhoami => ApiLevel::Read,
         Tool::DictionaryAutoAddGet
         | Tool::VoiceDictionaryList
@@ -840,6 +854,9 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         Tool::UiLanguageSet => ApiLevel::Write(Level::L1),
         // append a user note to the event log — local, reversible.
         Tool::MemoryAppendNote => ApiLevel::Write(Level::L1),
+        // An agent's events / turns appended to the event log under an idempotency key (E4-T3):
+        // local, replayable, nothing leaves the device — L1 like a note (plan §7.1).
+        Tool::MemoryIngest => ApiLevel::Write(Level::L1),
         // Pausing narrows what SHOGUN reads and runs directly (L1). Ending the user's pause
         // starts reading the screen again: the same "removes a privacy boundary" reason
         // `CaptureExclusionsSet` is L3, so the ceiling is L3 and that half is queued for the
@@ -952,13 +969,18 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
 pub enum ToolGroup {
     /// Live form review and grounded suggestions.
     Forms,
-    /// Always listed: the day-to-day reads, one L1 note and `actions.execute`. Pinned by test.
+    /// Always listed: the frozen core set (plan §7.1, `docs/api/core-tools.md`; 21 tools): the
+    /// day-to-day reads, `memory.append_note`, `memory.ingest`, `memory.recall` and
+    /// `actions.execute`. Wire names, input schemas and annotations are frozen by
+    /// `tests/wire_freeze.rs`.
     Core,
     /// Memory import and its undo (`memory.import.*`).
     Import,
     /// World-model reads by id, corrections, disputes, split and export (`state.*` beyond core).
     State,
-    /// Meeting notes beyond the core reads: start, speakers, templates, minutes edits, delete.
+    /// Meeting notes: the four reads that were in core until E4-T3 (list, search, recap,
+    /// transcript) plus start, speakers, templates, minutes edits, delete. Served by the Mac app
+    /// only, so listed only with feature `desktop`.
     Meeting,
     /// Mail triage, labels, sender rules and write-back history.
     Mail,
@@ -981,8 +1003,30 @@ pub enum ToolGroup {
     Settings,
 }
 
-/// Every group, in the order docs and warnings list them.
+/// Every group this build serves, in the order docs and warnings list them (E4-T6).
+///
+/// The default build is the server: it lists the groups the engine answers from the principal's
+/// store alone — core, import, state, skills (runs, Clarify questions, steering) and wiki. The
+/// groups only the ShogunAI Mac app can serve (meetings, mail triage, screen recall, the voice
+/// dictionary, public web reads on the desktop's lane, file exports, translation jobs, the
+/// Settings-pane mirrors and live form review) are listed only with feature `desktop`. Listing
+/// only: every wire name still resolves on every build ([`ALL_TOOLS`] is the same), so a call by
+/// name answers what the backend answers, and the desktop build lists exactly what it did.
+#[cfg(feature = "desktop")]
+pub const ALL_GROUPS: &[ToolGroup] = EVERY_GROUP;
+/// See the `desktop` variant: the server's groups.
+#[cfg(not(feature = "desktop"))]
 pub const ALL_GROUPS: &[ToolGroup] = &[
+    ToolGroup::Core,
+    ToolGroup::Import,
+    ToolGroup::State,
+    ToolGroup::Skills,
+    ToolGroup::Wiki,
+];
+
+/// Every group that exists, whatever the build serves: the desktop build's [`ALL_GROUPS`], and
+/// the table a test or a doc walks to name every tool's group.
+pub const EVERY_GROUP: &[ToolGroup] = &[
     ToolGroup::Core,
     ToolGroup::Import,
     ToolGroup::State,
@@ -998,6 +1042,33 @@ pub const ALL_GROUPS: &[ToolGroup] = &[
     ToolGroup::Settings,
     ToolGroup::Forms,
 ];
+
+/// Whether this build lists `group` (E4-T6): always on the desktop build; on the server only the
+/// groups in [`ALL_GROUPS`].
+pub fn group_is_served(group: ToolGroup) -> bool {
+    ALL_GROUPS.contains(&group)
+}
+
+/// Whether this build lists `tool`'s group. Listing only: the wire name resolves either way.
+pub fn tool_is_served(tool: Tool) -> bool {
+    group_is_served(tool_group(tool))
+}
+
+/// The deprecation note of a tool definition (E4-T5, `docs/api/deprecation-policy.md`): `None`
+/// while the tool is current; `Some("<since>: use <replacement>; removed after <date>")` once it
+/// is deprecated, surfaced as the `deprecated` field of its `tools/list` descriptor. A wire name
+/// never changes in place (invariant 11): a changed tool gets a new name and the old one a note
+/// here for the 12-month window.
+pub fn tool_deprecation(tool: Tool) -> Option<&'static str> {
+    DEPRECATED_TOOLS
+        .iter()
+        .find(|(deprecated, _)| *deprecated == tool)
+        .map(|(_, note)| *note)
+}
+
+/// The deprecated tools and their notes (E4-T5). Empty today: a row is added when a tool is
+/// deprecated and removed with the tool after its 12-month window.
+const DEPRECATED_TOOLS: &[(Tool, &str)] = &[];
 
 impl ToolGroup {
     /// The id a user writes in `SHOGUN_MCP_TOOLSETS`.
@@ -1020,7 +1091,9 @@ impl ToolGroup {
         }
     }
 
-    /// Parse a group id (exact, lower-case).
+    /// Parse a group id (exact, lower-case). Only the groups this build serves parse
+    /// ([`ALL_GROUPS`]): on the server `meeting` is unknown, like a typo, so an entry that asks
+    /// for it is told rather than shown an empty group.
     pub fn from_id(id: &str) -> Option<ToolGroup> {
         ALL_GROUPS.iter().copied().find(|g| g.id() == id)
     }
@@ -1031,8 +1104,9 @@ impl ToolGroup {
 pub fn tool_group(tool: Tool) -> ToolGroup {
     match tool {
         Tool::FormsInspect | Tool::FormsPlan | Tool::FormsStatus | Tool::FormsApply | Tool::FormsClose | Tool::FormsUndo => ToolGroup::Forms,
-        // Core (issue #410 §5.A): 13 reads, one L1 note, and actions.execute (per-action — the
-        // only route to an L3 send, which still waits in the approval queue).
+        // Core (plan §7.1, E4-T3): the frozen set. Reads, `memory.append_note`, `memory.ingest`,
+        // `memory.recall` and `actions.execute` (per-action — the only route to an L3 send,
+        // which still waits in the approval queue). The four meeting reads moved to `Meeting`.
         Tool::MemorySearch
         | Tool::MemoryGetContext
         | Tool::MemoryGetContextPack
@@ -1043,6 +1117,8 @@ pub fn tool_group(tool: Tool) -> ToolGroup {
         | Tool::CalendarUpcoming
         | Tool::MemoryGetPeriods
         | Tool::MemoryAppendNote
+        | Tool::MemoryIngest
+        | Tool::MemoryRecall
         | Tool::ProfileWhoami
         | Tool::StateCommitmentsList
         | Tool::StateOpenLoopsList
@@ -1051,10 +1127,6 @@ pub fn tool_group(tool: Tool) -> ToolGroup {
         | Tool::StatePeopleGet
         | Tool::StateProjectsGet
         | Tool::WikiEvidence
-        | Tool::MeetingTranscriptGet
-        | Tool::MeetingList
-        | Tool::MeetingSearch
-        | Tool::MeetingRecapGet
         | Tool::ActionsExecute
         | Tool::ActionsStatus => ToolGroup::Core,
         // Imports are user-reviewed flows (preview, then commit what the user chose) that write
@@ -1078,7 +1150,12 @@ pub fn tool_group(tool: Tool) -> ToolGroup {
         | Tool::StateMergeCandidates
         | Tool::StateMerge
         | Tool::StateKeepSeparate => ToolGroup::State,
-        Tool::MeetingRecordNow
+        // The four meeting reads left core in E4-T3 (plan §7.1): the Mac app serves them.
+        Tool::MeetingTranscriptGet
+        | Tool::MeetingList
+        | Tool::MeetingSearch
+        | Tool::MeetingRecapGet
+        | Tool::MeetingRecordNow
         | Tool::MeetingSystemAudioRetry
         | Tool::MeetingStartStatus
         | Tool::MeetingSystemAudioStatus
@@ -1932,8 +2009,11 @@ mod tests {
                 read_only += usize::from(access.scopes.contains(&TokenScope::Read));
             }
         }
-        assert_eq!(seen, ALL_TOOLS.len());
-        assert_eq!(read_only, ALL_TOOLS.iter().filter(|&&t| scope_allows(TokenScope::Read, t)).count());
+        // The listing covers the groups this build serves (E4-T6): every tool on the desktop.
+        let served: Vec<Tool> = ALL_TOOLS.iter().copied().filter(|&t| tool_is_served(t)).collect();
+        assert_eq!(seen, served.len());
+        assert_eq!(served.len() == ALL_TOOLS.len(), cfg!(feature = "desktop"));
+        assert_eq!(read_only, served.iter().filter(|&&t| scope_allows(TokenScope::Read, t)).count());
         let core = &listing[0];
         assert_eq!(core.group, "core");
         let execute = core.tools.iter().find(|t| t.name == "actions.execute").unwrap();
@@ -2053,7 +2133,8 @@ mod tests {
         assert!(scope_allows(TokenScope::Read, Tool::TranslateStatus));
         assert_eq!(tool_group(Tool::TranslateText), ToolGroup::Translate);
         assert_eq!(tool_group(Tool::TranslatePairSet), ToolGroup::Settings);
-        assert_eq!(ToolGroup::from_id("translate"), Some(ToolGroup::Translate));
+        // The translate group is the Mac app's: parsed on the desktop build only (E4-T6).
+        assert_eq!(ToolGroup::from_id("translate"), cfg!(feature = "desktop").then_some(ToolGroup::Translate));
     }
 
     #[test]
@@ -2507,6 +2588,7 @@ mod tests {
                         | Tool::MemoryGetContextPack
                         | Tool::MemoryGetEvents
                         | Tool::MemoryReadSession
+                        | Tool::MemoryRecall
                         | Tool::MemoryGetWrap
                         | Tool::CalendarUpcoming
                         | Tool::MemoryGetPeriods
@@ -2596,6 +2678,7 @@ mod tests {
                             | Tool::FormsUndo
                             | Tool::MemoryNotesChange
                             | Tool::MemoryAppendNote
+                            | Tool::MemoryIngest
                             | Tool::CaptureSetPaused
                             | Tool::LessonsSetActive
                             | Tool::StateDisputesResolve

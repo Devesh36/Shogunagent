@@ -671,6 +671,84 @@ pub trait MemoryBackend: Send + Sync {
     fn activity(&self, _request: &crate::activity_api::ActivityRequest) -> Result<String, String> {
         Err("memory_unavailable".to_string())
     }
+
+    /// `memory.ingest` (E4-T3): append the items to the event log through the sanitize / redact /
+    /// dedup append path under the request's idempotency key, replaying a repeated key. `Err` is
+    /// a store fault (the face answers `ingest_unavailable`).
+    fn ingest(&self, _request: &crate::ingest_api::IngestRequest) -> Result<crate::ingest_api::IngestOutcome, String> {
+        Err("ingest_unavailable".to_string())
+    }
+
+    /// `memory.recall` (E4-T3): the context-pack assembly cut to the request's token budget.
+    fn recall(&self, _request: &crate::ingest_api::RecallRequest) -> Result<crate::ingest_api::RecallOutcome, String> {
+        Err("recall_unavailable".to_string())
+    }
+}
+
+/// A shared backend is a backend (E4-T1): the HTTP transport's `McpServer` and the REST state
+/// hold the same `Arc<dyn MemoryBackend>`, so one store answers both faces. Every method
+/// forwards, defaults included, so the shared backend behaves exactly like the owned one.
+impl<T: MemoryBackend + ?Sized> MemoryBackend for std::sync::Arc<T> {
+    fn read(&self, tool: Tool, params: &ReadParams) -> Vec<ReadItem> {
+        (**self).read(tool, params)
+    }
+    fn search(&self, request: &SearchRequestV1) -> Result<MemorySearchResponse, MemorySearchError> {
+        (**self).search(request)
+    }
+    fn current_context(&self) -> CurrentContextSnapshot {
+        (**self).current_context()
+    }
+    fn write(&self, tool: Tool, body: &str) -> WriteResult {
+        (**self).write(tool, body)
+    }
+    fn read_structured(&self, tool: Tool, params: &ReadParams) -> Option<String> {
+        (**self).read_structured(tool, params)
+    }
+    fn capture_unpause_requested(&self, body: &str) -> Result<Option<shogun_agents::permission::PausedCapture>, String> {
+        (**self).capture_unpause_requested(body)
+    }
+    fn capture_exclusions_change(&self, body: &str) -> Result<Option<shogun_agents::permission::CaptureExclusionChange>, String> {
+        (**self).capture_exclusions_change(body)
+    }
+    fn agent_source_change(&self, body: &str) -> Result<Option<AgentSubscriptionRequest>, String> {
+        (**self).agent_source_change(body)
+    }
+    fn visual_recall_change(&self, tool: Tool, body: &str) -> Result<Option<shogun_agents::permission::VisualRecallWidening>, String> {
+        (**self).visual_recall_change(tool, body)
+    }
+    fn mail_archive_change(&self, tool: Tool, body: &str) -> Result<Option<crate::mail_archive_api::MailArchiveRequest>, String> {
+        (**self).mail_archive_change(tool, body)
+    }
+    fn manage_voice_dictionary(&self, operation: VoiceDictionaryOperation) -> Result<VoiceDictionaryResult, String> {
+        (**self).manage_voice_dictionary(operation)
+    }
+    fn memory_import(&self, operation: crate::memory_import_api::MemoryImportOperation) -> Result<String, String> {
+        (**self).memory_import(operation)
+    }
+    fn forms(&self, operation: crate::forms_api::FormOperation, auth: crate::forms_api::FormsAuth) -> Result<String, String> {
+        (**self).forms(operation, auth)
+    }
+    fn clarify(&self, operation: crate::clarify_api::ClarifyOperation) -> Result<String, String> {
+        (**self).clarify(operation)
+    }
+    fn ai_search(&self, query: &str, origin: &'static str, ai: Result<(), &'static str>) -> Result<String, String> {
+        (**self).ai_search(query, origin, ai)
+    }
+    fn translate(&self, operation: crate::translate_api::TranslateOperation) -> Result<String, String> {
+        (**self).translate(operation)
+    }
+    fn steer(&self, operation: crate::steer_api::SteerOperation) -> Result<String, String> {
+        (**self).steer(operation)
+    }
+    fn activity(&self, request: &crate::activity_api::ActivityRequest) -> Result<String, String> {
+        (**self).activity(request)
+    }
+    fn ingest(&self, request: &crate::ingest_api::IngestRequest) -> Result<crate::ingest_api::IngestOutcome, String> {
+        (**self).ingest(request)
+    }
+    fn recall(&self, request: &crate::ingest_api::RecallRequest) -> Result<crate::ingest_api::RecallOutcome, String> {
+        (**self).recall(request)
+    }
 }
 
 /// An `agent.source.set` that selects a subscription CLI (issue #110), as the backend classified
