@@ -173,17 +173,88 @@ static EN: CueSet = CueSet {
     theirs: third_person_to_you!["get back to you", "send you", "send it to you", "send them to you",
                                  "follow up with you", "let you know", "reach out to you", "email you",
                                  "call you", "ping you", "get you", "share it with you", "get it to you"],
+    // E49: the second line of each list is the reported form ("no word yet from Oren",
+    // "Oren asked you to review …", "decision pending on …"), which says the same thing without
+    // the canonical phrase.
     waiting: &["waiting on", "waiting for", "waiting to hear", "blocked on", "pending from",
-               "still waiting"],
+               "still waiting",
+               "no word yet from", "no word from", "haven't heard back", "hasn't arrived",
+               "haven't received", "still no sign of", "yet to hear from", "yet to receive"],
     review: &["please review", "ptal", "take a look", "can you review", "needs review",
-              "review needed", "could you review"],
+              "review needed", "could you review",
+              "asked you to review", "requested your review of", "for your review", "your eyes on",
+              "wants your review", "would like your review"],
     decision: &["need to decide", "decision needed", "let's decide", "we need to choose",
-                "to be decided", "still deciding", "tbd"],
+                "to be decided", "still deciding", "tbd",
+                "decision pending", "pending decision", "open question", "until we settle",
+                "until we decide", "yet to decide", "haven't decided"],
     followup: &["follow up", "circle back", "check back", "loop back", "get back to them",
                 "ping again"],
+    // Only ever read on a question ("…?"): "does the plan look right to you?" asks for a reply.
     reply: &["can you", "could you", "would you", "will you", "did you", "have you",
-             "any chance you", "would it be possible"],
+             "any chance you", "would it be possible",
+             "look right", "look good", "look ok", "sound good", "sound right", "work for you"],
 };
+
+/// English promises that carry no future-tense cue (E49, loop-bench `hard`): accepting a task
+/// ("Leave the memo with me", "Count on me for the deck", "the budget is on me") or telling someone
+/// when they will have it ("you will have it by Friday"). Each entry is `(cue, also)`: the segment
+/// must hold `cue`, and `also` too when it is not empty, so a phrase that has an everyday sense
+/// ("lunch is on me") needs the second half of the promise ("… by Friday") to count.
+const EN_MINE_PARAPHRASE: &[(&str, &str)] = &[
+    ("count on me", ""),
+    ("leave ", " with me"),
+    ("is on me", " by "),
+    ("you will have it", ""),
+    ("you'll have it", ""),
+    ("i've got it", " by "),
+    ("i'm on it", ""),
+];
+
+/// Someone's promise to the user without "I'll" (E49): "the deck is coming your way by Friday",
+/// "you will see the notes from me by Monday". Same `(cue, also)` shape as
+/// [`EN_MINE_PARAPHRASE`].
+const EN_THEIRS_PARAPHRASE: &[(&str, &str)] = &[
+    ("coming your way", ""),
+    ("you will see", " from me"),
+    ("you'll see", " from me"),
+    ("you will get", " from me"),
+];
+
+/// A promise-shaped sentence that is not a promise (E49, the loop-bench distractor families):
+/// - a hypothetical: it opens with a condition or hedge ("If the budget comes through, I will
+///   send …", "Maybe I could …", "In theory we would …"), or says "no promises";
+/// - a retracted offer ("I was going to send …, but that is off now", "Scratch my offer …").
+///
+/// Reports of other people's promises to third parties ("Priya told Kenji she will send …") and of
+/// promises already kept ("Last month I sent …") already carry no first-person future cue.
+const EN_HEDGE_OPENERS: &[&str] = &["if ", "unless ", "maybe ", "perhaps ", "in theory", "hypothetically", "assuming "];
+const EN_HEDGES: &[&str] = &["no promises", "was going to", "were going to", "scratch my", "that is off now", "that's off now"];
+
+/// The sentence without a leading bullet or a short speaker label ("- ", "user: ", "Oren Vale: "),
+/// so a hedge is recognised where the sentence itself starts.
+fn sentence_body(lower: &str) -> &str {
+    let body = lower.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | '*' | '•' | '·'));
+    match body.split_once(": ") {
+        Some((label, rest))
+            if label.split_whitespace().count() <= 3 && !label.chars().any(|c| c.is_ascii_digit()) =>
+        {
+            rest.trim_start()
+        }
+        _ => body,
+    }
+}
+
+/// True when an English promise-shaped segment is hedged or withdrawn ([`EN_HEDGES`]).
+fn hedged(lower: &str) -> bool {
+    let body = sentence_body(lower);
+    EN_HEDGE_OPENERS.iter().any(|h| body.starts_with(h)) || contains_any(lower, EN_HEDGES)
+}
+
+/// True when any `(cue, also)` pair holds in `lower`.
+fn paraphrase_hit(lower: &str, pairs: &[(&str, &str)]) -> bool {
+    pairs.iter().any(|(cue, also)| lower.contains(cue) && (also.is_empty() || lower.contains(also)))
+}
 
 /// The Japanese first-person promise forms.
 ///
@@ -425,8 +496,10 @@ pub fn extract(text: &str) -> Vec<Candidate> {
         }
         let lower = seg.text.to_lowercase();
 
-        // Commitments take precedence (an explicit promise is the strongest signal).
-        if mine_hit(&lower, &seg) {
+        // Commitments take precedence (an explicit promise is the strongest signal). A hedged or
+        // withdrawn sentence is no promise at all, but it may still ask or wait for something.
+        let promise = !hedged(&lower);
+        if promise && mine_hit(&lower, &seg) {
             out.push(Candidate::Commitment {
                 direction: CommitmentDirection::Mine,
                 description: clip(seg.text),
@@ -435,11 +508,30 @@ pub fn extract(text: &str) -> Vec<Candidate> {
             });
             continue;
         }
-        if cue_hit(&lower, seg.text, |c| c.theirs) {
+        if promise && cue_hit(&lower, seg.text, |c| c.theirs) {
             out.push(Candidate::Commitment {
                 direction: CommitmentDirection::Theirs,
                 description: clip(seg.text),
                 confidence: 0.3,
+                evidence: None,
+            });
+            continue;
+        }
+        // The cue-less forms are weaker evidence than "I'll …", so they sit lower in the band.
+        if promise && !seg.is_question && paraphrase_hit(&lower, EN_MINE_PARAPHRASE) {
+            out.push(Candidate::Commitment {
+                direction: CommitmentDirection::Mine,
+                description: clip(seg.text),
+                confidence: 0.3,
+                evidence: None,
+            });
+            continue;
+        }
+        if promise && !seg.is_question && paraphrase_hit(&lower, EN_THEIRS_PARAPHRASE) {
+            out.push(Candidate::Commitment {
+                direction: CommitmentDirection::Theirs,
+                description: clip(seg.text),
+                confidence: 0.25,
                 evidence: None,
             });
             continue;
@@ -2337,5 +2429,137 @@ mod dashboard_noise_tests {
         assert_eq!(open_loop("Follow up with Sam about the deck"), Some(OpenLoopKind::FollowUp));
         assert_eq!(commitment("#22 の修正は明日やります"), Some(CommitmentDirection::Mine));
         assert_eq!(open_loop("Still waiting on legal for #812"), Some(OpenLoopKind::WaitingOnThem));
+    }
+}
+
+/// E49 (loop-bench `hard`): promises and loops said without the canonical cue, and the
+/// promise-shaped sentences that are not promises. One assertion per pattern and per distractor.
+#[cfg(test)]
+mod paraphrase_tests {
+    use super::*;
+
+    fn one(text: &str) -> Candidate {
+        let out = extract(text);
+        assert_eq!(out.len(), 1, "{text}: {out:?}");
+        out.into_iter().next().unwrap_or_else(|| unreachable!())
+    }
+
+    fn mine(text: &str) {
+        assert!(
+            matches!(one(text), Candidate::Commitment { direction: CommitmentDirection::Mine, .. }),
+            "{text}: expected my commitment"
+        );
+    }
+
+    fn theirs(text: &str) {
+        assert!(
+            matches!(one(text), Candidate::Commitment { direction: CommitmentDirection::Theirs, .. }),
+            "{text}: expected their commitment"
+        );
+    }
+
+    fn open_loop(text: &str, want: OpenLoopKind) {
+        match one(text) {
+            Candidate::OpenLoop { kind, .. } => assert_eq!(kind, want, "{text}"),
+            other => panic!("{text}: expected an open loop, got {other:?}"),
+        }
+    }
+
+    fn nothing(text: &str) {
+        let out = extract(text);
+        assert!(out.is_empty(), "{text}: {out:?}");
+    }
+
+    #[test]
+    fn accepting_a_task_is_my_commitment() {
+        mine("Leave the board memo with me; it'll be with Oren Vale by Friday.");
+        mine("Count on me for the pricing deck, Priya gets it by Monday.");
+        mine("Sure, the Q3 budget is on me, you will have it by Thursday.");
+        mine("You'll have it before the review.");
+        mine("I've got it, the notes go out by noon.");
+        mine("I'm on it.");
+    }
+
+    #[test]
+    fn a_promise_to_the_user_without_ill_is_theirs() {
+        theirs("Oren Vale: the release notes are coming your way by Friday, promise.");
+        theirs("Priya Nand: you will see the test plan from me by Tuesday.");
+        theirs("Kenji: you'll see the contract from me by Monday.");
+        theirs("Dana: you will get the slides from me by noon.");
+    }
+
+    #[test]
+    fn the_everyday_senses_of_those_phrases_are_not_promises() {
+        nothing("Lunch is on me today.");
+        nothing("You will see the dashboard on the left.");
+        nothing("Leave the door open.");
+        nothing("Count on me?");
+    }
+
+    #[test]
+    fn reported_waits_reviews_decisions_and_questions_are_open_loops() {
+        open_loop("No word yet from Oren Vale on the vendor contract.", OpenLoopKind::WaitingOnThem);
+        open_loop("The latency report from Dana Okafor still hasn't arrived.", OpenLoopKind::WaitingOnThem);
+        open_loop("Haven't heard back from legal about the renewal quote.", OpenLoopKind::WaitingOnThem);
+        open_loop("Priya Nand asked you to review the design spec.", OpenLoopKind::ReviewPending);
+        open_loop("Kenji Arai requested your review of the test plan.", OpenLoopKind::ReviewPending);
+        open_loop("Mateo would like your eyes on the FAQ before it goes out.", OpenLoopKind::ReviewPending);
+        open_loop("Ines flagged the support runbook for your review.", OpenLoopKind::ReviewPending);
+        open_loop("Decision pending on the pricing deck for Heron.", OpenLoopKind::DecisionPending);
+        open_loop("Open question for Kestrel: does it ship with the audit evidence or not.", OpenLoopKind::DecisionPending);
+        open_loop("Juniper is blocked until we settle the data retention policy.", OpenLoopKind::DecisionPending);
+        open_loop("Sven: does the capacity forecast look right to you?", OpenLoopKind::ReplyNeeded);
+    }
+
+    #[test]
+    fn a_review_notification_line_is_not_a_second_request() {
+        // GitHub's own line names no artifact; the request sentence after it is the loop.
+        nothing("Oren requested your review on this pull request.");
+    }
+
+    #[test]
+    fn hypotheticals_are_not_promises() {
+        nothing("If the budget comes through, I will send the rollout plan to Oren by Friday.");
+        nothing("user: If the budget comes through, I will send the rollout plan to Oren by Friday.");
+        nothing("- If legal signs, I'll send the contract by Monday.");
+        nothing("Maybe I could look at the onboarding guide at some point, no promises.");
+        nothing("In theory we would ship the launch checklist by Thursday, if legal ever signs off.");
+        nothing("I'll try to look at it, no promises.");
+    }
+
+    #[test]
+    fn retracted_offers_are_not_promises() {
+        nothing("I was going to send the partner brief to Amara, but that is off now.");
+        nothing("Scratch my offer on the training schedule for Felix, someone else has it.");
+    }
+
+    #[test]
+    fn other_peoples_promises_to_third_parties_are_not_mine() {
+        nothing("FYI, Priya told Kenji she will send the audit evidence to the client by Friday.");
+        nothing("Priya promised Kenji that the audit evidence will reach the auditors by Friday.");
+    }
+
+    #[test]
+    fn promises_already_kept_are_not_open() {
+        nothing("Last month I sent the renewal quote to Lucia as promised.");
+        nothing("Back in August Felix got the roadmap draft from me, all settled.");
+    }
+
+    #[test]
+    fn a_hedge_does_not_hide_a_request() {
+        // The hedge vetoes promises only: a conditional question still asks for a reply.
+        open_loop("If you have a minute, could you review the deck?", OpenLoopKind::ReviewPending);
+    }
+
+    #[test]
+    fn paraphrased_candidates_stay_under_the_local_ceiling() {
+        for text in [
+            "Leave the board memo with me; it'll be with Oren Vale by Friday.",
+            "Oren: the notes are coming your way by Friday, promise.",
+            "No word yet from Oren Vale on the vendor contract.",
+        ] {
+            assert!(one(text).confidence() <= 0.35, "{text}");
+            assert!(one(text).confidence() <= LOCAL_RULE_MAX_CONFIDENCE);
+        }
     }
 }
