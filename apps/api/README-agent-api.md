@@ -70,6 +70,9 @@ Conventions:
 | GET / POST | `/approve/{token}` | the link (+ CSRF on POST) | The human approval page (E15) |
 | POST | `/v1/slack/interactions` | Slack signature | Slack button presses on approval messages (E15) |
 | POST | `/v1/approvals/notify` | the signed token | An approval was queued: post to Slack, deliver webhooks |
+| POST | `/v1/connectors/{provider}/connect` | `run` | A link a human opens to connect their own Gmail, Google Calendar, Slack or Linear account for the router's first-party tools (E50; [connector tokens](../../docs/api/connector-tokens.md)). The agent cannot connect it itself: hand `connect_url` to the human (`next_action: ask_human`), then retry the run |
+| GET / POST | `/v1/connectors/connect/{link}` | the link (+ CSRF on POST) | The human's connect page → the provider's consent page |
+| GET | `/v1/connectors/callback` | the sealed `state` + the same browser | The provider's redirect; the principal's core stores the account, nothing is kept here |
 | POST | `/v1/internal/router/settlements` | `ROUTER_SETTLEMENT_TOKEN` | The router's run settlements → the provider's daily accrual (E29; [payouts](../../docs/api/payouts.md)); only with `PAYOUTS_STATE_SECRET` |
 | GET | `/v1/providers/me` | `read` | The provider this principal owns: payout account status, this month's runs and earnings |
 | POST | `/v1/providers/me/connect` | `write` (key only) | A Stripe Connect Express onboarding link |

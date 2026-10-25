@@ -68,6 +68,9 @@ services:
       # The router's wallet and connector tokens (E32, E48): the router's ROUTER_SETTLEMENT_TOKEN,
       # when a router settles runs against this gateway. Empty = those routes are not served.
       ROUTER_SETTLEMENT_TOKEN: ${ROUTER_SETTLEMENT_TOKEN:-}
+      # The hosted connect flow (E50): seals its links and states; needs the relay above and the
+      # sidecar's SHOGUN_CONNECT_* below. Empty = the connect routes are not served.
+      CONNECTOR_CONNECT_SECRET: ${CONNECTOR_CONNECT_SECRET:-}
       # Body-free request spans to an OTLP/HTTP collector (E37); empty = off.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
@@ -109,6 +112,15 @@ services:
       SHOGUN_ADMIN_TOKEN: ${SHOGUN_ADMIN_TOKEN:-}
       SHOGUN_APPROVAL_SIGNING_KEY: ${SHOGUN_APPROVAL_SIGNING_KEY:-}
       SHOGUN_APPROVAL_BASE_URL: ${SHOGUN_APPROVAL_BASE_URL:-}
+      # Hosted connector credentials (E50, deploy/README.md section 3.3): the connect flow's
+      # callback and one OAuth client per vendor. Empty = that vendor cannot be connected.
+      SHOGUN_CONNECT_REDIRECT_URI: ${SHOGUN_CONNECT_REDIRECT_URI:-}
+      SHOGUN_CONNECT_GOOGLE_CLIENT_ID: ${SHOGUN_CONNECT_GOOGLE_CLIENT_ID:-}
+      SHOGUN_CONNECT_GOOGLE_CLIENT_SECRET: ${SHOGUN_CONNECT_GOOGLE_CLIENT_SECRET:-}
+      SHOGUN_CONNECT_SLACK_CLIENT_ID: ${SHOGUN_CONNECT_SLACK_CLIENT_ID:-}
+      SHOGUN_CONNECT_SLACK_CLIENT_SECRET: ${SHOGUN_CONNECT_SLACK_CLIENT_SECRET:-}
+      SHOGUN_CONNECT_LINEAR_CLIENT_ID: ${SHOGUN_CONNECT_LINEAR_CLIENT_ID:-}
+      SHOGUN_CONNECT_LINEAR_CLIENT_SECRET: ${SHOGUN_CONNECT_LINEAR_CLIENT_SECRET:-}
       SHOGUN_KMS_KEY_CACHE_SECS: ${SHOGUN_KMS_KEY_CACHE_SECS:-300}
       SHOGUN_KMS_TIMEOUT_SECS: ${SHOGUN_KMS_TIMEOUT_SECS:-10}
       # aws-kms

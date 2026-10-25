@@ -17,7 +17,7 @@ ALTER ROLE shogun_relay SET search_path = relay;
 REVOKE ALL ON SCHEMA public FROM shogun_relay;
 SQL
 
-for file in shared-store.sql agent-keys.sql agent-receipts-settled-quantity.sql agent-oauth.sql approval-webhooks.sql connector-tokens.sql; do
+for file in shared-store.sql agent-keys.sql agent-receipts-settled-quantity.sql agent-oauth.sql approval-webhooks.sql; do
   echo "applying $file"
   PGPASSWORD="$GATEWAY_DB_PASSWORD" psql -v ON_ERROR_STOP=1 --username shogun_relay --dbname "$POSTGRES_DB" \
     -c 'SET search_path = relay' -f "/shogun-sql/$file"
