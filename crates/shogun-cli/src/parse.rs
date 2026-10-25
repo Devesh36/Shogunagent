@@ -638,6 +638,36 @@ fn parse_command(positionals: &[String]) -> Result<Command, CliError> {
             shogun_mcp::memfs_tool::parse(&body).map_err(CliError::BadInput)?;
             Ok(Command::Fs { body: body.to_string() })
         }
+        // E46: payment mandates and payments, the tool's arguments as one JSON object (the server
+        // validates the terms; the CLI only refuses what is not an object).
+        "payments" => {
+            use shogun_mcp::memory_api::Tool;
+            let words: Vec<&str> = rest.iter().map(String::as_str).collect();
+            let (tool, json_at) = match words.as_slice() {
+                ["mandates", "list", ..] => (Tool::PaymentsMandatesList, 2),
+                ["mandates", "request", ..] => (Tool::PaymentsMandatesRequest, 2),
+                ["mandates", "revoke", ..] => (Tool::PaymentsMandatesRevoke, 2),
+                ["spend", ..] => (Tool::PaymentsSpend, 1),
+                ["mandates", other, ..] => {
+                    return Err(CliError::UnknownSubcommand { command: "payments mandates", got: (*other).to_string() })
+                }
+                ["mandates"] => return Err(CliError::MissingArgument("list|request|revoke")),
+                [other, ..] => return Err(CliError::UnknownSubcommand { command: "payments", got: (*other).to_string() }),
+                [] => return Err(CliError::MissingArgument("mandates|spend")),
+            };
+            let body = match rest.get(json_at..).and_then(join) {
+                None if tool == Tool::PaymentsMandatesList => None,
+                None => return Err(CliError::MissingArgument("<json>")),
+                Some(raw) => {
+                    let value: serde_json::Value = serde_json::from_str(&raw)
+                        .ok()
+                        .filter(serde_json::Value::is_object)
+                        .ok_or_else(|| CliError::BadInput("payments takes one JSON object: the tool's arguments".into()))?;
+                    Some(value.to_string())
+                }
+            };
+            Ok(Command::Payments { tool, body })
+        }
         // E35: the A2A handoff, one JSON object each, validated by the shared parser.
         "handoff" => {
             let sub = rest.first().map(String::as_str);
@@ -2420,6 +2450,29 @@ mod tests {
         assert!(parse(&v(&["acl", "grant", r#"{"grantee":"agent:a","agent":"a"}"#])).is_err());
         let (_, c) = call(&["acl", "team", r#"{"tenant":"acme","team":"ops","members":["alice"]}"#]);
         assert_eq!((c.method, c.path.as_str()), ("POST", "/v1/teams"));
+    }
+
+    /// E46: `shogun payments ...` are the four `payments.*` tools on their REST routes.
+    #[test]
+    fn payments_commands_map_to_their_routes() {
+        use shogun_mcp::memory_api::Tool;
+        let cases: [(&[&str], Tool, &str, &str); 5] = [
+            (&["payments", "mandates", "list"], Tool::PaymentsMandatesList, "GET", "/v1/payments/mandates"),
+            (&["payments", "mandates", "list", r#"{"mandate_id":"pmd_0123456789ab"}"#], Tool::PaymentsMandatesList, "POST", "/v1/payments/mandates/list"),
+            (&["payments", "mandates", "request", r#"{"payee":"x","currency":"USD"}"#], Tool::PaymentsMandatesRequest, "POST", "/v1/payments/mandates/request"),
+            (&["payments", "mandates", "revoke", r#"{"mandate_id":"pmd_0123456789ab"}"#], Tool::PaymentsMandatesRevoke, "POST", "/v1/payments/mandates/revoke"),
+            (&["payments", "spend", r#"{"payee":"x","currency":"USD","amount_minor":1,"idempotency_key":"k"}"#], Tool::PaymentsSpend, "POST", "/v1/payments/spend"),
+        ];
+        for (args, tool, method, path) in cases {
+            let inv = parse(&v(args)).unwrap();
+            assert_eq!(inv.command.tool(), Some(tool));
+            let call = crate::wire::to_call(&inv.command, false).unwrap();
+            assert_eq!((call.method, call.path.as_str()), (method, path));
+        }
+        assert!(parse(&v(&["payments", "spend"])).is_err());
+        assert!(parse(&v(&["payments", "spend", "[1]"])).is_err());
+        assert!(parse(&v(&["payments", "mandates", "other", "{}"])).is_err());
+        assert!(parse(&v(&["payments"])).is_err());
     }
 
     /// E35: `shogun handoff create|accept <json>` are `handoff.create` / `handoff.accept` on the

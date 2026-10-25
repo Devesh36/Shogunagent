@@ -245,6 +245,14 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Fs { body } => post("/v1/memory/fs".into(), body.clone()),
         Command::HandoffCreate { body } => post("/v1/handoff".into(), body.clone()),
         Command::HandoffAccept { body } => post("/v1/handoff/accept".into(), body.clone()),
+        Command::Payments { tool, body } => match (tool, body) {
+            // E46: `payments.*`, the tool's arguments as the body.
+            (shogun_mcp::memory_api::Tool::PaymentsMandatesList, None) => get("/v1/payments/mandates".into()),
+            (shogun_mcp::memory_api::Tool::PaymentsMandatesList, Some(body)) => post("/v1/payments/mandates/list".into(), body.clone()),
+            (shogun_mcp::memory_api::Tool::PaymentsMandatesRequest, body) => post("/v1/payments/mandates/request".into(), body.clone().unwrap_or_default()),
+            (shogun_mcp::memory_api::Tool::PaymentsMandatesRevoke, body) => post("/v1/payments/mandates/revoke".into(), body.clone().unwrap_or_default()),
+            (_, body) => post("/v1/payments/spend".into(), body.clone().unwrap_or_default()),
+        },
         Command::Approvals(approvals) => match approvals {
             crate::command::ApprovalsCommand::List => get("/v1/approvals".into()),
             crate::command::ApprovalsCommand::Get { id } => get(format!("/v1/approvals/{id}")),

@@ -350,12 +350,19 @@ fn approval_executor(
 ) -> Arc<dyn shogun_mcp::approval_exec::ApprovalExecutor> {
     use shogun_core::approval_exec::{ConnectorTransports, SendExecExecutor, SinkFor};
     use shogun_core::tenancy::PrincipalId;
+    let payment_store = store.clone();
     let sinks: SinkFor = Arc::new(move |principal: Option<&str>| {
         let id = PrincipalId::parse(principal?).ok()?;
         let open = store.open(&id).ok()?;
         Some(Box::new(open.db().traceability_sink()) as Box<dyn shogun_core::llm::traceability::TraceabilitySink>)
     });
-    Arc::new(SendExecExecutor::new(Arc::new(ConnectorTransports::new(tokens)), sinks))
+    // E46: an approved mandate grant or payment is applied in the principal's own store.
+    let stores: shogun_core::approval_exec::StoreFor = Arc::new(move |principal: Option<&str>| {
+        let id = PrincipalId::parse(principal?).ok()?;
+        let open = payment_store.open(&id).ok()?;
+        Some(open.db().clone())
+    });
+    Arc::new(SendExecExecutor::new(Arc::new(ConnectorTransports::new(tokens)), sinks).with_payments(stores))
 }
 
 /// How many backlog rows one embedding pass handles, and how often the pass runs.

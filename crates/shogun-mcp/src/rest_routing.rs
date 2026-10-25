@@ -146,6 +146,28 @@ pub(super) fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
                 level: Level::L1,
             },
         ),
+        // E46: payment mandates and payments, the MCP arguments as the body. The list is a free
+        // read (GET for everything, POST with a body for one mandate); a request and a spend are
+        // L3 (queued, or pre-approved by a mandate); a revoke only narrows (L1).
+        ["v1", "payments", "mandates"] => method_is(method, Method::Get, Routed::Read { tool: Tool::PaymentsMandatesList, id: None }),
+        ["v1", "payments", "mandates", "list"] => {
+            method_is(method, Method::Post, Routed::Read { tool: Tool::PaymentsMandatesList, id: None })
+        }
+        ["v1", "payments", "mandates", "request"] => method_is(
+            method,
+            Method::Post,
+            Routed::Write { tool: Tool::PaymentsMandatesRequest, level: Level::L3 },
+        ),
+        ["v1", "payments", "mandates", "revoke"] => method_is(
+            method,
+            Method::Post,
+            Routed::Write { tool: Tool::PaymentsMandatesRevoke, level: Level::L1 },
+        ),
+        ["v1", "payments", "spend"] => method_is(
+            method,
+            Method::Post,
+            Routed::Write { tool: Tool::PaymentsSpend, level: Level::L3 },
+        ),
         ["v1", "memory", "recall"] => method_is(
             method,
             Method::Post,

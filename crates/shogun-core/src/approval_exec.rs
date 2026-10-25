@@ -38,21 +38,69 @@ pub trait SendTransports: Send + Sync {
 /// may be sent).
 pub type SinkFor = Arc<dyn Fn(Option<&str>) -> Option<Box<dyn TraceabilitySink>> + Send + Sync>;
 
+/// The store of a principal (`None`: it cannot be opened, so nothing is granted or paid).
+pub type StoreFor = Arc<dyn Fn(Option<&str>) -> Option<crate::daemon::Db> + Send + Sync>;
+
 /// Runs approved actions through [`execute_send`].
 pub struct SendExecExecutor {
     transports: Arc<dyn SendTransports>,
     sinks: SinkFor,
+    /// E46: where an approved mandate grant is written and an approved payment recorded. Without
+    /// it both are `not_executable` (nothing granted, nothing paid).
+    stores: Option<StoreFor>,
 }
 
 impl SendExecExecutor {
     pub fn new(transports: Arc<dyn SendTransports>, sinks: SinkFor) -> Self {
-        Self { transports, sinks }
+        Self { transports, sinks, stores: None }
+    }
+
+    /// Apply approved payment mandates and payments (E46) in each principal's store.
+    #[must_use]
+    pub fn with_payments(mut self, stores: StoreFor) -> Self {
+        self.stores = Some(stores);
+        self
+    }
+
+    /// E46: a human approved a mandate grant or a payment. A grant is written into the
+    /// principal's store (which re-checks the recorded human decision); a payment runs through
+    /// the configured rail, traced first, its spend row claimed once.
+    fn execute_payment(&self, request: &ExecRequest<'_>) -> ExecOutcome {
+        let Some(db) = self.stores.as_ref().and_then(|stores| stores(request.principal)) else {
+            return ExecOutcome::Failed("not_executable");
+        };
+        match &request.confirmed.action {
+            SendAction::GrantPaymentMandate { grant } => {
+                let terms = shogun_mcp::payments_api::terms_row(&grant.terms);
+                match db.payments_grant(&grant.mandate_id, &grant.agent, &terms, grant.amends, request.approval_id) {
+                    Ok(_) => ExecOutcome::Sent,
+                    Err(code) => ExecOutcome::Failed(match code.as_str() {
+                        "not_approved" => "not_authorized",
+                        "mandate_revoked" | "mandate_not_yours" | "mandate_not_found" | "invalid_field" => "invalid_target",
+                        _ => "ledger_unavailable",
+                    }),
+                }
+            }
+            SendAction::Pay { .. } => {
+                let Some(rail) = crate::payment_rail::configured() else {
+                    return ExecOutcome::Failed("not_connected");
+                };
+                match crate::payment_rail::pay_approved(&db, rail, request.confirmed, request.approval_id) {
+                    crate::payment_rail::Paid::Settled { .. } => ExecOutcome::Sent,
+                    crate::payment_rail::Paid::Failed(class) => ExecOutcome::Failed(class),
+                }
+            }
+            _ => ExecOutcome::Failed("not_executable"),
+        }
     }
 }
 
 impl ApprovalExecutor for SendExecExecutor {
     fn execute(&self, request: &ExecRequest<'_>) -> ExecOutcome {
         let action = &request.confirmed.action;
+        if matches!(action, SendAction::Pay { .. } | SendAction::GrantPaymentMandate { .. }) {
+            return self.execute_payment(request);
+        }
         if shogun_agents::permission::send_target_refusal(action).is_some() {
             return ExecOutcome::Failed("invalid_target");
         }

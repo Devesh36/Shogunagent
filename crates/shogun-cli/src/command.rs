@@ -99,6 +99,10 @@ pub enum Command {
     /// `shogun handoff accept <json>` → `handoff.accept` (E35): `{"handoff": …, "actor": …}` into
     /// the caller's own scratch; `body` is validated at parse (expiry is the server's to judge).
     HandoffAccept { body: String },
+    /// `shogun payments <sub> [<json>]` (E46): `mandates list` → `payments.mandates.list`
+    /// (`body` `None` lists them all), `mandates request` / `mandates revoke` / `spend` → the
+    /// L3 / L1 / L3 tools. `body` is the tool's arguments as one JSON object.
+    Payments { tool: Tool, body: Option<String> },
     /// `shogun approvals list|get <id>|decide <id> approve|reject` (E15).
     Approvals(ApprovalsCommand),
     /// `shogun audit [--since-ms N] [--limit N]` → `audit.list` (E18).
@@ -738,6 +742,7 @@ impl Command {
             Command::Fs { .. } => Tool::MemoryFs,
             Command::HandoffCreate { .. } => Tool::HandoffCreate,
             Command::HandoffAccept { .. } => Tool::HandoffAccept,
+            Command::Payments { tool, .. } => *tool,
             Command::Approvals(ApprovalsCommand::List) => Tool::ApprovalsList,
             Command::Approvals(ApprovalsCommand::Get { .. }) => Tool::ApprovalsGet,
             Command::Audit { .. } => Tool::AuditList,
@@ -967,6 +972,13 @@ COMMANDS:
     ingest-webhook <json>     Store one provider webhook delivery as events with provenance (L1)
     handoff create <json>     The state of work for a task as an A2A handoff (task, to_agent, ...)
     handoff accept <json>     Accept a handoff into your own scratch (handoff, actor; L1)
+    payments mandates list [<json>]
+                              Payment mandates: bounds, spent, remaining, status (free)
+    payments mandates request <json>
+                              Ask a human for a payment mandate (L3: approval URL; narrowing is direct)
+    payments mandates revoke <json>
+                              Revoke a mandate at once (mandate_id; L1)
+    payments spend <json>     Pay: inside a mandate it settles, otherwise it waits for approval (L3)
     approvals [list]          Queued L2/L3 approvals, redacted (kind, tier, recipient class)
     approvals get <id>        One approval's redacted summary
     approvals decide <id> approve|reject [--as <kind:id>]

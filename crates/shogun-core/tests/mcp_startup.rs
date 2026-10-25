@@ -305,9 +305,10 @@ fn a_store_the_app_has_not_upgraded_is_refused_per_call_and_left_unmigrated() {
     assert_eq!(replies[1]["error"]["code"], -32005, "{replies:?}");
     assert_eq!(replies[1]["error"]["data"]["reason"], "memory_update_pending");
     let conn = shogun_memory::open_encrypted_existing_for_upgrade(&path, &key).unwrap();
-    assert_eq!(
-        shogun_memory::schema_version(&conn).unwrap(),
-        Some(shogun_memory::LATEST_SCHEMA_VERSION - 1),
+    // Below the latest (the previous embedded version; not LATEST - 1 while a version number is
+    // taken on another branch and merged later).
+    assert!(
+        shogun_memory::schema_version(&conn).unwrap().is_some_and(|v| v < shogun_memory::LATEST_SCHEMA_VERSION),
         "the server ran no migration"
     );
 }

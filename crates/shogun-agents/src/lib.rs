@@ -12,6 +12,7 @@
 pub mod approval;
 pub mod clarify;
 pub mod engine;
+pub mod payment;
 pub mod entitlement;
 pub mod permission;
 pub mod presets;

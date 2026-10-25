@@ -160,6 +160,15 @@ pub enum SendAction {
     /// made: confirming ends only that pause, and fails closed when the pause has changed since
     /// (the user resumed and paused again, or a timed pause ran out).
     UnpauseCapture { pause: PausedCapture },
+    /// Pay a payee through the payment rail (E46). Money leaves the principal: always L3, like
+    /// every send. A payment inside a mandate a human granted carries that grant as its L3
+    /// confirmation ([`crate::payment::confirmed_under_mandate`]); any other payment waits in the
+    /// approval queue for a human. No connector transport accepts it: only the payment rail does.
+    Pay { order: Box<crate::payment::PaymentOrder> },
+    /// Grant, widen or extend a payment mandate (E46). Confirming writes the mandate into the
+    /// principal's store (nothing leaves the device then), but it lets an agent pay later
+    /// without asking again, so it is an L3 human decision like the settings that widen egress.
+    GrantPaymentMandate { grant: Box<crate::payment::MandateGrant> },
 }
 
 /// The capture pause an [`SendAction::UnpauseCapture`] request was made against (issue #897).
@@ -393,6 +402,8 @@ impl SendAction {
             SendAction::WidenVisualRecall { .. } => "widen_visual_recall",
             SendAction::ArchiveMailThread { .. } => "archive_mail_thread",
             SendAction::UnpauseCapture { .. } => "unpause_capture",
+            SendAction::Pay { .. } => "pay",
+            SendAction::GrantPaymentMandate { .. } => "grant_payment_mandate",
         }
     }
 }

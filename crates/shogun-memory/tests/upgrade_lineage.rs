@@ -305,8 +305,13 @@ fn row_counts(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
 /// memory fails to open on every launch. `migrate_and_check` commits them together.
 #[test]
 fn every_version_upgrades_atomically_to_latest() -> TestResult {
-    for version in 1..LATEST_SCHEMA_VERSION {
-        let next = version + 1;
+    // The embedded versions in order. Every one has a successor here except the newest; a gap
+    // in the numbering (a version taken on another branch and merged later) is stepped over.
+    let mut versions: Vec<u32> = embedded::migrations::runner().get_migrations().iter().map(|m| m.version()).collect();
+    versions.sort_unstable();
+    assert_eq!(versions.last().copied(), Some(LATEST_SCHEMA_VERSION));
+    for pair in versions.windows(2) {
+        let (version, next) = (pair[0], pair[1]);
         let tmp = TempDb::new(&format!("atomic_v{version}"));
         let path = tmp.path();
         create_encrypted_at(&path, version)?;

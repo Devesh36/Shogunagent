@@ -148,6 +148,9 @@ fn purpose_for(action: &SendAction) -> &'static str {
         SendAction::WidenVisualRecall { .. } => "settings.visual_recall_widen",
         SendAction::ArchiveMailThread { .. } => "mail.archive_request",
         SendAction::UnpauseCapture { .. } => "settings.capture_unpause",
+        SendAction::Pay { .. } => "payments.pay",
+        // Never traced as a send: confirming writes the mandate into the principal's store.
+        SendAction::GrantPaymentMandate { .. } => "payments.mandate_grant",
     }
 }
 
@@ -155,6 +158,10 @@ fn purpose_for(action: &SendAction) -> &'static str {
 /// records (`Service::source_str`). Never the recipient, channel or title from the preview: those
 /// are the user's contacts and work, and the ledger keeps rows for a year (issue #924).
 fn trace_destination(action: &SendAction) -> &'static str {
+    // A payment leaves through the payment rail (E46): the ledger names the rail, never the payee.
+    if matches!(action, SendAction::Pay { .. }) {
+        return "payment_rail";
+    }
     shogun_integrations::send_bridge::service_for(action)
         // A local setting has no service; no transport accepts one, so it is never traced.
         .map_or("local", shogun_mcp::scope::Service::source_str)

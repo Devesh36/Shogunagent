@@ -25,6 +25,8 @@ pub mod ingest_api;
 pub mod webhook_ingest;
 /// `handoff.create` / `handoff.accept`: the A2A state-of-work handoff, assembled in the core (E35).
 pub mod handoff_api;
+/// `payments.*`: agent payment mandates and payments, one flow for every face (E46).
+pub mod payments_api;
 /// `state.export` in export format v1 (E7).
 pub mod export_api;
 /// `memory.fs` (E6-T2): the memory tool's file operations over `/memories`.

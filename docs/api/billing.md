@@ -237,6 +237,17 @@ active commit discounts it. The router reserves the run's price through
   so a statement is never missing a run that was charged, and a run that died mid-flight is
   released at $0.
 
+## Agent payments (E46)
+
+`payments.*` ([payments.md](payments.md)) never moves money through this wallet: a payment goes
+from the principal's own rail account to the payee, executed by the principal's core. What this
+gateway meters is the call: `payments.mandates.list` is a free read; `payments.mandates.request`,
+`payments.mandates.revoke` and `payments.spend` are `run` calls (scope `run`) priced at $0 at the
+call (`FREE_RUN_TOOLS`). A request only queues an L3 for a human and a revoke only narrows; a spend
+would be priced at the rail's fee, and the only rail today is a stub with none. The gateway relays
+these calls over `/mcp` without reading or storing their bodies (no payee, amount or memo in a
+receipt, a log or a metric).
+
 ## ShogunAI Pro bundle
 
 `POST /v1/agents/me/licence` with `X-Shogun-Licence: <the ShogunAI licence token>` links the
