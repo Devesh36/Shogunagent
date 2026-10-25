@@ -1,0 +1,200 @@
+{
+  "version": "monid-catalog-fixture/2026-10-25",
+  "_comment": "A Monid-style catalog snapshot used as the import fixture for src/passthrough/monid.ts. Endpoint ids, providers, categories and price points follow the public rankings and the independent review cited in the research note; descriptions are paraphrased. Fixture responses are synthetic (no real keys were used), the way Monid itself allows `synthetic-` fixtures.",
+  "providers": [
+    { "slug": "tinyfish", "name": "TinyFish", "docsUrl": "https://monid.ai/docs/providers/tinyfish" },
+    { "slug": "contextdev", "name": "Context.dev", "docsUrl": "https://monid.ai/docs/providers/contextdev" },
+    { "slug": "exa", "name": "Exa", "docsUrl": "https://monid.ai/docs/providers/exa" },
+    { "slug": "firecrawl", "name": "Firecrawl", "docsUrl": "https://monid.ai/docs/providers/firecrawl" },
+    { "slug": "hunter", "name": "Hunter", "docsUrl": "https://monid.ai/docs/providers/hunter" },
+    { "slug": "apollo", "name": "Apollo", "docsUrl": "https://monid.ai/docs/providers/apollo" },
+    { "slug": "dataforseo", "name": "DataForSEO", "docsUrl": "https://monid.ai/docs/providers/dataforseo" },
+    { "slug": "search1api", "name": "Search1API", "docsUrl": "https://monid.ai/docs/providers/search1api" },
+    { "slug": "strale", "name": "Strale", "docsUrl": "https://monid.ai/docs/providers/strale" },
+    { "slug": "gptimages", "name": "GPT Images", "docsUrl": "https://monid.ai/docs/providers/gptimages" },
+    { "slug": "saperly", "name": "Saperly", "docsUrl": "https://monid.ai/docs/providers/saperly" }
+  ],
+  "endpoints": [
+    {
+      "id": "tinyfish/web-search",
+      "provider": "tinyfish",
+      "summary": "Search the public web and return ranked result links with snippets.",
+      "description": "Web search over public pages for a query string: returns titles, URLs and snippets. Use for current facts, news and finding pages to read. Not for reading a page's full text (use a fetch or scrape endpoint) and not for the user's own documents.",
+      "categories": ["Search"],
+      "inputSchema": { "type": "object", "properties": { "query": { "type": "string", "minLength": 1 }, "num_results": { "type": "integer", "minimum": 1, "maximum": 20 } }, "required": ["query"], "additionalProperties": false },
+      "pricing": { "model": "PER_CALL", "priceUsd": 0.0013 },
+      "health": { "p50Ms": 900, "p95Ms": 2600, "successRate": 0.991 },
+      "verified": true,
+      "fixtures": [
+        {
+          "scenario": "synthetic-basic",
+          "input": { "query": "shogunagent state layer", "num_results": 2 },
+          "response": { "run_id": "run_fx_1", "status": "succeeded", "output": { "results": [ { "title": "ShogunAgent", "url": "https://example.com/a", "snippet": "the state layer for agents" }, { "title": "Docs", "url": "https://example.com/b", "snippet": "three verbs" } ] }, "usage": { "quantity": 1, "cost_usd": 0.0013 } },
+          "expectUsage": { "quantity": 1, "cost_micro_usd": 1365 }
+        },
+        {
+          "scenario": "synthetic-vendor-failure",
+          "input": { "query": "anything" },
+          "response": { "run_id": "run_fx_2", "status": "failed", "error": { "code": "upstream_timeout" } }
+        }
+      ]
+    },
+    {
+      "id": "tinyfish/fetch",
+      "provider": "tinyfish",
+      "summary": "Fetch one public URL and return its readable text.",
+      "description": "Reads a single public web page by URL and returns its main text with the title. Use after a web search to read the page. Not for pages behind a login, and not a crawler.",
+      "categories": ["Web scraping"],
+      "inputSchema": { "type": "object", "properties": { "url": { "type": "string", "minLength": 8 } }, "required": ["url"], "additionalProperties": false },
+      "pricing": { "model": "PER_CALL", "priceUsd": 0.001 },
+      "health": { "p50Ms": 1400, "p95Ms": 4200, "successRate": 0.983 },
+      "verified": true,
+      "fixtures": [
+        { "scenario": "synthetic-basic", "input": { "url": "https://example.com/a" }, "response": { "status": "succeeded", "output": { "title": "ShogunAgent", "text": "the state layer for agents" } } }
+      ]
+    },
+    {
+      "id": "contextdev/web/scrape/markdown",
+      "provider": "contextdev",
+      "summary": "Read the text content of a web page URL as Markdown.",
+      "description": "Converts one public page into clean Markdown: headings, lists, links, tables. The cheapest way to read a page's content. Not for JavaScript-heavy apps that need a browser, and not for the user's own files.",
+      "categories": ["Web scraping"],
+      "inputSchema": { "type": "object", "properties": { "url": { "type": "string", "minLength": 8 } }, "required": ["url"], "additionalProperties": false },
+      "pricing": { "model": "PER_CALL", "priceUsd": 0.0009 },
+      "health": { "p50Ms": 1100, "p95Ms": 3500, "successRate": 0.987 },
+      "verified": true,
+      "fixtures": [
+        { "scenario": "synthetic-basic", "input": { "url": "https://example.com/a" }, "response": { "status": "succeeded", "output": { "markdown": "# ShogunAgent\n\nthe state layer for agents" } }, "expectUsage": { "quantity": 1, "cost_micro_usd": 945 } }
+      ]
+    },
+    {
+      "id": "strale/x402/url-to-text",
+      "provider": "strale",
+      "summary": "Read the text content of a web page URL.",
+      "description": "Returns the visible text of one public page by URL, rendered in a headless browser. Use when a plain fetch returns an empty shell. Not for pages behind a login.",
+      "categories": ["Web scraping"],
+      "inputSchema": { "type": "object", "properties": { "url": { "type": "string", "minLength": 8 } }, "required": ["url"], "additionalProperties": false },
+      "pricing": { "model": "PER_CALL", "priceUsd": 0.02376 },
+      "health": { "p50Ms": 3200, "p95Ms": 9000, "successRate": 0.97 },
+      "verified": false,
+      "fixtures": [
+        { "scenario": "synthetic-basic", "input": { "url": "https://example.com/a" }, "response": { "status": "succeeded", "output": { "text": "the state layer for agents" } } }
+      ]
+    },
+    {
+      "id": "exa/search",
+      "provider": "exa",
+      "summary": "Neural web search that returns pages matching a described need.",
+      "description": "Search the web by describing what you want rather than by keywords; returns pages with highlights. Use for research-style discovery. Not for exact-phrase lookups and not for the user's own notes.",
+      "categories": ["Search"],
+      "inputSchema": { "type": "object", "properties": { "query": { "type": "string", "minLength": 1 }, "num_results": { "type": "integer", "minimum": 1, "maximum": 25 } }, "required": ["query"], "additionalProperties": false },
+      "pricing": { "model": "PER_RESULT", "priceUsd": 0.0005, "basePriceUsd": 0.001, "typicalQuantity": 10 },
+      "health": { "p50Ms": 800, "p95Ms": 2200, "successRate": 0.994 },
+      "verified": true,
+      "fixtures": [
+        { "scenario": "synthetic-two-results", "input": { "query": "agent state layer" }, "response": { "status": "succeeded", "output": { "results": [ { "url": "https://example.com/1" }, { "url": "https://example.com/2" } ] } }, "expectUsage": { "quantity": 2, "cost_micro_usd": 2100 } },
+        { "scenario": "synthetic-empty", "input": { "query": "zzzz no such thing" }, "response": { "status": "succeeded", "output": { "results": [] } }, "expectUsage": { "quantity": 0, "cost_micro_usd": 0 } }
+      ]
+    },
+    {
+      "id": "firecrawl/scrape",
+      "provider": "firecrawl",
+      "summary": "Scrape a page into Markdown and structured metadata.",
+      "description": "Fetches and renders one URL, returning Markdown plus metadata (title, description, language). Use for pages that need JavaScript rendering. Not a site crawler; one page per call.",
+      "categories": ["Web scraping"],
+      "inputSchema": { "type": "object", "properties": { "url": { "type": "string", "minLength": 8 }, "formats": { "type": "array", "items": { "type": "string", "enum": ["markdown", "html"] } } }, "required": ["url"], "additionalProperties": false },
+      "pricing": { "model": "PER_CALL", "priceUsd": 0.002 },
+      "health": { "p50Ms": 2500, "p95Ms": 7000, "successRate": 0.98 },
+      "verified": true,
+      "fixtures": [
+        { "scenario": "synthetic-basic", "input": { "url": "https://example.com/a", "formats": ["markdown"] }, "response": { "status": "succeeded", "output": { "markdown": "# A", "metadata": { "title": "A" } } } }
+      ]
+    },
+    {
+      "id": "hunter/email-finder",
+      "provider": "hunter",
+      "summary": "Find a professional email address from a name and company domain.",
+      "description": "Looks up the most likely work email for a person given first name, last name and domain, with a confidence score. Use for outreach research. Not for personal addresses and not a sender.",
+      "categories": ["Lead gen"],
+      "inputSchema": { "type": "object", "properties": { "first_name": { "type": "string" }, "last_name": { "type": "string" }, "domain": { "type": "string" } }, "required": ["first_name", "last_name", "domain"], "additionalProperties": false },
+      "pricing": { "model": "PER_CALL", "priceUsd": 0.01 },
+      "health": { "p50Ms": 600, "p95Ms": 1800, "successRate": 0.995 },
+      "verified": true,
+      "fixtures": [
+        { "scenario": "synthetic-basic", "input": { "first_name": "Ada", "last_name": "Lovelace", "domain": "example.com" }, "response": { "status": "succeeded", "output": { "email": "ada@example.com", "score": 92 } } }
+      ]
+    },
+    {
+      "id": "apollo/people-search",
+      "provider": "apollo",
+      "summary": "Search people by title, company and location.",
+      "description": "Returns matching professionals with name, title, company and LinkedIn URL for a filter set. Use for building prospect lists. Not for verifying a specific email.",
+      "categories": ["Lead gen"],
+      "inputSchema": { "type": "object", "properties": { "titles": { "type": "array", "items": { "type": "string" } }, "company_domains": { "type": "array", "items": { "type": "string" } }, "page": { "type": "integer", "minimum": 1 } }, "additionalProperties": false },
+      "pricing": { "model": "PER_RESULT", "priceUsd": 0.002, "typicalQuantity": 25 },
+      "health": { "p50Ms": 1200, "p95Ms": 3800, "successRate": 0.99 },
+      "verified": true,
+      "fixtures": [
+        { "scenario": "synthetic-basic", "input": { "titles": ["CTO"], "company_domains": ["example.com"] }, "response": { "status": "succeeded", "output": { "results": [ { "name": "A" }, { "name": "B" }, { "name": "C" } ] } }, "expectUsage": { "quantity": 3, "cost_micro_usd": 6300 } }
+      ]
+    },
+    {
+      "id": "dataforseo/serp/google/organic",
+      "provider": "dataforseo",
+      "summary": "Google organic SERP results for a keyword and location.",
+      "description": "Returns Google's organic results (position, URL, title, description) for a keyword in a given location and language. Use for SEO rank checks. Not a general web search for reading content.",
+      "categories": ["SEO & GEO"],
+      "inputSchema": { "type": "object", "properties": { "keyword": { "type": "string", "minLength": 1 }, "location_code": { "type": "integer" }, "language_code": { "type": "string" } }, "required": ["keyword"], "additionalProperties": false },
+      "pricing": { "model": "PER_CALL", "priceUsd": 0.0006 },
+      "health": { "p50Ms": 4000, "p95Ms": 12000, "successRate": 0.985 },
+      "verified": true,
+      "fixtures": [
+        { "scenario": "synthetic-basic", "input": { "keyword": "state layer for agents" }, "response": { "status": "succeeded", "output": { "items": [ { "position": 1, "url": "https://example.com" } ] } } }
+      ]
+    },
+    {
+      "id": "search1api/search",
+      "provider": "search1api",
+      "summary": "Keyword web search with optional news and image modes.",
+      "description": "Keyword search over web, news or images, returning links and snippets. A cheap general search. Not for reading page content.",
+      "categories": ["Search"],
+      "inputSchema": { "type": "object", "properties": { "query": { "type": "string", "minLength": 1 }, "search_service": { "type": "string", "enum": ["google", "bing", "duckduckgo"] }, "max_results": { "type": "integer", "minimum": 1, "maximum": 50 } }, "required": ["query"], "additionalProperties": false },
+      "pricing": { "model": "PER_CALL", "priceUsd": 0.0008 },
+      "health": { "p50Ms": 1000, "p95Ms": 3000, "successRate": 0.99 },
+      "verified": false,
+      "fixtures": [
+        { "scenario": "synthetic-basic", "input": { "query": "shogunagent" }, "response": { "status": "succeeded", "output": { "results": [ { "link": "https://example.com" } ] } } }
+      ]
+    },
+    {
+      "id": "gptimages/generate",
+      "provider": "gptimages",
+      "summary": "Generate an image from a text prompt.",
+      "description": "Creates one or more images from a prompt and returns URLs. Billed per image. Use for illustrations and mockups. Not for editing an existing image.",
+      "categories": ["Gen AI"],
+      "inputSchema": { "type": "object", "properties": { "prompt": { "type": "string", "minLength": 1 }, "n": { "type": "integer", "minimum": 1, "maximum": 4 }, "size": { "type": "string", "enum": ["1024x1024", "1536x1024"] } }, "required": ["prompt"], "additionalProperties": false },
+      "pricing": { "model": "PER_UNIT", "priceUsd": 0.04, "unit": "image", "typicalQuantity": 1 },
+      "health": { "p50Ms": 9000, "p95Ms": 25000, "successRate": 0.975 },
+      "verified": true,
+      "fixtures": [
+        { "scenario": "synthetic-two-images", "input": { "prompt": "a sword", "n": 2 }, "response": { "status": "succeeded", "output": { "images": [ { "url": "https://example.com/1.png" }, { "url": "https://example.com/2.png" } ] }, "usage": { "quantity": 2, "cost_usd": 0.08 } }, "expectUsage": { "quantity": 2, "cost_micro_usd": 84000 } }
+      ]
+    },
+    {
+      "id": "saperly/provision-numbers",
+      "provider": "saperly",
+      "summary": "Provision a real phone number for an agent.",
+      "description": "Provisions a phone number the agent can receive SMS and calls on; the number is a billable resource that keeps costing after this call. Use only when a human has approved acquiring a number. Not for sending messages.",
+      "categories": ["Communication"],
+      "inputSchema": { "type": "object", "properties": { "country": { "type": "string", "minLength": 2, "maxLength": 2 }, "quantity": { "type": "integer", "minimum": 1, "maximum": 5 } }, "required": ["country"], "additionalProperties": false },
+      "pricing": { "model": "PER_CALL", "priceUsd": 2.0 },
+      "health": { "p50Ms": 2000, "p95Ms": 6000, "successRate": 0.99 },
+      "verified": true,
+      "sideEffects": true,
+      "provisions": true,
+      "fixtures": [
+        { "scenario": "synthetic-basic", "input": { "country": "US" }, "response": { "status": "succeeded", "output": { "numbers": ["+15550000000"] } } }
+      ]
+    }
+  ]
+}
