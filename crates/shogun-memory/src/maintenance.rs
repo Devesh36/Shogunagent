@@ -555,6 +555,10 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     tx.execute("DELETE FROM tool_runs", [])?;
     tx.execute("DELETE FROM export_tombstones", [])?;
     tx.execute("DELETE FROM principal_meta", [])?;
+    // `memory.ingest` receipts (V99: who ingested what, by event id) and the agents' scratch
+    // files (V100: their own working notes) are this person's data too.
+    tx.execute("DELETE FROM ingest_receipts", [])?;
+    tx.execute("DELETE FROM scratch_files", [])?;
     // children first (FK order): provenance → commitments/open_loops → threads → people/projects.
     // `threads` holds titles, summaries and participants, so it is user data and must go too —
     // and it references projects, so it goes before them.
