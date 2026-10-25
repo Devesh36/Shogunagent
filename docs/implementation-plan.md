@@ -298,6 +298,38 @@
 
 ---
 
+## 6A. Phase 4：本番ローンチの準備
+
+**出口条件**：hosted `/mcp` が 503 を返さない。ルーターの run が apps/api のウォレットで一度だけ課金される。精算が失われない。MCP 適合スイートと実フレームワークの SDK 結合テストが CI で緑。負荷試験の結果と脅威モデルが記録されている。公開（npm / PyPI、本番デプロイ、ディレクトリ提出）は手順と workflow まで用意し、実行はオーナーの確認後に行う。
+
+| E | 内容 | 主な場所 |
+|---|---|---|
+| E32 | ルーターのウォレットを apps/api に配線する。run は apps/api の reserve → settle を一度だけ通し、ルーター側で別に上乗せしない（Monid 経由の二重マークアップを解消）。取り分は `RUN_MARKUP_BPS` の1か所 | `apps/router/src/wallet.ts`, `apps/api/src/billing/` |
+| E33 | 精算の永続アウトボックス。ルーターの精算は Postgres のアウトボックスに書いてから送り、再送は run_id で冪等。届かなかった精算は再送ジョブが拾う | `apps/router/src/settlement.ts`, `apps/api/sql/` |
+| E34 | hosted `/mcp` を本物にする。`SHOGUN_SIDECAR_URL` があるとき apps/api は principal ごとにサイドカーの Streamable HTTP へ本文を保存せず中継する（不変条件 1・2）。`memory.ingest` / `append_note` のアノテーション不一致を直す（新名と非推奨エントリ。不変条件 11） | `apps/api/src/mcp-proxy.ts`, `crates/shogun-mcp` |
+| E35 | handoff を三面に出す（不変条件 4）。引き渡しオブジェクトの組み立てを Rust コアへ移し（`handoff.create` / `handoff.accept`）、apps/api はサイドカーへの中継だけにする。これで apps/api が recall 本文を解析する不変条件 1 の例外が要らなくなる | `crates/shogun-mcp`, `crates/shogun-cli`, `apps/api/src/handoff.ts` |
+| E36 | MCP 適合スイート（2026-07-28 仕様の初期化・ツール一覧・MRTR・エラー形）と、実フレームワーク（Vercel AI SDK、OpenAI Agents SDK、Claude Agent SDK、LangGraph）での SDK 結合テスト。モデルはモックで、CI で外部に出ない | `packages/conformance`, `packages/sdk-*/test/integration` |
+| E37 | 可観測性と負荷試験。メトリクス・トレースは本文を持たない（`Mcp-Method` / `Mcp-Name`、ステータス、レイテンシのみ）。gateway とサイドカーの負荷試験スクリプトと SLO 表 | `apps/api/src/observability.ts`, `bench/load/`, `docs/slo.md` |
+| E38 | セキュリティレビュー。脅威モデル、パーサ（JSON-RPC、SAML、export の取り込み）のファズ、`SECURITY.md` と報告窓口、依存とシークレットの走査 | `docs/security/threat-model.md`, `fuzz/`, `SECURITY.md` |
+| E39 | Phase 3 C の積み残し。サイドカーの `DELETE /v1/principals/<id>`（SCIM 削除の猶予後に実ファイルを消す）、SAML の未対応部分、メンバー鍵の発行を冪等にする | `crates/shogun-core/src/server`, `apps/api/src/enterprise/` |
+| E40 | リリース工学（準備のみ）。npm / PyPI の公開 workflow は手動実行と `environment: release` の承認の裏に置き、版の付け方と変更履歴を決める。実際の公開はオーナーの確認後 | `.github/workflows/publish-*.yml`, `docs/release.md` |
+| E41 | 本番デプロイの手順書とステージング設定（準備のみ）。Workers・Postgres・サイドカーの順序、ロールバック、シークレットの一覧（値は書かない）。実デプロイはオーナーの確認後 | `docs/deploy/production.md`, `deploy/` |
+| E42 | ディレクトリ提出の前提を片付ける。OpenAI のクレジット販売の規定への対応案、提出物の差分チェック。提出そのものはオーナーの確認後 | `docs/directories/` |
+
+## 6B. Phase 5：拡張
+
+**出口条件**：非英語の recall が英語と同じ水準。Mac 以外の取得元から state が育つ。first-party コネクタで主要な仕事の道具を覆う。エージェントの支払いが L3 と上限の中で完結する。
+
+| E | 内容 | 主な場所 |
+|---|---|---|
+| E43 | 多言語埋め込み。モデルごとの閾値（Phase 3 A の per-model cutoff）に多言語モデルを足し、ベンチの全腕で固定する | `shogun-memory/src/embed`, `crates/memory-bench` |
+| E44 | Mac 以外の取得元。コネクタの webhook（Gmail、Calendar、Slack、GitHub、Linear、Notion）から `memory.ingest` へ流す取り込み口と、ブラウザ拡張の取り込み仕様。画像・音声は保存しない | `apps/api/src/ingest-hooks/`, `docs/api/ingest-sources.md` |
+| E45 | first-party コネクタの拡大。書き込み系は L2/L3、スコアは第三者と同じ式（不変条件 13） | `apps/router/connectors/` |
+| E46 | エージェントの支払い。支払いの委任（上限・期限・用途）を型で L3 にし、承認台帳と結びつける | `shogun-agents`, `apps/api/src/billing/mandates.ts` |
+| E47 | export 形式の標準化。export v2 を CG 向けの草案に整える（提出はオーナーの確認後） | `docs/api/export-v2.md`, `docs/standards/` |
+
+---
+
 ## 7. API 仕様の骨子
 
 ### 7.1 core 21（wire name 凍結）
@@ -368,6 +400,7 @@ x402 の `payment-required` ヘッダ形式と互換のフィールド名を使�
 
 | 未決 | 選択肢 | 判断材料 |
 |---|---|---|
+| handoff の組み立て場所 | apps/api（不変条件 1 の例外） vs Rust コア | 判断済み（E35）: Rust コアで組み立て、apps/api は中継だけ |
 | ルーターエンジンの言語 | Monid フォーク（Deno/TS） vs Rust 再実装 | Workers で動くか、コネクタ定義互換、ゼロ保持の担保。E8-T1 の ADR |
 | hosted の DB | principal ごとの SQLite ファイル（R2 + Durable Object か VM 上のファイル） | Durable Object の SQLite 上限（1GB/DO）と SQLCipher の可用性 |
 | 埋め込みモデル | Qwen3-Embedding-0.6B vs nomic-embed | 日英の MTEB、サイズ、ライセンス。全腕固定が条件 |
