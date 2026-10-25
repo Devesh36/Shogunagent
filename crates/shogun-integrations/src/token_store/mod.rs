@@ -54,6 +54,16 @@ pub enum CredentialSlot {
 }
 
 impl CredentialSlot {
+    /// Every slot a principal can hold: one per connector service, and the relay bearer. What a
+    /// purge removes from a store that cannot list a principal's entries.
+    pub fn all() -> Vec<Self> {
+        shogun_mcp::scope::ALL_SERVICES
+            .iter()
+            .map(|service| Self::Connector(*service))
+            .chain(std::iter::once(Self::BatchRelay))
+            .collect()
+    }
+
     /// The stable account name of the slot: `<source>-tokenset` for a connector (the Keychain
     /// account name the Mac app has always used), [`BATCH_RELAY_ACCOUNT`] for the relay.
     pub fn account(self) -> String {
@@ -102,6 +112,22 @@ pub trait TokenStore: Send + Sync {
     fn get(&self, principal: &str, slot: CredentialSlot) -> Result<Option<Secret>, TokenStoreError>;
     fn put(&self, principal: &str, slot: CredentialSlot, value: &Secret) -> Result<(), TokenStoreError>;
     fn delete(&self, principal: &str, slot: CredentialSlot) -> Result<(), TokenStoreError>;
+
+    /// Remove every credential of `principal` (E39: the operator's purge of a deleted principal).
+    /// Idempotent: a principal with nothing stored answers `Ok(false)`. `Ok(true)` when something
+    /// was removed, as far as the store can tell without opening a value. Never reads a value. The
+    /// default deletes every [`CredentialSlot::all`]; a store that keeps a principal's entries
+    /// together removes them as one (the file store removes the principal's directory, temporaries
+    /// included).
+    fn purge_principal(&self, principal: &str) -> Result<bool, TokenStoreError> {
+        if !valid_principal(principal) {
+            return Err(TokenStoreError::InvalidPrincipal);
+        }
+        for slot in CredentialSlot::all() {
+            self.delete(principal, slot)?;
+        }
+        Ok(false)
+    }
 }
 
 impl<T: TokenStore + ?Sized> TokenStore for &T {
@@ -114,6 +140,9 @@ impl<T: TokenStore + ?Sized> TokenStore for &T {
     fn delete(&self, principal: &str, slot: CredentialSlot) -> Result<(), TokenStoreError> {
         (**self).delete(principal, slot)
     }
+    fn purge_principal(&self, principal: &str) -> Result<bool, TokenStoreError> {
+        (**self).purge_principal(principal)
+    }
 }
 
 impl<T: TokenStore + ?Sized> TokenStore for std::sync::Arc<T> {
@@ -125,6 +154,9 @@ impl<T: TokenStore + ?Sized> TokenStore for std::sync::Arc<T> {
     }
     fn delete(&self, principal: &str, slot: CredentialSlot) -> Result<(), TokenStoreError> {
         (**self).delete(principal, slot)
+    }
+    fn purge_principal(&self, principal: &str) -> Result<bool, TokenStoreError> {
+        (**self).purge_principal(principal)
     }
 }
 
@@ -178,6 +210,16 @@ impl TokenStore for MemorySecretStore {
         let mut values = self.values.lock().map_err(|_| TokenStoreError::Write)?;
         values.remove(&(principal.to_string(), slot));
         Ok(())
+    }
+
+    fn purge_principal(&self, principal: &str) -> Result<bool, TokenStoreError> {
+        if !valid_principal(principal) {
+            return Err(TokenStoreError::InvalidPrincipal);
+        }
+        let mut values = self.values.lock().map_err(|_| TokenStoreError::Write)?;
+        let before = values.len();
+        values.retain(|(owner, _), _| owner != principal);
+        Ok(values.len() != before)
     }
 }
 

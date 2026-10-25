@@ -471,6 +471,21 @@ impl crate::mcp_http::McpHandler for PrincipalMcp {
         let resolved = match token.map(|token| resolver.resolve(token)) {
             Some(Ok(resolved)) => resolved,
             Some(Err((503, _))) => return refuse(-32000, "memory_unavailable: the principal's store cannot be opened right now; retry."),
+            // E39: a purged principal stays purged; the operator reinstates it on purpose.
+            Some(Err((410, _))) => {
+                return id.clone().map(|id| {
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32000,
+                            "message": "principal_purged: this principal was deleted; an operator must reinstate it before it can be used again.",
+                            "data": { "reason": "principal_purged", "next_action": "ask_human" },
+                        },
+                    })
+                    .to_string()
+                })
+            }
             _ => {
                 return refuse(
                     crate::mcp::TOKEN_INVALID_CODE,

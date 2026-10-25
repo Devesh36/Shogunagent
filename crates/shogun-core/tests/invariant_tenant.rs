@@ -61,10 +61,22 @@ fn wall_clock() -> Clock {
 
 /// Boot the multi-principal server on a background thread (its own runtime); returns the port
 /// and the store, so the test can also look at the files.
+fn keys() -> Arc<dyn shogun_core::tenancy::KeyProvider> {
+    Arc::new(
+        EnvKeyProvider::with_default(DbKey::new([0x5a; 32]))
+            .with_principal_key(&PrincipalId::parse("bob").unwrap(), DbKey::new([0xb0; 32])),
+    )
+}
+
+/// The connector token store `shogun-api --multi` uses: `<root>/.tokens`, sealed per principal.
+fn credentials(root: &std::path::Path) -> Arc<dyn shogun_integrations::TokenStore> {
+    use shogun_core::tenancy::credentials::{local_store, token_dir};
+    Arc::new(local_store(token_dir(root, None), keys()))
+}
+
 fn boot_multi(root: PathBuf) -> (u16, Arc<PrincipalStore>) {
-    let keys = EnvKeyProvider::with_default(DbKey::new([0x5a; 32]))
-        .with_principal_key(&PrincipalId::parse("bob").unwrap(), DbKey::new([0xb0; 32]));
-    let store = Arc::new(PrincipalStore::new(root, Arc::new(keys), wall_clock(), 8));
+    let credentials = credentials(&root);
+    let store = Arc::new(PrincipalStore::new(root, keys(), wall_clock(), 8));
     let resolver = TokenPrincipalMap::parse(&format!(
         "alice:{TOKEN_A}:claude-code,alice:{TOKEN_A2}:codex,bob:{TOKEN_B}"
     ))
@@ -74,7 +86,7 @@ fn boot_multi(root: PathBuf) -> (u16, Arc<PrincipalStore>) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async move {
-            let state = shogun_core::tenancy::multi::app_state(served, Arc::new(resolver), wall_clock())
+            let state = shogun_core::tenancy::multi::app_state_with_credentials(served, Arc::new(resolver), wall_clock(), Some(credentials))
                 .with_admin_token(Some(ADMIN));
             let listener = bind_local(0).await.unwrap();
             let port = listener.local_addr().unwrap().port();
@@ -635,8 +647,11 @@ fn a_handoff_crosses_principals_only_through_a_team_grant_and_lands_in_scratch()
 
 /// E39: `DELETE /v1/principals/<id>` is the operator's purge after a SCIM delete's grace period.
 /// An agent key cannot call it; the admin credential removes the principal's directory (store,
-/// write-ahead files) and team memberships, records the purge without content, and a repeat is a
-/// success that removes nothing. Another principal's store is untouched.
+/// write-ahead files), its connector credentials (`<root>/.tokens/<id>`) and team memberships,
+/// records the purge without content, and a repeat is a success that removes nothing. Another
+/// principal's store and credentials are untouched. A token still mapped to the purged principal
+/// is refused `410 principal_purged` on both faces and recreates nothing, until the operator
+/// reinstates the id on purpose.
 #[test]
 fn the_operator_purges_a_principal_store_idempotently() {
     let root = TempRoot::named("purge");
@@ -647,6 +662,15 @@ fn the_operator_purges_a_principal_store_idempotently() {
     ingest(port, TOKEN_B, "bob keeps his own walrus note", "world", "p2");
     assert_eq!(post_json(port, "/v1/teams", ADMIN, &serde_json::json!({ "tenant": "acme", "team": "ops", "members": ["alice", "bob"] })).status, 200);
     assert!(store.exists(&alice) && store.exists(&bob));
+    // Each has a connector grant and a relay bearer in the server's token store.
+    use shogun_integrations::{CredentialSlot, Secret};
+    let tokens = credentials(&root.0);
+    let gmail = CredentialSlot::Connector(shogun_mcp::scope::Service::Gmail);
+    for who in ["alice", "bob"] {
+        tokens.put(who, gmail, &Secret::new("{\"access_token\":\"x\"}")).unwrap();
+        tokens.put(who, CredentialSlot::BatchRelay, &Secret::new("v1.relay")).unwrap();
+    }
+    assert!(root.0.join(".tokens").join("alice").is_dir());
 
     // Not an agent's call, and no other DELETE exists.
     let by_agent = request(port, "DELETE", "/v1/principals/alice", Some(TOKEN_A), None).unwrap();
@@ -660,8 +684,14 @@ fn the_operator_purges_a_principal_store_idempotently() {
     assert_eq!(purged.status, 200, "{}", purged.body);
     let body = json(&purged.body);
     assert_eq!((body["purged"].as_bool(), body["store_removed"].as_bool(), body["left_teams"].as_bool()), (Some(true), Some(true), Some(true)), "{body}");
+    assert_eq!(body["credentials_removed"], true, "{body}");
+    assert_eq!(body["tombstoned"], true, "{body}");
     assert!(!root.0.join("alice").exists(), "alice's directory is gone");
+    assert!(!root.0.join(".tokens").join("alice").exists(), "alice's connector credentials are gone");
+    assert_eq!(tokens.get("alice", gmail).unwrap(), None);
+    assert_eq!(tokens.get("alice", CredentialSlot::BatchRelay).unwrap(), None);
     assert!(store.exists(&bob), "bob's store is untouched");
+    assert!(tokens.get("bob", gmail).unwrap().is_some(), "bob's credentials are untouched");
     let teams = request(port, "GET", "/v1/teams", Some(ADMIN), None).unwrap();
     assert!(!teams.body.contains("alice"), "{}", teams.body);
 
@@ -669,6 +699,20 @@ fn the_operator_purges_a_principal_store_idempotently() {
     let again = request(port, "DELETE", "/v1/principals/alice", Some(ADMIN), None).unwrap();
     assert_eq!(again.status, 200, "{}", again.body);
     assert_eq!(json(&again.body)["purged"], false);
+    assert_eq!(json(&again.body)["credentials_removed"], false);
+
+    // A token still mapped to alice is refused on both faces; nothing is recreated.
+    let refused = request(port, "GET", "/v1/state/people", Some(TOKEN_A), None).unwrap();
+    assert_eq!(refused.status, 410, "{}", refused.body);
+    assert_eq!(json(&refused.body)["error"], "principal_purged");
+    assert_eq!(json(&refused.body)["next_action"], "ask_human");
+    let write = post_json(port, "/v1/memory/ingest", TOKEN_A2, &serde_json::json!({ "events": [{ "content": "x" }], "source": "s", "actor": "a", "idempotency_key": "after-purge" }));
+    assert_eq!(write.status, 410, "{}", write.body);
+    let mcp = mcp_call(port, TOKEN_A, "state.people.list", serde_json::json!({}));
+    assert_eq!(mcp["error"]["data"]["next_action"], "ask_human", "{mcp}");
+    assert!(mcp["error"]["message"].as_str().unwrap_or_default().starts_with("principal_purged"), "{mcp}");
+    assert!(!root.0.join("alice").exists(), "no request recreated alice's store");
+    assert!(store.is_purged(&alice));
 
     // The purge log names the principal, what was removed and the request, never a row.
     let log = std::fs::read_to_string(root.0.join(shogun_core::tenancy::multi::PURGE_LOG)).unwrap();
@@ -678,4 +722,12 @@ fn the_operator_purges_a_principal_store_idempotently() {
     // Bob's reads still work.
     let bob_search = request(port, "GET", "/v1/memory/search?q=walrus", Some(TOKEN_B), None).unwrap();
     assert!(bob_search.body.contains("bob keeps his own walrus note"), "{}", bob_search.body);
+
+    // The operator re-provisions on purpose (`shogun-api --reinstate-principal alice`): the id
+    // works again with an empty store; nothing of the purged one is back.
+    assert!(store.reinstate(&alice).unwrap());
+    let fresh = request(port, "GET", "/v1/memory/search?q=walrus", Some(TOKEN_A), None).unwrap();
+    assert_eq!(fresh.status, 200, "{}", fresh.body);
+    assert!(!fresh.body.contains("walrus budget"), "{}", fresh.body);
+    assert_eq!(tokens.get("alice", gmail).unwrap(), None);
 }

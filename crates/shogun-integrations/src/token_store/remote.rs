@@ -88,6 +88,22 @@ impl<B: SealedRowBackend, K: KmsEnvelope> TokenStore for RemoteTokenStore<B, K> 
         }
         self.rows.remove(principal, &slot.account())
     }
+
+    /// Every slot's row: `fetch` says whether one was there (the sealed row only, no KMS call).
+    fn purge_principal(&self, principal: &str) -> Result<bool, TokenStoreError> {
+        if !valid_principal(principal) {
+            return Err(TokenStoreError::InvalidPrincipal);
+        }
+        let mut removed = false;
+        for slot in CredentialSlot::all() {
+            let account = slot.account();
+            if self.rows.fetch(principal, &account)?.is_some() {
+                self.rows.remove(principal, &account)?;
+                removed = true;
+            }
+        }
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
@@ -164,5 +180,21 @@ mod tests {
         store.delete("alice", slot).unwrap();
         assert_eq!(store.get("alice", slot).unwrap(), None);
         assert_eq!(store.get("../x", slot), Err(TokenStoreError::InvalidPrincipal));
+    }
+
+    #[test]
+    fn a_purge_removes_every_row_of_one_principal() {
+        let rows = FakeRows::default();
+        let store = RemoteTokenStore::new(&rows, FakeKms);
+        let gmail = CredentialSlot::Connector(shogun_mcp::scope::Service::Gmail);
+        store.put("alice", CredentialSlot::BatchRelay, &Secret::new("v1.a")).unwrap();
+        store.put("alice", gmail, &Secret::new("{}")).unwrap();
+        store.put("bob", gmail, &Secret::new("{}")).unwrap();
+        assert!(store.purge_principal("alice").unwrap());
+        assert_eq!(store.get("alice", gmail).unwrap(), None);
+        assert_eq!(store.get("alice", CredentialSlot::BatchRelay).unwrap(), None);
+        assert!(store.get("bob", gmail).unwrap().is_some());
+        assert!(!store.purge_principal("alice").unwrap());
+        assert_eq!(rows.0.lock().unwrap().len(), 1);
     }
 }
