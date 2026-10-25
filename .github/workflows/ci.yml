@@ -113,10 +113,76 @@ jobs:
           pnpm --filter @shogunagent/sdk typecheck
           pnpm --filter @shogunagent/sdk test
           pnpm --filter @shogunagent/sdk build
+      # E36b: withShogunAgent inside the real Vercel AI SDK, OpenAI Agents SDK, Claude Agent SDK
+      # and LangGraph.js, each with its own mock model; global fetch refuses every request.
+      - name: TypeScript SDK in the real frameworks (mock models, no network)
+        run: pnpm --filter @shogunagent/sdk test:integration
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-      - name: Python SDK (httpx.MockTransport, no network)
+      # E36b: the Python adapters inside real LangGraph and OpenAI Agents SDK runs. The frameworks
+      # are required here (SHOGUNAGENT_REQUIRE_INTEGRATION=1): a missing one fails, never skips.
+      - name: Python SDK (httpx.MockTransport, sockets refused; unit and real-framework tests)
+        env:
+          SHOGUNAGENT_REQUIRE_INTEGRATION: "1"
         run: |
-          python -m pip install -e 'packages/sdk-py[test]'
+          python -m pip install -e 'packages/sdk-py[test,integration]'
           cd packages/sdk-py && python -m pytest -q
+
+  conformance:
+    name: "MCP conformance (E36a: the 2026-07-28 suite against a local sidecar)"
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: the suite against a fake server (catches each deviation it names)
+        run: |
+          pnpm --filter @shogunagent/conformance typecheck
+          pnpm --filter @shogunagent/conformance test
+      # Debug build on purpose: the plan-file and licence-key overrides the throwaway sidecar
+      # needs exist only in debug builds. Temp store, random keys, loopback only.
+      - name: build the sidecar (shogun-api) and the store fixture
+        run: cargo build --locked -p shogun-core --features daemon-server --bin shogun-api --example conformance_store
+      - name: run the suite against the sidecar (writes, MRTR and approvals included)
+        run: pnpm --filter @shogunagent/conformance local
+
+  release-dry-run:
+    name: "release dry run (E40: npm publish --dry-run, python -m build + twine check; nothing is published)"
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: every workflow file parses as YAML
+        run: |
+          python -m pip install pyyaml
+          python scripts/check-workflow-yaml.py
+      - name: release versions agree (manifests, code constants, CHANGELOG sections)
+        run: node scripts/check-release-versions.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: npm publish --dry-run (@shogunagent/sdk, shogunagent)
+        run: |
+          (cd packages/sdk-ts && npm publish --dry-run --access public)
+          (cd packages/cli && npm publish --dry-run --access public)
+      - name: python -m build + twine check (shogunagent)
+        run: |
+          python -m pip install build twine
+          python -m build --outdir dist packages/sdk-py
+          python -m twine check --strict dist/*

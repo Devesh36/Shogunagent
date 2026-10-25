@@ -1,0 +1,117 @@
+name: publish npm
+
+# E40 (preparation only). Publishes ONE npm package: @shogunagent/sdk or the `shogunagent` CLI.
+# - Runs only when started by hand (workflow_dispatch) from main. Nothing publishes on push or tag.
+# - `dry_run` defaults to true: verify + `npm publish --dry-run` only.
+# - The real publish job waits for the `release` environment's required reviewers (the owner) and
+#   authenticates with npm trusted publishing (OIDC, `id-token: write`). No npm token is stored in
+#   the repository or its secrets; provenance is attached (`--provenance`).
+# Procedure, versioning and changelog policy: docs/release.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to publish"
+        required: true
+        type: choice
+        options: ["sdk", "cli"]
+      version:
+        description: "The exact version in package.json (typed again as a check, e.g. 0.1.0)"
+        required: true
+        type: string
+      dry_run:
+        description: "Verify and npm publish --dry-run only"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-npm-${{ inputs.package }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify ${{ inputs.package }} ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      dir: ${{ steps.pkg.outputs.dir }}
+      name: ${{ steps.pkg.outputs.name }}
+    steps:
+      - name: main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Publish from main only (this run is on ${GITHUB_REF})." >&2
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - id: pkg
+        name: resolve the package
+        env:
+          PACKAGE: ${{ inputs.package }}
+        run: |
+          case "$PACKAGE" in
+            sdk) echo "dir=packages/sdk-ts" >> "$GITHUB_OUTPUT"; echo "name=@shogunagent/sdk" >> "$GITHUB_OUTPUT" ;;
+            cli) echo "dir=packages/cli" >> "$GITHUB_OUTPUT"; echo "name=shogunagent" >> "$GITHUB_OUTPUT" ;;
+            *) echo "unknown package $PACKAGE" >&2; exit 1 ;;
+          esac
+      - name: versions agree (manifest, code constant, CHANGELOG section, the typed version)
+        env:
+          PACKAGE: ${{ inputs.package }}
+          VERSION: ${{ inputs.version }}
+        run: node scripts/check-release-versions.mjs --package "$PACKAGE" --expect "$VERSION"
+      - run: pnpm install --frozen-lockfile
+      - name: typecheck, test, build
+        env:
+          NAME: ${{ steps.pkg.outputs.name }}
+        run: |
+          pnpm --filter "$NAME" typecheck
+          pnpm --filter "$NAME" test
+          pnpm --filter "$NAME" build
+      - name: real-framework integration tests (sdk only)
+        if: inputs.package == 'sdk'
+        run: pnpm --filter @shogunagent/sdk test:integration
+      - name: the version is not on npm yet (anonymous read)
+        env:
+          NAME: ${{ steps.pkg.outputs.name }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
+            echo "${NAME}@${VERSION} is already published; bump the version (docs/release.md)." >&2
+            exit 1
+          fi
+      - name: npm publish --dry-run
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: npm publish --dry-run --access public
+
+  publish:
+    name: publish ${{ inputs.package }} ${{ inputs.version }} to npm
+    needs: verify
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          registry-url: "https://registry.npmjs.org"
+      # Trusted publishing needs npm >= 11.5.1; the runner's bundled npm may be older.
+      - run: npm install -g npm@11
+      - run: pnpm install --frozen-lockfile
+      - name: npm publish (trusted publishing, provenance)
+        working-directory: ${{ needs.verify.outputs.dir }}
+        run: npm publish --provenance --access public
