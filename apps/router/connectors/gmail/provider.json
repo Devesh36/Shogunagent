@@ -5,6 +5,8 @@
   "contact": { "url": "https://shogunai.si" },
   "payout_account_ref": "first-party:select",
   "pricing": [
+    { "endpoint": "messages.search", "model": "per_call", "cost_micro_usd": 2000 },
+    { "endpoint": "messages.get", "model": "per_call", "cost_micro_usd": 2000 },
     { "endpoint": "drafts.create", "model": "per_call", "cost_micro_usd": 2000 },
     { "endpoint": "messages.send", "model": "per_call", "cost_micro_usd": 2000 }
   ],
@@ -13,6 +15,6 @@
     "retention_days": 0,
     "zero_retention": false,
     "regions": ["global"],
-    "statement": "The router relays each call to Google's Gmail API and keeps no request or response body. The draft or sent message is stored in the user's own Gmail account under Google's terms until the user deletes it."
+    "statement": "The router relays each call to Google's Gmail API and keeps no request or response body. Searches and reads return the user's own mail to the calling agent only; attachments are never fetched. The draft or sent message is stored in the user's own Gmail account under Google's terms until the user deletes it."
   }
 }
