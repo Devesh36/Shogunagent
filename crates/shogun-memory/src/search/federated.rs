@@ -769,7 +769,7 @@ fn scope_hits(
     hits: &mut Vec<FederatedHit>,
     raw_event_ranks: &mut Vec<(i64, f64)>,
 ) -> Result<(), rusqlite::Error> {
-    if scope.include_scratch {
+    if scope.unrestricted() {
         return Ok(());
     }
     let ids: BTreeSet<i64> = hits

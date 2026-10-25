@@ -95,6 +95,15 @@ fn prepare_body<'a>(ev: &'a NewEvent<'a>) -> (std::borrow::Cow<'a, str>, std::bo
     (body.text, hash)
 }
 
+/// The refusal of a write into another agent's scratch without a `write` grant (E18): SQLite's
+/// own "not authorized" code, so every caller that maps a store error refuses it as one.
+pub fn scratch_denied() -> rusqlite::Error {
+    rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_AUTH),
+        Some("scratch_acl_denied".to_string()),
+    )
+}
+
 fn insert_prepared(
     conn: &Connection,
     ev: &NewEvent<'_>,
@@ -122,6 +131,12 @@ fn insert_prepared(
     let window_title = title.as_ref().map(|t| t.text.as_ref());
     let thread_key =
         crate::thread::thread_key(ev.source, native_thread_id, ev.app_bundle_id, window_title);
+    // E18 scratch ACL: an agent writes the world, its own scratch, or a namespace it holds a
+    // `write` grant on — nothing else, whichever face asked.
+    let namespace = ctx.namespace_sql();
+    if !crate::acl::may_write(conn, &ctx.actor, &namespace).map_err(|_| scratch_denied())? {
+        return Err(scratch_denied());
+    }
     conn.execute(
         "INSERT INTO event_log
            (ts, source, kind, app_bundle_id, window_title, content, content_hash,
@@ -140,7 +155,7 @@ fn insert_prepared(
             ev.window_bounds,
             thread_key,
             ctx.actor_sql(),
-            ctx.namespace_sql(),
+            namespace,
         ],
     )?;
     let id = conn.last_insert_rowid();
@@ -264,7 +279,7 @@ pub fn out_of_scope_ids(
     scope: crate::actor::ReadScope,
 ) -> Result<std::collections::HashSet<i64>, rusqlite::Error> {
     let mut out = std::collections::HashSet::new();
-    if scope.include_scratch {
+    if scope.unrestricted() {
         return Ok(out);
     }
     for chunk in ids.chunks(500) {

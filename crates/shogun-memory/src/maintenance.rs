@@ -559,6 +559,9 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // files (V100: their own working notes) are this person's data too.
     tx.execute("DELETE FROM ingest_receipts", [])?;
     tx.execute("DELETE FROM scratch_files", [])?;
+    // The audit log (V101) records who wrote what and when: this person's activity, so it goes
+    // too. The access grants (`scratch_acl`, `principal_grants`) are settings, kept like others.
+    tx.execute("DELETE FROM audit_log", [])?;
     // children first (FK order): provenance → commitments/open_loops → threads → people/projects.
     // `threads` holds titles, summaries and participants, so it is user data and must go too —
     // and it references projects, so it goes before them.
@@ -2767,6 +2770,9 @@ mod tests {
         // app keeps working on the emptied database.
         const KEPT: &[&str] = &[
             "refinery_schema_history",
+            // V101 access grants: who may read or write which namespace (settings, no content).
+            "scratch_acl",
+            "principal_grants",
             "chat_state",
             "dictionary_autoadd_secret",
             "dictionary_autoadd_settings",

@@ -102,6 +102,18 @@ pub fn own_scratch_relative<'a>(path: &'a str, namespace: &Namespace) -> Option<
     path.strip_prefix(&dir).and_then(|rest| rest.strip_prefix('/')).filter(|rest| !rest.is_empty())
 }
 
+/// Any agent's scratch file path: its namespace and the relative path
+/// (`/memories/scratch/<id>/<rel>`). Whether the caller may see it is the data layer's call
+/// (E18 scratch ACL, [`shogun_memory::scratch_files`]).
+pub fn scratch_target(path: &str) -> Option<(Namespace, &str)> {
+    let rest = path.strip_prefix(SCRATCH_DIR)?.strip_prefix('/')?;
+    let (id, rel) = rest.split_once('/')?;
+    if rel.is_empty() {
+        return None;
+    }
+    Some((Namespace::scratch(id).ok()?, rel))
+}
+
 fn band_prefix(confidence: f64) -> Option<&'static str> {
     match band(confidence) {
         Band::High => Some(""),
@@ -414,6 +426,24 @@ pub fn read(conn: &Connection, path: &str, scratch: Option<&Namespace>) -> Resul
                 .map(|file| file.map(|f| f.content))
                 .map_err(|_| rusqlite::Error::InvalidQuery);
         }
+    }
+    // Another agent's file: readable only with a grant (E18); the data layer answers `None`
+    // otherwise, exactly as for a file that does not exist.
+    if let Some((namespace, rel)) = scratch_target(path) {
+        // The caller is the agent `scratch` names; without one (a world-only listing) another
+        // agent's file is nothing.
+        let Some(Namespace::AgentScratch(own)) = scratch else {
+            return Ok(None);
+        };
+        let Ok(caller) = shogun_memory::actor::Actor::agent(own) else {
+            return Ok(None);
+        };
+        if !shogun_memory::acl::may_read(conn, &caller, &namespace.as_str()).unwrap_or(false) {
+            return Ok(None);
+        }
+        return shogun_memory::scratch_files::read(conn, &namespace, rel)
+            .map(|file| file.map(|f| f.content))
+            .map_err(|_| rusqlite::Error::InvalidQuery);
     }
     Ok(None)
 }
