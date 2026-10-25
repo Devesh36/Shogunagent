@@ -29,11 +29,18 @@ export interface LmCallOptions {
   [key: string]: unknown;
 }
 
+/**
+ * The language-model middleware shape. The methods are generic over the call options, the
+ * generate result and the stream result, so the object is assignable to `ai`'s
+ * `LanguageModelMiddleware` under `strict` + `exactOptionalPropertyTypes` without this package
+ * depending on `ai`: `wrapLanguageModel({ model, middleware: shogunAgentMiddleware() })`
+ * typechecks as written (test/integration/ai-sdk.test.ts).
+ */
 export interface LmMiddleware {
   middlewareVersion?: string;
-  transformParams?: (args: { type: "generate" | "stream"; params: LmCallOptions; model?: unknown }) => PromiseLike<LmCallOptions>;
-  wrapGenerate?: (args: { doGenerate: () => PromiseLike<unknown>; doStream: () => PromiseLike<unknown>; params: LmCallOptions; model: unknown }) => PromiseLike<unknown>;
-  wrapStream?: (args: { doGenerate: () => PromiseLike<unknown>; doStream: () => PromiseLike<{ stream: ReadableStream<unknown>; [key: string]: unknown }>; params: LmCallOptions; model: unknown }) => PromiseLike<unknown>;
+  transformParams?<P extends LmCallOptions>(args: { type: "generate" | "stream"; params: P; model?: unknown }): PromiseLike<P>;
+  wrapGenerate?<R>(args: { doGenerate: () => PromiseLike<R>; doStream: () => PromiseLike<unknown>; params: LmCallOptions; model: unknown }): PromiseLike<R>;
+  wrapStream?<S extends { stream: ReadableStream<unknown> }>(args: { doGenerate: () => PromiseLike<unknown>; doStream: () => PromiseLike<S>; params: LmCallOptions; model: unknown }): PromiseLike<S>;
 }
 
 /** The last user message's text. */
@@ -81,7 +88,7 @@ export function shogunAgentMiddleware(options: WithShogunAgentOptions = {}): LmM
     async transformParams({ params }) {
       const query = lastUserText(params.prompt);
       const block = await memory.block(query);
-      return { ...params, prompt: injectIntoPrompt(params.prompt, block) };
+      return { ...params, prompt: injectIntoPrompt(params.prompt, block) as typeof params.prompt };
     },
     async wrapGenerate({ doGenerate, params }) {
       const result = await doGenerate();
@@ -106,7 +113,7 @@ export function shogunAgentMiddleware(options: WithShogunAgentOptions = {}): LmM
           await memory.remember({ turnId: id, user, assistant: text });
         },
       });
-      return { ...out, stream: out.stream.pipeThrough(tap) };
+      return { ...out, stream: out.stream.pipeThrough(tap) } as typeof out;
     },
   };
 }
@@ -114,17 +121,16 @@ export function shogunAgentMiddleware(options: WithShogunAgentOptions = {}): LmM
 /** A language model (any object with `doGenerate` / `doStream`). */
 export interface LanguageModelLike {
   doGenerate(options: LmCallOptions): PromiseLike<unknown>;
-  doStream(options: LmCallOptions): PromiseLike<{ stream: ReadableStream<unknown>; [key: string]: unknown }>;
-  [key: string]: unknown;
+  doStream(options: LmCallOptions): PromiseLike<{ stream: ReadableStream<unknown> }>;
 }
 
 /**
  * Wrap a model so every call recalls before and ingests after. Equivalent to
  * `wrapLanguageModel({ model, middleware: shogunAgentMiddleware(options) })`, without importing `ai`.
  */
-export function withShogunAgent<M extends LanguageModelLike>(model: M, options: WithShogunAgentOptions = {}): Omit<M, "doGenerate" | "doStream"> & LanguageModelLike {
+export function withShogunAgent<M extends LanguageModelLike>(model: M, options: WithShogunAgentOptions = {}): M & LanguageModelLike {
   const mw = shogunAgentMiddleware(options);
-  const wrapped = Object.create(model) as Omit<M, "doGenerate" | "doStream"> & LanguageModelLike;
+  const wrapped = Object.create(model) as M & LanguageModelLike;
   const transform = async (type: "generate" | "stream", params: LmCallOptions) =>
     mw.transformParams ? mw.transformParams({ type, params, model }) : params;
   Object.assign(wrapped, {

@@ -20,7 +20,10 @@ chat models accept. No import of LangChain.
 from __future__ import annotations
 
 import inspect
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:  # never imported at run time: the adapter does not depend on LangChain
+    from langchain_core.runnables import RunnableConfig
 
 from ..context import replace_context, strip_context
 from ..middleware import AsyncShogunAgentMemory, ShogunAgentMemory, options_from, role_of, text_of
@@ -83,7 +86,14 @@ def _thread(config: Any) -> str | None:
 
 
 def with_shogun_agent(node: Callable[..., Any], **options: Any) -> Callable[..., Any]:
-    """Wrap a node ``(state, config=None) -> update``."""
+    """Wrap a node ``(state, config=None) -> update``.
+
+    The wrapper's ``config`` parameter is annotated ``Optional[RunnableConfig]`` (as a string,
+    thanks to ``from __future__ import annotations``): LangGraph injects the run config, and with it
+    the ``thread_id`` the turn is ingested under, only into a parameter annotated that way (or not
+    at all). Found by the real-framework test (E36b); with ``Any`` every thread landed under
+    ``langgraph:default``.
+    """
     opts = options_from(options)
     takes_config = len(inspect.signature(node).parameters) >= 2
 
@@ -101,7 +111,7 @@ def with_shogun_agent(node: Callable[..., Any], **options: Any) -> Callable[...,
     if inspect.iscoroutinefunction(node):
         amemory = AsyncShogunAgentMemory(opts, "langgraph")
 
-        async def wrapped(state: Any, config: Any = None) -> Any:
+        async def wrapped(state: Any, config: Optional[RunnableConfig] = None) -> Any:  # noqa: UP045
             messages = _messages_of(state)
             user = _last_human(messages)
             block = await amemory.block(user)
@@ -115,7 +125,7 @@ def with_shogun_agent(node: Callable[..., Any], **options: Any) -> Callable[...,
 
     memory = ShogunAgentMemory(opts, "langgraph")
 
-    def wrapped_sync(state: Any, config: Any = None) -> Any:
+    def wrapped_sync(state: Any, config: Optional[RunnableConfig] = None) -> Any:  # noqa: UP045
         messages = _messages_of(state)
         user = _last_human(messages)
         block = memory.block(user)

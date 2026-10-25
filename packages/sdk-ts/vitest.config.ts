@@ -5,6 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
-    exclude: ["node_modules/**", "dist/**"],
+    // The real-framework suite has its own config (vitest.integration.config.ts, `test:integration`).
+    exclude: ["node_modules/**", "dist/**", "test/integration/**"],
   },
 });
