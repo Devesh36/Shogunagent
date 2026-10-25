@@ -37,6 +37,7 @@ import { classifyCall, pricingDocument, quoteCost, usageOf, FREE_ALLOWANCE_MICRO
 import { DEFAULT_POW_BITS, MAX_POW_BITS, challengeHash, mintChallenge, verifyPow } from "./pow.js";
 import { WindowLimiter, type RateLimiter } from "./ratelimit.js";
 import { metered, type MeteringDeps } from "./metering.js";
+import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
 
 /** Self-registration: at most this many per IP per hour (in-process default; production wires
  * `SqlWindowLimiter`). */
@@ -73,6 +74,9 @@ export interface AgentDeps extends MeteringDeps {
   /** PBKDF2 rounds for new keys (tests lower it). */
   keyIterations?: number;
   keyTtlMs?: number;
+  /** The agent-readable documents (plan E10, `wellknown/app.ts`): the agent card's signing key,
+   * the MCP URL when it is not `<publicBaseUrl>/mcp`, and test overrides. */
+  wellknown?: Omit<WellknownDeps, "publicBaseUrl" | "now">;
 }
 
 /** The client IP as the edge reports it. Workers set `CF-Connecting-IP`; behind another proxy the
@@ -127,6 +131,13 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
 
   // --- pricing (E10-T7 reads this; one source with the metering) ---
   app.get("/.well-known/pricing.json", (c) => c.json(pricingDocument({ caps }), 200, { "cache-control": "public, max-age=300" }));
+
+  // --- the other agent-readable documents (E10) and the status window over the agent routes ---
+  const wellknown = createWellknown({ ...(deps.wellknown ?? {}), publicBaseUrl: deps.publicBaseUrl, now });
+  for (const path of ["/mcp", "/v1/agents", "/v1/agents/*", "/v1/keys/*", "/v1/wallet", "/v1/wallet/*", "/v1/quote", "/v1/receipts", "/v1/receipts/*"]) {
+    app.use(path, wellknown.observe);
+  }
+  app.route("/", wellknown.app);
 
   // --- registration (E3-T3) ---
   app.get("/v1/agents/challenge", (c) => c.json(mintChallenge(deps.powSecret, powBits, now().getTime()), 200, { "cache-control": "no-store" }));

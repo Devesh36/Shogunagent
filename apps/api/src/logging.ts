@@ -69,6 +69,9 @@ export function routeTemplate(pathname: string): string {
   // collapsed to their template.
   if (["/v1/agents", "/v1/agents/challenge", "/v1/agents/me", "/v1/wallet", "/v1/wallet/topup", "/v1/wallet/topup/done",
     "/v1/stripe/webhook", "/v1/quote", "/v1/receipts", "/mcp", "/.well-known/pricing.json"].includes(pathname)) return pathname;
+  // The agent-readable documents (plan E10, wellknown/app.ts): fixed paths, no ids.
+  if (["/.well-known/mcp/server-card.json", "/.well-known/agent-card.json", "/.well-known/status.json", "/.well-known/mcp-config",
+    "/health", "/openapi.json", "/llms.txt", "/llms-full.txt"].includes(pathname)) return pathname;
   if (/^\/v1\/keys\/[^/]+\/revoke$/.test(pathname)) return "/v1/keys/:id/revoke";
   if (/^\/v1\/keys\/[^/]+$/.test(pathname)) return "/v1/keys/:id";
   if (/^\/v1\/receipts\/[^/]+\/dispute$/.test(pathname)) return "/v1/receipts/:id/dispute";

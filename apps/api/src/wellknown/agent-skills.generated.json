@@ -1,0 +1,55 @@
+{
+  "source": "SKILL.md",
+  "skill_name": "shogunagent",
+  "skill_version": "0.1.0",
+  "skills": [
+    {
+      "id": "who",
+      "name": "Who",
+      "description": "Who the user works with and what is pending with a specific person.",
+      "tags": [
+        "state.people.get",
+        "state.open_loops.list"
+      ]
+    },
+    {
+      "id": "what-the-user-committed-to",
+      "name": "What the user committed to",
+      "description": "What the user committed to or is waiting on, with due dates and the sentence that proves it.",
+      "tags": [
+        "state.commitments.list"
+      ]
+    },
+    {
+      "id": "context-before-you-act",
+      "name": "Context before you act",
+      "description": "Context before you act: a budgeted summary of the user's current work to put in your own prompt.",
+      "tags": [
+        "memory.get_context_pack",
+        "memory.recall"
+      ]
+    },
+    {
+      "id": "continuity",
+      "name": "Continuity",
+      "description": "Continuity: you finished a task, learned something durable, or reached a checkpoint, and the next agent (or you, next session) should start from it.",
+      "tags": [
+        "memory.ingest"
+      ]
+    },
+    {
+      "id": "an-external-action-on-the-user-s-behalf",
+      "name": "An external action on the user's behalf",
+      "description": "An external action on the user's behalf that must be approved by them, or a tool call that should be priced, permission-checked and remembered.",
+      "tags": [
+        "actions.execute",
+        "router.run"
+      ]
+    }
+  ],
+  "exclusions": [
+    "Storing a conversation verbatim. Ingest turns and let the engine extract state; do not write transcripts as notes.",
+    "General web search, scraping or enrichment when the user already has a tool for that. The router can find one, but prefer the user's existing tool.",
+    "Anything about a person other than the principal whose key you hold. Keys are bound to one principal."
+  ]
+}

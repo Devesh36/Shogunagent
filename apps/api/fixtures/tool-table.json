@@ -1,0 +1,219 @@
+{
+  "schema": "shogunagent/tool-table/v1",
+  "source": "fixture",
+  "notes": "Hand-maintained to docs/implementation-plan.md §7.1 until E4 lands and `shogun-mcp --export-tool-table` replaces it (docs/api/tool-table.json.md). §7.1 names 21 tools (18 reads, 2 writes, 1 action); the plan calls the set 'core 22' and E4's freeze in docs/api/core-tools.md settles the final list. Descriptions here are interim; E4-T4 rewrites them for agents and the selection eval judges them.",
+  "protocol_version": "2026-07-28",
+  "toolset": "core",
+  "tools": [
+    {
+      "name": "memory.search",
+      "title": "Search memory",
+      "description": "Find events and notes in the user's memory by keyword. Free. Not for extracting state: use state.* for people, projects, commitments and open loops.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "query": { "type": "string" }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 } }, "required": ["query"] },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "memory.get_context",
+      "title": "Get current context",
+      "description": "The user's current work context (focused app, recent events). Free. Prefer memory.get_context_pack for a prompt-ready summary.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": {} },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "memory.get_context_pack",
+      "title": "Get context pack",
+      "description": "A budgeted summary of the user's current work to put in your own prompt: active people, projects, commitments and open loops with confidence. Free. Call at the start of a task that involves the user's work.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "budget_tokens": { "type": "integer", "minimum": 100, "maximum": 20000 } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "memory.get_events",
+      "title": "Get events",
+      "description": "Raw events in a time range, newest first. Free. Not for summaries: use memory.get_wrap or memory.get_periods.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "since": { "type": "string", "format": "date-time" }, "until": { "type": "string", "format": "date-time" }, "limit": { "type": "integer", "minimum": 1, "maximum": 500 } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "memory.read_session",
+      "title": "Read a session",
+      "description": "The events of one work session (one app, one hour) by id. Free.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "session_id": { "type": "string" } }, "required": ["session_id"] },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "memory.get_wrap",
+      "title": "Get day wrap",
+      "description": "The summary of one day: what happened, what moved, with evidence. Free.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "date": { "type": "string", "format": "date" } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "memory.get_periods",
+      "title": "Get period summaries",
+      "description": "Weekly and monthly summaries over a range. Free. Not for a single day: use memory.get_wrap.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "since": { "type": "string", "format": "date" }, "until": { "type": "string", "format": "date" } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "memory.recall",
+      "title": "Recall",
+      "description": "Ask the memory a question and get the relevant facts within a token budget, each with its source quote and confidence band. Free. Prefer it over memory.search when you need facts rather than events.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "query": { "type": "string" }, "budget_tokens": { "type": "integer", "minimum": 100, "maximum": 20000 }, "namespace": { "type": "string" } }, "required": ["query"] },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "calendar.upcoming",
+      "title": "Upcoming calendar",
+      "description": "The user's upcoming calendar occurrences. Free. Read-only; creating events is an L3 action through actions.execute.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "hours": { "type": "integer", "minimum": 1, "maximum": 720 } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "profile.whoami",
+      "title": "Who am I",
+      "description": "The principal this connection serves and the scope it runs under. Free. Call once to confirm the connection.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": {} },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "state.commitments.list",
+      "title": "List commitments",
+      "description": "Find what the user committed to: promises, deliverables and deadlines made to others, each with the sentence that proves it and a confidence. Free. Not for the user's calendar: use calendar.upcoming.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "status": { "type": "string", "enum": ["open", "done", "all"] }, "person": { "type": "string" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200 } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "state.open_loops.list",
+      "title": "List open loops",
+      "description": "What is pending: questions without an answer, blockers, follow-ups the user is waiting on, each with its quote and confidence. Free.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "person": { "type": "string" }, "project": { "type": "string" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200 } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "state.people.list",
+      "title": "List people",
+      "description": "The people in the user's work, most recently mentioned first. Free. For one person's page use state.people.get.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "query": { "type": "string" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200 } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "state.projects.list",
+      "title": "List projects",
+      "description": "The projects in the user's work with their last activity. Free. For one project's page use state.projects.get.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "query": { "type": "string" }, "limit": { "type": "integer", "minimum": 1, "maximum": 200 } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "state.people.get",
+      "title": "Get a person",
+      "description": "Who this person is to the user and what is pending with them: commitments, open loops, recent evidence. Free. Only people in the principal's own memory.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "state.projects.get",
+      "title": "Get a project",
+      "description": "One project: status, people, commitments and open loops that point at it, with evidence. Free.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" } } },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "wiki.evidence",
+      "title": "Evidence for a fact",
+      "description": "The source excerpts behind a state row or wiki page: quote, event, time. Free. Use it before you report a fact as established.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "ref": { "type": "string" } }, "required": ["ref"] },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "actions.status",
+      "title": "Action status",
+      "description": "The state of an action you started with actions.execute: pending approval, approved, sent, refused. Free. Never claim an action happened before this says sent.",
+      "level": "read",
+      "cost_unit": "read",
+      "input_schema": { "type": "object", "properties": { "action_id": { "type": "string" } }, "required": ["action_id"] },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "memory.append_note",
+      "title": "Append a note",
+      "description": "Write one durable note into the user's memory (or your scratch namespace). Metered per event ($0.50 per 1,000). L1: local and reversible. Not for transcripts.",
+      "level": "L1",
+      "cost_unit": "ingest",
+      "input_schema": { "type": "object", "properties": { "text": { "type": "string" }, "namespace": { "type": "string" }, "idempotency_key": { "type": "string" } }, "required": ["text", "idempotency_key"] },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "memory.ingest",
+      "title": "Ingest events",
+      "description": "Write the turns or events that changed something so the next agent starts from them; the engine extracts state. Metered per event ($0.50 per 1,000). L1. Set thread_key to your task id and an idempotency_key. Not for storing a conversation verbatim.",
+      "level": "L1",
+      "cost_unit": "ingest",
+      "input_schema": { "type": "object", "properties": { "events": { "type": "array", "items": { "type": "object" }, "minItems": 1, "maxItems": 1000 }, "thread_key": { "type": "string" }, "namespace": { "type": "string" }, "idempotency_key": { "type": "string" } }, "required": ["events", "idempotency_key"] },
+      "output_schema": null,
+      "deprecated": null
+    },
+    {
+      "name": "actions.execute",
+      "title": "Execute an action",
+      "description": "Run an action on the user's behalf. L1 runs; L2 (writes to the user's data) returns input_required once; L3 (sending, posting, paying, calendar creation) returns an approval URL a human must open. Metered as a run. Poll actions.status; never report an L3 as done before it says sent.",
+      "level": "L3",
+      "cost_unit": "run",
+      "input_schema": { "type": "object", "properties": { "action": { "type": "object" }, "idempotency_key": { "type": "string" }, "dryRun": { "type": "boolean" }, "inputResponses": { "type": "object" } }, "required": ["action", "idempotency_key"] },
+      "output_schema": null,
+      "deprecated": null
+    }
+  ]
+}
