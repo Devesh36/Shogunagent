@@ -1,0 +1,23 @@
+{
+  "name": "shogunagent",
+  "version": "0.1.0",
+  "description": "npx shogunagent: start the local ShogunAgent sidecar and connect the AI apps on this machine (Claude Code, Cursor, Codex, Claude Desktop) to it over a read-only MCP entry. The state layer for AI agents: people, projects, commitments and open loops, with a quote and a confidence on every fact.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/Torutesu/Shogunagent", "directory": "packages/cli" },
+  "homepage": "https://shogunagent.dev",
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "bin": { "shogunagent": "bin/shogunagent.mjs" },
+  "files": ["bin", "dist", "README.md"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  }
+}

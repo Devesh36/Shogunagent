@@ -1,0 +1,28 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "shogunagent",
+  "description": "ShogunAgent: the state layer for AI agents. Add with `/plugin marketplace add Torutesu/Shogunagent`, then `/plugin install shogunagent@shogunagent`.",
+  "owner": {
+    "name": "Select KK",
+    "url": "https://shogunagent.dev"
+  },
+  "metadata": {
+    "version": "0.1.0",
+    "homepage": "https://shogunagent.dev",
+    "repository": "https://github.com/Torutesu/Shogunagent"
+  },
+  "plugins": [
+    {
+      "name": "shogunagent",
+      "source": "./",
+      "description": "Read what is true about the user's work right now (people, projects, commitments, open loops) with a quote and a confidence on every fact; write what you learned so the next agent starts from it; run tools with L1/L2/L3 permission tiers. Not a transcript store and not a web-search tool.",
+      "version": "0.1.0",
+      "author": { "name": "Select KK", "url": "https://shogunagent.dev" },
+      "homepage": "https://shogunagent.dev",
+      "repository": "https://github.com/Torutesu/Shogunagent",
+      "license": "Apache-2.0",
+      "keywords": ["state", "memory", "commitments", "open-loops", "mcp", "agents", "provenance", "approvals"],
+      "category": "productivity"
+    }
+  ]
+}

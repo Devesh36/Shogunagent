@@ -1,0 +1,21 @@
+{
+  "name": "shogunagent",
+  "version": "0.1.0",
+  "description": "The state layer for AI agents: people, projects, commitments and open loops, with a quote and a confidence on every fact. Reads are free; writes and runs are metered; L3 actions wait for a human.",
+  "author": { "name": "Select KK", "url": "https://shogunagent.dev" },
+  "homepage": "https://shogunagent.dev",
+  "repository": "https://github.com/Torutesu/Shogunagent",
+  "license": "Apache-2.0",
+  "keywords": ["state", "memory", "commitments", "open-loops", "mcp", "agents", "provenance", "approvals"],
+  "skills": ["./"],
+  "mcpServers": {
+    "shogunagent": {
+      "type": "http",
+      "url": "https://api.shogunagent.dev/mcp"
+    },
+    "shogunagent-local": {
+      "command": "npx",
+      "args": ["-y", "shogunagent@0.1", "mcp"]
+    }
+  }
+}
