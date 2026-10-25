@@ -39,6 +39,8 @@ ALLOWLIST = {
     # E50 hosted connector credentials (decision: docs/api/connector-tokens.md, docs/implementation-plan.md E50).
     "crates/shogun-integrations/src/hosted_connect.rs",  # the hosted OAuth client secret and the PKCE verifier go into the vendor's token form (the core's egress); never logged or returned
     "crates/shogun-mcp/src/connector_vault.rs",          # writes the one access token into the no-store response the gateway hands the router; never logged or stored
+    # E44 connector read-sync (decision: docs/api/ingest-sources.md §2.2, docs/implementation-plan.md E44).
+    "crates/shogun-core/src/provider_fetch.rs",          # the principal's access token into the Authorization header of one read-sync GET (the core's egress); never logged or stored
 }
 
 EXPOSE_RE = re.compile(r"\.expose\s*\(")

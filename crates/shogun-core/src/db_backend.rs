@@ -171,6 +171,10 @@ pub struct DbBackend {
     agent_source: Option<AgentSourceConfig>,
     backup: Option<BackupRetentionConfig>,
     connections: Option<shogun_mcp::connections_api::ConnectionsPaths>,
+    /// A hosted sidecar's connector vault and the principal this store belongs to (E50 / E44):
+    /// `connections.list` / `connections.disconnect` answer from the principal's own grants, and a
+    /// provider change notice is queued for the read-sync. `None` everywhere else.
+    hosted_connectors: Option<(Arc<dyn shogun_mcp::connector_vault::ConnectorVault>, String)>,
     /// `steer_runs.json` (issue #395): notes for runs the desktop is running.
     steer_store: Option<PathBuf>,
     /// "Compact search index" (#714 step 3): the desktop job's request / status files and the
@@ -397,6 +401,7 @@ impl DbBackend {
             steer_store: None,
             backup: None,
             connections: None,
+            hosted_connectors: None,
             search_index: None,
             dream_action_facts: None,
             translate_wait: TranslateWait::default(),
@@ -625,6 +630,54 @@ impl DbBackend {
     ) -> Self {
         self.connections = Some(paths);
         self
+    }
+
+    /// Serve `connections.list` / `connections.disconnect` from a hosted sidecar's connector vault
+    /// for `principal` (E50), and queue provider change notices for its read-sync (E44).
+    #[must_use]
+    pub fn with_hosted_connectors(mut self, vault: Arc<dyn shogun_mcp::connector_vault::ConnectorVault>, principal: impl Into<String>) -> Self {
+        self.hosted_connectors = Some((vault, principal.into()));
+        self
+    }
+
+    /// `connections.list` on a hosted sidecar: the principal's grants as the vault reads them
+    /// (state and expiry, never a token or an account identity), in the desktop answer's shape.
+    fn hosted_connections_json(&self) -> Option<String> {
+        let (vault, principal) = self.hosted_connectors.as_ref()?;
+        let now = self.db.now_ms();
+        Some(match vault.status(principal, now) {
+            Ok(states) => {
+                let services: Vec<serde_json::Value> = states
+                    .iter()
+                    .map(|state| {
+                        let mut row = shogun_mcp::connector_vault::state_json(state);
+                        row["access"] = json!(shogun_mcp::scope::access(state.service).as_str());
+                        row["third_party"] = serde_json::Value::Null;
+                        row["disconnect_pending"] = json!(false);
+                        row
+                    })
+                    .collect();
+                json!({ "hosted": true, "app_running": serde_json::Value::Null, "services": services, "gmail": serde_json::Value::Null, "composio": serde_json::Value::Null })
+                    .to_string()
+            }
+            Err(_) => json!({ "error": "connections_unavailable" }).to_string(),
+        })
+    }
+
+    /// `connections.disconnect` on a hosted sidecar: the vault deletes the grant (revoking it at the
+    /// vendor where it can; `connections.list` then shows it disconnected).
+    fn hosted_disconnect(&self, body: &str) -> Option<WriteResult> {
+        let (vault, principal) = self.hosted_connectors.as_ref()?;
+        let service = match shogun_mcp::connections_api::parse_disconnect(body) {
+            Ok(service) => service,
+            Err(invalid) => return Some(Err(shogun_mcp::connections_api::refusal(invalid))),
+        };
+        Some(
+            vault
+                .disconnect(principal, service, self.db.now_ms())
+                .map(|_| None)
+                .map_err(|_| "connections_unavailable: the credential store did not answer; retry shortly".to_string()),
+        )
     }
 
     fn connections_paths(&self) -> Result<&shogun_mcp::connections_api::ConnectionsPaths, String> {
@@ -2447,6 +2500,16 @@ impl MemoryBackend for DbBackend {
         Ok(value.to_string())
     }
 
+    /// E44: a provider change notice goes to the principal's read-sync queue (hosted only).
+    fn enqueue_connector_sync(
+        &self,
+        provider: &str,
+        detail: &serde_json::Value,
+    ) -> Result<shogun_mcp::connector_vault::SyncQueued, shogun_mcp::connector_vault::VaultError> {
+        let (vault, principal) = self.hosted_connectors.as_ref().ok_or(shogun_mcp::connector_vault::VaultError::NotConfigured)?;
+        vault.enqueue_sync(principal, provider, detail, self.db.now_ms())
+    }
+
     /// `memory.ingest` (E4-T3): the store's append path under the request's idempotency key.
     fn ingest(
         &self,
@@ -2964,6 +3027,7 @@ impl MemoryBackend for DbBackend {
             Tool::VisualRecallRescanFrame => self.visual_recall_rescan_json(params),
             Tool::CaptureExclusionsGet => self.capture_exclusions_json(),
             Tool::AgentSourceGet => self.agent_source_json(),
+            Tool::ConnectionsList if self.connections.is_none() && self.hosted_connectors.is_some() => self.hosted_connections_json()?,
             Tool::ConnectionsList => match self.connections_paths() {
                 Ok(paths) => {
                     let mut answer = shogun_mcp::connections_api::list_json(
@@ -3168,6 +3232,11 @@ impl MemoryBackend for DbBackend {
             // which alone can delete the Keychain credential; the Mail policy is written here and
             // `composio_set` refuses granting consent or turning draft-only mode off on its own.
             Tool::ConnectionsDisconnect => {
+                if self.connections.is_none() {
+                    if let Some(answer) = self.hosted_disconnect(body) {
+                        return answer;
+                    }
+                }
                 shogun_mcp::connections_api::disconnect(self.connections_paths()?, body)?;
                 Ok(None)
             }

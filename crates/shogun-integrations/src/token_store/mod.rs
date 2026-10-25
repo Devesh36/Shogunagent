@@ -45,6 +45,13 @@ pub const LOCAL_PRINCIPAL: &str = "local";
 /// Dream Cycle presents to the relay). Listed in `keychain_accounts::USER_SECRET_ACCOUNTS`.
 pub const BATCH_RELAY_ACCOUNT: &str = "batch-relay-bearer";
 
+/// The slot account of the hosted connect flows a principal has in progress (E50): the PKCE
+/// verifiers and GitHub device codes, sealed like a grant, so a sidecar restart keeps them.
+pub const CONNECT_FLOWS_ACCOUNT: &str = "connector-connect-flows";
+/// The slot account of the principal's connector read-sync queue (E44): the provider change
+/// notices waiting for the background tick to fetch their content. Ids only, never content.
+pub const SYNC_QUEUE_ACCOUNT: &str = "connector-sync-queue";
+
 /// What a stored credential is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CredentialSlot {
@@ -52,27 +59,45 @@ pub enum CredentialSlot {
     Connector(Service),
     /// The Batch relay bearer (licence or trial token) for the principal's Dream Cycle.
     BatchRelay,
+    /// The principal's pending hosted connect flows (`crate::hosted_connect`, E50).
+    ConnectFlows,
+    /// The principal's pending connector read-sync notices (`crate::read_sync`, E44).
+    SyncQueue,
 }
 
 impl CredentialSlot {
-    /// Every slot a principal can hold: one per connector service, and the relay bearer. What a
-    /// purge removes from a store that cannot list a principal's entries.
+    /// Every slot a principal can hold: one per connector service, the relay bearer, the pending
+    /// connect flows and the read-sync queue. What a purge removes from a store that cannot list a
+    /// principal's entries.
     pub fn all() -> Vec<Self> {
         shogun_mcp::scope::ALL_SERVICES
             .iter()
             .map(|service| Self::Connector(*service))
-            .chain(std::iter::once(Self::BatchRelay))
+            .chain([Self::BatchRelay, Self::ConnectFlows, Self::SyncQueue])
             .collect()
     }
 
     /// The stable account name of the slot: `<source>-tokenset` for a connector (the Keychain
-    /// account name the Mac app has always used), [`BATCH_RELAY_ACCOUNT`] for the relay.
+    /// account name the Mac app has always used), [`BATCH_RELAY_ACCOUNT`] for the relay,
+    /// [`CONNECT_FLOWS_ACCOUNT`] and [`SYNC_QUEUE_ACCOUNT`] for the hosted sidecar's two.
     pub fn account(self) -> String {
         match self {
             Self::Connector(service) => format!("{}-tokenset", service.source_str()),
             Self::BatchRelay => BATCH_RELAY_ACCOUNT.to_string(),
+            Self::ConnectFlows => CONNECT_FLOWS_ACCOUNT.to_string(),
+            Self::SyncQueue => SYNC_QUEUE_ACCOUNT.to_string(),
         }
     }
+}
+
+/// What a [`TokenStore::modify`] step leaves in the slot.
+pub enum Modify {
+    /// Leave the stored value as it is.
+    Keep,
+    /// Store this value.
+    Put(Secret),
+    /// Remove the slot.
+    Delete,
 }
 
 /// Why a store call failed. Fixed codes only: never a value, a path or a principal's content.
@@ -114,6 +139,20 @@ pub trait TokenStore: Send + Sync {
     fn put(&self, principal: &str, slot: CredentialSlot, value: &Secret) -> Result<(), TokenStoreError>;
     fn delete(&self, principal: &str, slot: CredentialSlot) -> Result<(), TokenStoreError>;
 
+    /// Read, change and write one slot as one step: `f` sees the stored value (`None` when nothing
+    /// is stored) and answers what to leave. The file store holds a lock file around the three
+    /// (so the sidecar and the `--dream-tick` process never lose each other's change to the
+    /// read-sync queue or the pending connect flows); the default is a plain read then write, for
+    /// stores only one process writes.
+    fn modify(&self, principal: &str, slot: CredentialSlot, f: &mut dyn FnMut(Option<Secret>) -> Modify) -> Result<(), TokenStoreError> {
+        let current = self.get(principal, slot)?;
+        match f(current) {
+            Modify::Keep => Ok(()),
+            Modify::Put(value) => self.put(principal, slot, &value),
+            Modify::Delete => self.delete(principal, slot),
+        }
+    }
+
     /// Remove every credential of `principal` (E39: the operator's purge of a deleted principal).
     /// Idempotent: a principal with nothing stored answers `Ok(false)`. `Ok(true)` when something
     /// was removed, as far as the store can tell without opening a value. Never reads a value. The
@@ -135,6 +174,9 @@ impl<T: TokenStore + ?Sized> TokenStore for &T {
     fn get(&self, principal: &str, slot: CredentialSlot) -> Result<Option<Secret>, TokenStoreError> {
         (**self).get(principal, slot)
     }
+    fn modify(&self, principal: &str, slot: CredentialSlot, f: &mut dyn FnMut(Option<Secret>) -> Modify) -> Result<(), TokenStoreError> {
+        (**self).modify(principal, slot, f)
+    }
     fn put(&self, principal: &str, slot: CredentialSlot, value: &Secret) -> Result<(), TokenStoreError> {
         (**self).put(principal, slot, value)
     }
@@ -149,6 +191,9 @@ impl<T: TokenStore + ?Sized> TokenStore for &T {
 impl<T: TokenStore + ?Sized> TokenStore for std::sync::Arc<T> {
     fn get(&self, principal: &str, slot: CredentialSlot) -> Result<Option<Secret>, TokenStoreError> {
         (**self).get(principal, slot)
+    }
+    fn modify(&self, principal: &str, slot: CredentialSlot, f: &mut dyn FnMut(Option<Secret>) -> Modify) -> Result<(), TokenStoreError> {
+        (**self).modify(principal, slot, f)
     }
     fn put(&self, principal: &str, slot: CredentialSlot, value: &Secret) -> Result<(), TokenStoreError> {
         (**self).put(principal, slot, value)

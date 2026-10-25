@@ -2500,7 +2500,7 @@ pub fn tool_descriptor(tool: Tool) -> Value {
             }),
         ),
         Tool::ConnectionsList => (
-            "List the Connections screen: per service its state (connected / needs_reauth / keychain_locked / disconnected / coming_soon; null while ShogunAI is not running), connected, access ceiling (read / read_draft / read_write), third_party, and disconnect_pending; plus Gmail draft-only mode and legacy Composio consent. Full scope also includes account_label (account or workspace identity; null when unknown); read scope omits it. It is never a token. Connecting a service is only in the app",
+            "List the Connections screen: per service its state (connected / needs_reauth / keychain_locked / disconnected / coming_soon; null while ShogunAI is not running), connected, access ceiling (read / read_draft / read_write), third_party, and disconnect_pending; plus Gmail draft-only mode and legacy Composio consent. Full scope also includes account_label (account or workspace identity; null when unknown); read scope omits it. It is never a token. Connecting a service is only in the app. On the hosted service (hosted: true) it lists the principal's connector accounts with connectable and expires_at; a human connects one through the link POST /v1/connectors/{provider}/connect returns",
             json!({}),
         ),
         Tool::ApiTokensList => (
@@ -2512,7 +2512,7 @@ pub fn tool_descriptor(tool: Tool) -> Value {
             json!({ "client": { "type": "string", "description": "the connection id from api.tokens.list connections[].client" } }),
         ),
         Tool::ConnectionsDisconnect => (
-            "Disconnect one service (L1: it only removes access). ShogunAI deletes the stored sign-in and stops syncing, exactly like Disconnect in the app; memory already saved stays. The app applies it within seconds, or when it next starts (connections.list shows disconnect_pending until then). Request it only when the user asked. Reconnecting needs the user in the app",
+            "Disconnect one service (L1: it only removes access). ShogunAI deletes the stored sign-in and stops syncing, exactly like Disconnect in the app; memory already saved stays. The app applies it within seconds, or when it next starts (connections.list shows disconnect_pending until then); on the hosted service the grant is deleted at once and revoked at Google and Slack. Request it only when the user asked. Reconnecting needs the user in the app",
             json!({ "service": { "enum": crate::connections_api::listed_services().map(|s| s.source_str()).collect::<Vec<_>>() } }),
         ),
         Tool::ConnectionsGmailSet => (

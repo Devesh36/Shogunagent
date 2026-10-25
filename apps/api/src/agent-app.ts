@@ -56,7 +56,7 @@ import { createApprovalsApp, type ApprovalsDeps } from "./approvals/app.js";
 import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
 import { registerPayoutRoutes, type PayoutDeps } from "./payouts-app.js";
 import { ROUTER_RESERVE_PATH, ROUTER_SETTLEMENTS_PATH, registerRouterWalletRoutes } from "./router-wallet.js";
-import { registerConnectorConnectRoutes } from "./connector-connect.js";
+import { registerConnectorConnectRoutes, registerConnectorStatusRoutes } from "./connector-connect.js";
 import { CONNECTOR_TOKEN_PATH, registerConnectorTokenRoute, type ConnectorVault } from "./connector-tokens.js";
 import { createEnterpriseApp, ssoConsentPolicy, type EnterpriseDeps } from "./enterprise/app.js";
 import { registerIngestHookRoutes, type IngestHookDeps } from "./ingest-hooks/app.js";
@@ -576,9 +576,13 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   }
 
   // --- E50: the hosted connect flow (a human connects their own account; the agent gets a link) ---
-  if (deps.connectorTokens?.vault && deps.connectorTokens.connectSecret) {
-    app.use("/v1/connectors/*", wellknown.observe);
-    registerConnectorConnectRoutes(app, { secret: deps.connectorTokens.connectSecret, vault: deps.connectorTokens.vault, publicBaseUrl: deps.publicBaseUrl, requireKey, now });
+  if (deps.connectorTokens?.vault) {
+    for (const path of ["/v1/connectors", "/v1/connectors/*"]) app.use(path, wellknown.observe);
+    // The principal's connections: a free read and a narrowing disconnect (E50 follow-up).
+    registerConnectorStatusRoutes(app, { vault: deps.connectorTokens.vault, requireKey });
+    if (deps.connectorTokens.connectSecret) {
+      registerConnectorConnectRoutes(app, { secret: deps.connectorTokens.connectSecret, vault: deps.connectorTokens.vault, publicBaseUrl: deps.publicBaseUrl, requireKey, now });
+    }
   }
 
   // --- remote approvals (E15): the page, Slack, webhooks, and the notification hook ---

@@ -146,6 +146,10 @@ pub struct PrincipalStore {
     /// The local embedding model every opened principal's `Db` gets (E24). One model for every
     /// principal: a server never mixes vector spaces across the people it serves either.
     embedder: Option<Arc<dyn shogun_memory::embed::Embedder>>,
+    /// The hosted sidecar's connector vault (E50 / E44): every opened principal's backend serves
+    /// `connections.list` / `connections.disconnect` from it and queues provider change notices
+    /// for the read-sync. `None` outside the hosted sidecar.
+    connectors: Option<Arc<dyn shogun_mcp::connector_vault::ConnectorVault>>,
 }
 
 impl PrincipalStore {
@@ -161,7 +165,15 @@ impl PrincipalStore {
             lru: Mutex::new(Lru::default()),
             live: Arc::new(AtomicUsize::new(0)),
             embedder: None,
+            connectors: None,
         }
+    }
+
+    /// Attach the hosted connector vault to every principal this store opens from now on (E50).
+    #[must_use]
+    pub fn with_connectors(mut self, connectors: Option<Arc<dyn shogun_mcp::connector_vault::ConnectorVault>>) -> Self {
+        self.connectors = connectors;
+        self
     }
 
     /// Attach the local embedding model to every principal this store opens from now on (E24).
@@ -271,7 +283,10 @@ impl PrincipalStore {
         Ok(OpenPrincipal {
             principal: principal.clone(),
             path,
-            backend: Arc::new(DbBackend::new(db.clone())),
+            backend: Arc::new(match &self.connectors {
+                Some(vault) => DbBackend::new(db.clone()).with_hosted_connectors(vault.clone(), principal.as_str()),
+                None => DbBackend::new(db.clone()),
+            }),
             db,
             live: self.live.clone(),
         })

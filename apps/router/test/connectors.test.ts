@@ -16,6 +16,8 @@ import { createFetchTransport } from "../src/transport.js";
 import { bearer, fullCatalog, makeDeps } from "./helpers.js";
 
 const EXPECTED_LEVELS: Record<string, { cls: string; level: string }> = {
+  "gmail.messages.search": { cls: "read", level: "L1" },
+  "gmail.messages.get": { cls: "read", level: "L1" },
   "gmail.drafts.create": { cls: "user_data_write", level: "L2" },
   "gmail.messages.send": { cls: "external_send", level: "L3" },
   "calendar.events.create": { cls: "external_send", level: "L3" },
@@ -143,5 +145,43 @@ describe("first-party connectors (E22)", () => {
     expect(top("post the update in the slack channel")[0]).toBe("slack.messages.post");
     expect(top("draft a reply email for the user to review")[0]).toBe("gmail.drafts.create");
     expect(top("create a linear ticket for this bug")[0]).toBe("linear.issues.create");
+    // E45: the Gmail reads, ranked by the same formula and labeled first-party.
+    expect(top("find the email from mika about the contract in gmail")[0]).toBe("gmail.messages.search");
+    expect(top("read the email message and its body text")[0]).toBe("gmail.messages.get");
+    const search = discover(catalog, noopHealthStore, { task: "search my gmail for unread email", limit: 1 }).result.candidates[0];
+    expect(search?.first_party).toBe(true);
+    expect(search?.scoreBreakdown.price).toBeLessThan(1);
+  });
+
+  it("E45: Gmail reads run directly at L1 with the caller's own token and never fetch an attachment", async () => {
+    const seen: { url: string; auth: string | null }[] = [];
+    const deps = makeDeps();
+    deps.transport = createFetchTransport({
+      env: { GOOGLE_OAUTH_ACCESS_TOKEN: "GOOGLE-TOKEN-SENTINEL" },
+      connectors: { mode: "dev_shared" },
+      fetch: async (url, init) => {
+        seen.push({ url: String(url), auth: new Headers(init?.headers).get("authorization") });
+        const body = String(url).includes("/messages/")
+          ? { id: "m1", threadId: "t1", labelIds: ["INBOX"], payload: { headers: [{ name: "Subject", value: "Deck" }], parts: [{ mimeType: "text/plain", body: { data: "SGVsbG8" } }, { mimeType: "image/png", filename: "x.png", body: { attachmentId: "a1" } }] } }
+          : { messages: [{ id: "m1", threadId: "t1" }], resultSizeEstimate: 1 };
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    const found = await run(deps, { input: { tool_id: "gmail.messages.search", input: { query: "from:mika@example.com" }, idempotency_key: "gm1" }, bearer: bearer() });
+    expect(found.status).toBe(200);
+    expect(seen[0]?.url).toBe("https://gmail.googleapis.com/gmail/v1/users/me/messages?q=from%3Amika%40example.com&maxResults=20");
+    expect(seen[0]?.auth).toBe("Bearer GOOGLE-TOKEN-SENTINEL");
+    const read = await run(deps, { input: { tool_id: "gmail.messages.get", input: { message_id: "m1" }, idempotency_key: "gm2" }, bearer: bearer() });
+    expect(read.status).toBe(200);
+    expect(seen[1]?.url).toBe("https://gmail.googleapis.com/gmail/v1/users/me/messages/m1?format=full");
+    expect(JSON.stringify(read.body)).toContain('"body_text":"Hello"');
+    expect(JSON.stringify(read.body)).toContain('"attachment_count":1');
+    expect(seen).toHaveLength(2);
+    expect(seen.every((s) => !s.url.includes("attachments"))).toBe(true);
+    expect(JSON.stringify(found.body) + JSON.stringify(read.body)).not.toContain("SENTINEL");
+    // An id that is not Gmail's shape never reaches the vendor.
+    const bad = await run(deps, { input: { tool_id: "gmail.messages.get", input: { message_id: "../drafts" }, idempotency_key: "gm3" }, bearer: bearer() });
+    expect(bad.status).toBe(400);
+    expect(seen).toHaveLength(2);
   });
 });

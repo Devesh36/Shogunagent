@@ -3,8 +3,10 @@
 How work reaches a principal's memory when it does not come from the ShogunAI Mac app's capture:
 provider webhooks through the hosted gateway's **ingest hooks**, and the **browser extension**
 (specification only). Plan: E44. Implementation: `apps/api/src/ingest-hooks/` (gateway),
-`crates/shogun-mcp/src/webhook_ingest.rs` (core: `memory.ingest_webhook`). Tests:
-`apps/api/test/ingest-hooks.test.ts`, `webhook_ingest::tests`, `rest_tests.rs`, the CLI parser.
+`crates/shogun-mcp/src/webhook_ingest.rs` (core: `memory.ingest_webhook`),
+`crates/shogun-integrations/src/read_sync.rs` (core: the read-sync of Notion, Calendar and Gmail
+change notices, §2.8). Tests: `apps/api/test/ingest-hooks.test.ts`, `webhook_ingest::tests`,
+`read_sync::tests`, `rest_tests.rs`, `crates/shogun-core/tests/connector_vault.rs`, the CLI parser.
 
 Every source ends in the same place: the principal's own store, through the `memory.ingest`
 append path (instruction-shaped text refused, secrets masked, duplicates collapsed, the hourly
@@ -113,22 +115,19 @@ cannot store it now (`Mcp-Error-Code: -32000`, a 5xx, no answer) is answered `50
 | GitHub | `push` (commit messages, up to 20 listed), `issues` opened / edited / closed / reopened, `issue_comment` created, `pull_request` opened / edited / closed (merged) / reopened / ready, `pull_request_review` submitted, `pull_request_review_comment` created, `release` published | who did what, the title, the body | `github:<repo>#<n>` or `github:<repo>@<branch or tag>` |
 | Linear | `Issue`, `Comment`, `Project`, `ProjectUpdate` (create / update; removals are ignored) | who did what, identifier, title, state, description / body | `linear:<identifier>` or `linear:project:<name>` |
 | Slack | `event_callback` with `message` (no subtype, `thread_broadcast`, `file_share`: the text only, never the file) and `app_mention`; bot messages, edits and deletions are ignored | `<@user> wrote in <#channel>:` and the text; time from the message `ts` | `slack:<team>/<channel>/<thread ts>` |
-| Notion | nothing: Notion events carry ids, not content | a change notice for the entity (`page`, `database`, `comment`) with its id and `notion.so` URL | — |
-| Google Calendar | nothing: a push carries only the channel | a change notice for the calendar (resource id, state, message number) | — |
-| Gmail | nothing: a push carries a history id | a change notice for the mailbox (history id, message id) | — |
+| Notion | nothing in the delivery (Notion events carry ids, not content); queued for the read-sync | a change notice for the entity (`page`, `database`, `comment`) with its id and `notion.so` URL; a page is fetched (§2.8) | — |
+| Google Calendar | nothing in the delivery (a push carries only the channel); queued for the read-sync | a change notice for the calendar (resource id, state, message number); its recently updated events are fetched (§2.8) | — |
+| Gmail | nothing in the delivery (a push carries a history id); queued for the read-sync | a change notice for the mailbox (history id, message id); its newest messages are fetched (§2.8) | — |
 
 Each delivery becomes at most 20 events (in practice one). Bodies are cut to the ingest limit
 (16,000 characters) with the provenance line kept.
 
-**Change notices (the core side, the fetch).** A Notion, Calendar or Gmail delivery is answered
-`outcome: "changed"`, stores nothing and settles at 0 events. Fetching the content is the core's
-connector read-sync with the principal's own credentials (`crates/shogun-mcp/src/sync.rs` →
-`shogun-integrations`, credentials per E5-T5 / E50): Calendar `events.list` with the channel's
-sync token, Gmail `users.history.list` from the history id, Notion the page or comment by id. The
-read-sync ingests what it fetches through the same append path and is billed as ingest then. Until
-the hosted core runs that read-sync on a change notice (it needs the hosted connector credentials
-of E50), a change notice is acknowledged and the content arrives on the next scheduled sync of a
-connected core.
+**Change notices (the core side).** A Notion, Calendar or Gmail delivery is answered
+`outcome: "changed"`, stores nothing in that call and settles at 0 events. On a hosted sidecar the
+notice is **queued** in the principal's own store for the read-sync (§2.8); the receipt's `fetch`
+says `queued`, `unsupported` (a Notion database or comment: only pages are fetched),
+`not_configured` (a store with no connector vault: a desktop or single-principal server, where the
+connected core's own scheduled sync reads the provider) or `unavailable`.
 
 ### 2.6 The bounded exceptions to "no parsing in apps/api"
 
@@ -153,6 +152,59 @@ Gmail additionally needs one Pub/Sub topic that `gmail-api-push@system.gservicea
 publish to, and one push subscription to `$BASE/v1/ingest-hooks/gmail` with authentication on:
 its service account is `INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT` and its audience
 `INGEST_HOOKS_GMAIL_AUDIENCE`.
+
+The read-sync (§2.8) runs in `shogun-api --dream-tick` on the sidecar's host: it needs the same
+token store and key provider as the sidecar, the hosted OAuth clients of `SHOGUN_CONNECT_*`
+(`deploy/README.md` §3.3) to refresh an expired grant, and egress to `gmail.googleapis.com`,
+`www.googleapis.com` and `api.notion.com` besides the vendors' token endpoints.
+
+### 2.8 The read-sync of change notices (E44)
+
+The fetch is **queued, not inline**: a notice's content takes one to eleven vendor round trips
+(and possibly a token refresh), and the hook's request must answer the provider within its webhook
+timeout. So `memory.ingest_webhook` queues the notice in the principal's own sealed token store
+(slot `connector-sync-queue`: ids only, never content; one entry per mailbox, calendar or Notion
+page, a burst of notices coalesces; at most 64 waiting, the oldest dropped first), and the
+existing background tick, **`shogun-api --dream-tick`** (hourly), drains every principal's queue
+**before** the hourly review, so what it fetches is reviewed in the same run. A principal with
+nothing queued costs one store read and no network call.
+
+| provider | what the tick fetches (the principal's own grant, through the vault) | what it stores |
+|---|---|---|
+| Gmail | `users.messages.list?q=newer_than:2d&maxResults=10`, then `users.messages.get?format=full` per id | one `gmail.message` event per message: From / To / Cc / Date / Subject and the `text/plain` parts (the snippet when there are none), cut at 12,000 characters; drafts, spam and trash skipped |
+| Google Calendar | `events.list` on the primary calendar, `updatedMin` = 15 minutes before the first notice, `orderBy=updated`, at most 10 | one `calendar.event` per event: title, start–end, place, attendee addresses, organizer, description; cancelled events skipped |
+| Notion | `pages/{id}` and `blocks/{id}/children?page_size=100` (`Notion-Version: 2022-06-28`) | one `notion.page` event: the title and the text of its text blocks (paragraphs, headings, list items, to-dos, quotes, callouts, toggles, code); archived pages skipped |
+
+- **Text only.** A Gmail part with a file name or an attachment id, and every Notion block that is
+  not text (images, files, PDFs, embeds, video), is never fetched or stored.
+- **Provenance** (invariant 5): the event's `actor` is `sync:<provider>`, its source
+  `<provider>-sync`, its text ends with `(via <Provider> read-sync, <object id>, <url>)`, and the
+  receipt metadata carries `provider`, `object_id`, `version` and `url`.
+- **Idempotent per object version**: the idempotency key is
+  `sync:<provider>:<hash(object id, version)>` (Gmail `historyId`, Calendar `updated`, Notion
+  `last_edited_time`), so fetching the same message, event or page again stores nothing; a changed
+  one is a new event.
+- **Credentials**: the principal's own grant from the E50 vault (`HostedConnectors::access_token`,
+  refreshed through the single egress under the per-slot lock). The GETs go through the core's
+  HTTP client (`crates/shogun-core/src/provider_fetch.rs`), to `gmail.googleapis.com`,
+  `www.googleapis.com` and `api.notion.com` only, no redirects followed. Each GET writes a
+  traceability row in the principal's store (`connector.sync.<provider>.<outcome>`, the host, zero
+  bytes).
+- **Failures**: no grant, or one the vendor refuses (401 / 403): the notice is dropped and counted
+  `not_connected`. A vendor or store that did not answer: re-queued after 5, then 10 minutes, and
+  dropped after the third try. An object that is gone (404): dropped.
+- **Billing**: what the read-sync stores is metered as ingest like any other ingest into the
+  principal's store; the notice itself was free.
+- **Notion credentials**: the core has no hosted Notion sign-in (its Notion sign-in is the Mac
+  app's loopback registration with Notion's MCP server, whose tokens do not open the REST API; a
+  Notion public integration needs a Basic-auth token exchange the core does not speak). A Notion
+  notice is queued and fetched only for a principal whose store already holds a `notion-tokenset`
+  grant for the REST API; every other principal's Notion notices count `not_connected`. Adding the
+  Notion OAuth exchange to the core is the follow-up that makes them useful.
+- **Order of operations in the tick** (`shogun_core::tenancy::connector_sync::drain_tick`): queue
+  taken (at most 16 notices per principal per tick) → token → fetch → ingest → retries written back.
+  The tick prints one line of counts: `connector read-sync: principals=… drained=… notices=…
+  objects=… stored=… not_connected=… retried=… dropped=…`.
 
 ## 3. Browser extension (specification)
 
@@ -240,5 +292,5 @@ Body (the `memory.ingest` contract, `docs/api/core-tools.md`):
 |---|---|
 | GitHub, Linear, Slack, Notion, Google Calendar, Gmail hooks (verification, registration, relay, billing, failure budget) | implemented (gateway) |
 | `memory.ingest_webhook` normalizers (GitHub, Linear, Slack text; Notion, Calendar, Gmail change notices) | implemented (core, three faces) |
-| Change notice → connector fetch in the hosted core | specified (§2.5); needs E50 hosted connector credentials |
+| Change notice → connector fetch in the hosted core (queue in the principal's store, drained by `shogun-api --dream-tick`) | implemented for Gmail and Google Calendar (§2.8); Notion is fetched only for a principal that already holds a REST grant, because the core has no hosted Notion sign-in |
 | Browser extension | specified (§3); not built; needs write-only key issuance |

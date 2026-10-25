@@ -18,6 +18,8 @@ describe("catalog compile (E8-T2)", () => {
       "github.issues.create",
       "github.issues.list",
       "gmail.drafts.create",
+      "gmail.messages.get",
+      "gmail.messages.search",
       "gmail.messages.send",
       "linear.issues.create",
       "shogunagent.actions.execute",

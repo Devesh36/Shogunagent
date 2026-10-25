@@ -104,6 +104,9 @@ pub mod gmail_local;
 pub mod mcp_http;
 #[cfg(feature = "net")]
 pub mod mcp_oauth;
+// E44: the connector read-sync's GET (Gmail, Calendar, Notion), the single egress.
+#[cfg(feature = "net")]
+pub mod provider_fetch;
 #[cfg(feature = "net")]
 pub mod github_device;
 // The pinned static-asset download (no Mac code): the desktop's whisper weights and, since E24, the
