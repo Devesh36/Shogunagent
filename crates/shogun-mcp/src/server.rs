@@ -571,6 +571,13 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     );
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
+    // E26: the operator's hash-chained audit export, streamed (no agent bearer reaches it).
+    if path == "/v1/audit/export" {
+        return match method {
+            Some(Method::Get) => governance::audit_export(&state, token.as_deref(), raw_query, &request_id),
+            _ => render_with(405, r#"{"error":"method_not_allowed"}"#.to_string(), &request_id, None),
+        };
+    }
     let include_low = include_low_opt_in(raw_query);
     // E2-T5: `?include_scratch` widens reads to the agents' scratch namespaces for this call.
     let include_scratch = query_flag(raw_query, "include_scratch");

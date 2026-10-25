@@ -48,6 +48,7 @@ pub fn needs_admin(path: &str) -> bool {
     path == "/v1/acl/grant"
         || path == "/v1/acl/revoke"
         || path == "/v1/teams"
+        || path == "/v1/audit/export"
         || (path.starts_with("/v1/approvals/") && path.ends_with("/decide"))
 }
 

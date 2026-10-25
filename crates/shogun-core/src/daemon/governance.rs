@@ -45,6 +45,18 @@ impl Db {
         .map_err(|_| "approval_ledger_unavailable".to_string())
     }
 
+    /// One page of the audit log in append order (the E26 export).
+    pub fn audit_page(
+        &self,
+        after_id: i64,
+        since_ms: Option<i64>,
+        until_ms: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<audit::AuditEntry>, String> {
+        self.with_conn("audit.page", |conn| audit::page(conn, after_id, since_ms, until_ms, limit).map_err(|e| e.to_string()))
+            .map_err(|_| "audit_unavailable".to_string())
+    }
+
     /// `audit.list`.
     pub fn audit_list(&self, query: &AuditQuery) -> Result<Value, String> {
         self.with_conn("audit.list", |conn| audit::list(conn, query.since_ms, query.limit).map_err(|e| e.to_string()))

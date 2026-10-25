@@ -257,6 +257,21 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
             }
             get(if query.is_empty() { "/v1/audit".into() } else { format!("/v1/audit?{}", query.join("&")) })
         }
+        Command::AuditExport { since_ms, until_ms, format, principal, .. } => {
+            let mut query = vec![format!("format={format}")];
+            if let Some(since) = since_ms {
+                query.push(format!("since_ms={since}"));
+            }
+            if let Some(until) = until_ms {
+                query.push(format!("until_ms={until}"));
+            }
+            if let Some(principal) = principal {
+                query.push(format!("principal={principal}"));
+            }
+            get(format!("/v1/audit/export?{}", query.join("&")))
+        }
+        // Verified locally, never sent (`main` handles it before any call is built).
+        Command::AuditVerify { .. } => return None,
         Command::Acl(acl) => match acl {
             crate::command::AclCommand::List => get("/v1/acl".into()),
             crate::command::AclCommand::Grant { body } => post("/v1/acl/grant".into(), body.clone()),

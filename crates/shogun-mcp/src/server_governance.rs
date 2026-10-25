@@ -609,3 +609,92 @@ fn label_source(body: String, source: &str) -> String {
         _ => body,
     }
 }
+
+/// `GET /v1/audit/export?since_ms=&until_ms=&format=jsonl|csv[&principal=]` (E26): the operator's
+/// hash-chained export of a principal's audit log ([`crate::audit_export`]). Admin credential
+/// only: an agent's bearer is `403 human_only`, and no MCP tool exposes it (a human-only
+/// operation). The export itself is recorded first (`audit.export`), so it appears in the log it
+/// exports. The body is streamed page by page; a stream cut short has no trailer and fails
+/// `shogun audit verify`.
+pub(super) fn audit_export(state: &AppState, bearer: Option<&str>, raw_query: &str, request_id: &str) -> axum::response::Response {
+    if !state.admin_ok(bearer) {
+        let (status, body) = state.not_admin(bearer, "Exporting the audit log");
+        return super::render_with(status, body, request_id, None);
+    }
+    let query = match crate::audit_export::export_query(raw_query) {
+        Ok(query) => query,
+        Err(message) => {
+            let code = message.split(':').next().unwrap_or("invalid_request").to_string();
+            let (status, body) = error(400, &code, &message);
+            return super::render_with(status, body, request_id, None);
+        }
+    };
+    let store = match state.store_of(query.principal.as_deref()) {
+        Ok(store) => store,
+        Err((status, body)) => return super::render_with(status, body, request_id, None),
+    };
+    state.audit(store.as_ref(), ("human:admin", query.principal.as_deref()), ("audit.export", "admin", "ok"), request_id);
+    let format = query.format;
+    let stream = ExportStream {
+        backend: store,
+        writer: crate::audit_export::ChainWriter::new(format, query.since_ms, query.until_ms),
+        after_id: 0,
+        since_ms: query.since_ms,
+        until_ms: query.until_ms,
+        started: false,
+        done: false,
+    };
+    axum::response::Response::builder()
+        .status(200)
+        .header(axum::http::header::CONTENT_TYPE, format.content_type())
+        .header(axum::http::header::CACHE_CONTROL, "no-store")
+        .header("x-request-id", request_id)
+        .body(axum::body::Body::from_stream(stream))
+        .unwrap_or_default()
+}
+
+/// The export body: one store page per poll, chained as it goes, then the trailer.
+struct ExportStream {
+    backend: Arc<dyn MemoryBackend>,
+    writer: crate::audit_export::ChainWriter,
+    after_id: i64,
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+    started: bool,
+    done: bool,
+}
+
+impl futures_core::Stream for ExportStream {
+    type Item = Result<axum::body::Bytes, std::io::Error>;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(None);
+        }
+        let mut chunk = if this.started { String::new() } else { this.writer.header() };
+        this.started = true;
+        match this.backend.audit_page(this.after_id, this.since_ms, this.until_ms, crate::audit_export::PAGE) {
+            Ok(rows) if rows.is_empty() => {
+                chunk.push_str(&this.writer.trailer());
+                this.done = true;
+            }
+            Ok(rows) => {
+                for row in &rows {
+                    chunk.push_str(&this.writer.line(row));
+                }
+                this.after_id = rows.last().map_or(this.after_id, |row| row.id);
+            }
+            Err(_) => {
+                // No trailer: the export reads as truncated, never as complete.
+                this.done = true;
+                return Poll::Ready(Some(Err(std::io::Error::other("audit_unavailable"))));
+            }
+        }
+        Poll::Ready(Some(Ok(axum::body::Bytes::from(chunk))))
+    }
+}

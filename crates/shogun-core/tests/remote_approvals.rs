@@ -469,3 +469,65 @@ fn a_double_decide_race_executes_once() {
         assert_eq!(executor.calls(), round + 1, "round {round}: one execution per approval");
     }
 }
+
+/// E26: the operator exports a principal's audit log with a running SHA-256 chain, streamed, in
+/// JSON Lines or CSV; `verify` recomputes it, and any edit, drop or truncation fails. Agents never
+/// reach it.
+#[test]
+fn the_operator_exports_a_hash_chained_audit_log() {
+    use shogun_mcp::audit_export::{verify, VerifyError, GENESIS};
+    let root = temp_root("export");
+    let port = serve(root.0.clone(), |state| state);
+    // Some activity in Alice's log: two queued sends, one decided.
+    let (first, _, _) = send(port, "aiko@example.com");
+    send(port, "kenji@example.com");
+    assert_eq!(admin_decide(port, first, "reject").0, 200);
+
+    // Agents and anonymous callers never export.
+    let agent = request(port, "GET", "/v1/audit/export?principal=alice", Some(TOKEN_A), None).unwrap();
+    assert_eq!(agent.status, 403, "{}", agent.body);
+    assert!(agent.body.contains("human_only"), "{}", agent.body);
+    assert_eq!(request(port, "GET", "/v1/audit/export?principal=alice", None, None).unwrap().status, 401);
+    // Multi-principal: the operator names the principal.
+    assert_eq!(request(port, "GET", "/v1/audit/export", Some(ADMIN), None).unwrap().status, 400);
+    assert_eq!(request(port, "GET", "/v1/audit/export?principal=alice&format=xml", Some(ADMIN), None).unwrap().status, 400);
+
+    let jsonl = request(port, "GET", "/v1/audit/export?principal=alice", Some(ADMIN), None).unwrap();
+    assert_eq!(jsonl.status, 200, "{}", jsonl.body);
+    let report = verify(&jsonl.body).unwrap_or_else(|e| panic!("{e}: {}", jsonl.body));
+    // Two sends, the decision, and the export itself (recorded before it streamed).
+    assert!(report.records >= 4, "{report:?}");
+    let lines: Vec<serde_json::Value> = jsonl.body.lines().map(json_of).collect();
+    assert_eq!(lines[0]["prev_hash"], GENESIS);
+    assert_eq!(lines[1]["prev_hash"], lines[0]["hash"]);
+    assert!(lines.iter().any(|l| l["route"] == "approvals.decide" && l["outcome"] == "rejected"));
+    assert!(lines.iter().any(|l| l["route"] == "audit.export" && l["actor"] == "human:admin"));
+    assert_eq!(lines.last().unwrap()["trailer"], true);
+    assert_eq!(lines.last().unwrap()["head_hash"].as_str(), Some(report.head_hash.as_str()));
+    // Labels only: no recipient, no body.
+    assert!(!jsonl.body.contains("example.com") && !jsonl.body.contains("hunter2"), "{}", jsonl.body);
+
+    // CSV of the same window chains the same records to the same head.
+    let until = lines.iter().filter_map(|l| l["ts"].as_i64()).max().unwrap() + 1;
+    let window = format!("principal=alice&until_ms={until}");
+    std::thread::sleep(Duration::from_millis(5));
+    let a = verify(&request(port, "GET", &format!("/v1/audit/export?{window}"), Some(ADMIN), None).unwrap().body).unwrap();
+    let csv = request(port, "GET", &format!("/v1/audit/export?{window}&format=csv"), Some(ADMIN), None).unwrap();
+    assert_eq!(csv.status, 200);
+    assert!(csv.body.starts_with(shogun_mcp::audit_export::CSV_HEADER), "{}", csv.body);
+    let b = verify(&csv.body).unwrap();
+    // The window was fixed before either export: the second export's own record is after it.
+    assert_eq!((a.records, a.head_hash.clone()), (b.records, b.head_hash.clone()), "deterministic over a fixed window");
+
+    // Tampering is caught: an altered outcome, a dropped record, a truncated stream.
+    assert!(matches!(verify(&jsonl.body.replacen("\"rejected\"", "\"approved\"", 1)), Err(VerifyError::BadHash { .. })));
+    let mut dropped: Vec<&str> = jsonl.body.lines().collect();
+    dropped.remove(1);
+    assert!(verify(&dropped.join("\n")).is_err());
+    let truncated: Vec<&str> = jsonl.body.lines().collect();
+    assert_eq!(verify(&truncated[..truncated.len() - 1].join("\n")), Err(VerifyError::MissingTrailer));
+    // Bob's log does not contain Alice's records.
+    let bob = request(port, "GET", "/v1/audit/export?principal=bob", Some(ADMIN), None).unwrap();
+    assert!(bob.status == 200 || bob.status == 404, "{}", bob.body);
+    assert!(!bob.body.contains("approvals.decide"), "{}", bob.body);
+}

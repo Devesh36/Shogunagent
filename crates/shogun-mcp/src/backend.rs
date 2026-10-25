@@ -722,6 +722,18 @@ pub trait MemoryBackend: Send + Sync {
         Err("acl_unavailable".to_string())
     }
 
+    /// One page of the audit log in append order for the export (E26): `id > after_id`,
+    /// `since_ms <= ts < until_ms`, at most `limit` rows.
+    fn audit_page(
+        &self,
+        _after_id: i64,
+        _since_ms: Option<i64>,
+        _until_ms: Option<i64>,
+        _limit: usize,
+    ) -> Result<Vec<shogun_memory::audit::AuditEntry>, String> {
+        Err("audit_unavailable".to_string())
+    }
+
     /// The principal's durable approval ledger (V103): spent decision nonces and decisions. A
     /// backend without a store cannot remember a decision across a restart, so it answers `Err`
     /// and a decision is refused (fail closed) rather than made without a durable record.
@@ -816,6 +828,15 @@ impl<T: MemoryBackend + ?Sized> MemoryBackend for std::sync::Arc<T> {
     }
     fn approval_ledger(&self, op: crate::remote_approvals::LedgerOp<'_>) -> Result<crate::remote_approvals::LedgerReply, String> {
         (**self).approval_ledger(op)
+    }
+    fn audit_page(
+        &self,
+        after_id: i64,
+        since_ms: Option<i64>,
+        until_ms: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<shogun_memory::audit::AuditEntry>, String> {
+        (**self).audit_page(after_id, since_ms, until_ms, limit)
     }
     fn principal_may_read(&self, grantee_principal: &str) -> bool {
         (**self).principal_may_read(grantee_principal)

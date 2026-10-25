@@ -2482,6 +2482,16 @@ impl MemoryBackend for DbBackend {
         self.db.approval_ledger(op)
     }
 
+    fn audit_page(
+        &self,
+        after_id: i64,
+        since_ms: Option<i64>,
+        until_ms: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<shogun_memory::audit::AuditEntry>, String> {
+        self.db.audit_page(after_id, since_ms, until_ms, limit)
+    }
+
     fn principal_may_read(&self, grantee_principal: &str) -> bool {
         self.db.principal_may_read(grantee_principal)
     }

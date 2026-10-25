@@ -391,6 +391,8 @@ The sidecar's approval decision API (`crates/shogun-mcp/src/remote_approvals.rs`
 | `GET /v1/approvals/{id}` + `X-Shogun-Approval-Token` | the gateway | the same summary, authorized by the signed token |
 | `POST /v1/approvals/{id}/decide` `{decision, decided_by, nonce}` | the gateway (token) or the operator (`SHOGUN_ADMIN_TOKEN`; `shogun approvals decide <id> approve\|reject`) | approve or reject. Never an MCP tool; an agent's bearer is `403 human_only` |
 | `GET /v1/audit?since_ms=&limit=` · MCP `audit.list` · `shogun audit` | any agent key (read) | the principal's audit log |
+| `GET /v1/audit/export?since_ms=&until_ms=&format=jsonl\|csv[&principal=]` · `shogun audit export [--since-ms N] [--until-ms N] [--format jsonl\|csv] [--principal P] [--out FILE]` | the operator only (`SHOGUN_ADMIN_TOKEN`; never an MCP tool: a human-only operation) | the hash-chained audit export (E26), streamed |
+| `shogun audit verify <file>` | anyone holding the file (offline) | recompute an export's chain |
 | `GET /v1/acl` · MCP `acl.list` · `shogun acl list` | any agent key (read) | scratch and Team grants |
 | `POST /v1/acl/grant`, `/v1/acl/revoke` · `shogun acl grant\|revoke <json>` | the operator only | change a grant |
 | `GET`/`POST /v1/teams` · `shogun acl teams\|team <json>` | the operator only (multi-principal) | define teams |
@@ -427,6 +429,20 @@ The sidecar's approval decision API (`crates/shogun-mcp/src/remote_approvals.rs`
 - **Audit log** (V101 `audit_log`): one record per write and per approval decision on every face —
   actor, principal, tool or route, tier, outcome (`ok`, `pending`, `refused`, `approved`, …),
   time, request id (`X-Request-Id`, echoed). Never a body or an argument value.
+- **Audit export** (E26, `crates/shogun-mcp/src/audit_export.rs`). The principal's records in
+  append order (row id), `since_ms <= ts < until_ms`, as JSON Lines (default) or CSV, streamed
+  500 rows at a time. Each record carries `seq` (1, 2, … in this export), `prev_hash` (64 zeros for
+  the first) and `hash` = SHA-256 of its canonical form (`seq, id, ts, actor, principal, route,
+  level, outcome, request_id, prev_hash`, in that order, as compact JSON; the same in both
+  formats). The last line is a trailer with the record count and the head hash (JSON:
+  `{"trailer":true,"records":N,"head_hash":…}`, CSV: `#trailer,records=N,head_hash=…`). Editing,
+  dropping, reordering or inserting a record breaks every hash after it; a cut-short stream has no
+  trailer. `shogun audit verify <file>` recomputes all of it offline (exit 1 on any failure) and
+  reports `id_gaps`, store row ids missing between exported records (a window or retention can
+  leave them). The chain is deterministic, so keeping the head hash of a window out of band lets a
+  later export of the same window be checked against it. The export itself is recorded
+  (`audit.export`) before it streams; multi-principal, `principal=` is required. Labels only:
+  never a body or an argument value.
 - **Scratch ACL** (V101 `scratch_acl`): an agent reads and writes its own `agent_scratch:<id>` and
   the world; another agent's scratch is invisible (search, lists, GET by id, `/memories` files)
   unless the operator granted `read` or `write`. Enforced in the data layer (`ReadScope`,

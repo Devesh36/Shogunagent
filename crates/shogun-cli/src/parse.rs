@@ -534,6 +534,46 @@ fn parse_command(positionals: &[String]) -> Result<Command, CliError> {
             }
         }
         // E18: the audit log.
+        // E26: the hash-chained export (operator) and its offline verifier.
+        "audit" if rest.first().map(String::as_str) == Some("verify") => {
+            let file = rest.get(1).cloned().ok_or(CliError::MissingArgument("<file>"))?;
+            Ok(Command::AuditVerify { file })
+        }
+        "audit" if rest.first().map(String::as_str) == Some("export") => {
+            let (mut since_ms, mut until_ms, mut format, mut principal, mut out) = (None, None, "jsonl".to_string(), None, None);
+            let mut i = 1;
+            while i < rest.len() {
+                let flag = rest[i].as_str();
+                let value = |name: &'static str| rest.get(i + 1).cloned().ok_or(CliError::MissingFlagValue(name));
+                match flag {
+                    "--since-ms" => {
+                        since_ms = Some(value("--since-ms")?.parse::<i64>().map_err(|_| CliError::BadInput("--since-ms takes milliseconds".into()))?);
+                    }
+                    "--until-ms" => {
+                        until_ms = Some(value("--until-ms")?.parse::<i64>().map_err(|_| CliError::BadInput("--until-ms takes milliseconds".into()))?);
+                    }
+                    "--format" => {
+                        format = value("--format")?;
+                        if shogun_mcp::audit_export::Format::parse(&format).is_none() {
+                            return Err(CliError::BadInput("--format takes jsonl or csv".into()));
+                        }
+                    }
+                    "--principal" => principal = Some(value("--principal")?),
+                    "--out" => out = Some(value("--out")?),
+                    other => return Err(CliError::UnknownSubcommand { command: "audit export", got: other.to_string() }),
+                }
+                i += 2;
+            }
+            if let (Some(since), Some(until)) = (since_ms, until_ms) {
+                if until < since {
+                    return Err(CliError::BadInput("--until-ms is before --since-ms".into()));
+                }
+            }
+            if principal.as_deref().is_some_and(|p| !principal_slug_ok(p)) {
+                return Err(CliError::BadInput("--principal takes a principal id ([a-z0-9][a-z0-9_-]*)".into()));
+            }
+            Ok(Command::AuditExport { since_ms, until_ms, format, principal, out })
+        }
         "audit" => {
             let (mut since_ms, mut limit) = (None, None);
             let mut i = 0;
@@ -2328,6 +2368,18 @@ mod tests {
         let (tool, c) = call(&["audit", "--since-ms", "5", "--limit", "10"]);
         assert_eq!((tool, c.path.as_str()), (Some(Tool::AuditList), "/v1/audit?since_ms=5&limit=10"));
         assert!(parse(&v(&["audit", "--limit", "0"])).is_err());
+        // E26: the export is the operator's route; verify runs locally and sends nothing.
+        let (tool, c) = call(&["audit", "export", "--since-ms", "5", "--until-ms", "9", "--format", "csv", "--principal", "alice", "--out", "/tmp/x.csv"]);
+        assert_eq!((tool, c.method, c.path.as_str()), (None, "GET", "/v1/audit/export?format=csv&since_ms=5&until_ms=9&principal=alice"));
+        assert!(crate::port::needs_admin(&c.path));
+        assert_eq!(call(&["audit", "export"]).1.path, "/v1/audit/export?format=jsonl");
+        assert!(parse(&v(&["audit", "export", "--format", "xml"])).is_err());
+        assert!(parse(&v(&["audit", "export", "--since-ms", "9", "--until-ms", "5"])).is_err());
+        assert!(parse(&v(&["audit", "export", "--principal", "Alice Smith"])).is_err());
+        let verify = parse(&v(&["audit", "verify", "export.jsonl"])).unwrap();
+        assert_eq!(verify.command, Command::AuditVerify { file: "export.jsonl".into() });
+        assert!(crate::wire::to_call(&verify.command, false).is_none());
+        assert!(parse(&v(&["audit", "verify"])).is_err());
         let (tool, c) = call(&["acl"]);
         assert_eq!((tool, c.path.as_str()), (Some(Tool::AclList), "/v1/acl"));
         assert!(!crate::port::needs_admin(&c.path));
@@ -3604,4 +3656,12 @@ mod principal_tests {
         assert!(crate::wire::to_call(&local, false).is_none());
         assert!(local.tool().is_none());
     }
+}
+
+/// A principal id as the server accepts it: `[a-z0-9][a-z0-9_-]{0,63}`.
+fn principal_slug_ok(principal: &str) -> bool {
+    let mut chars = principal.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && principal.len() <= 64
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }

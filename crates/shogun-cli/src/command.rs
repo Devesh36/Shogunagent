@@ -93,6 +93,11 @@ pub enum Command {
     Approvals(ApprovalsCommand),
     /// `shogun audit [--since-ms N] [--limit N]` → `audit.list` (E18).
     Audit { since_ms: Option<i64>, limit: Option<u32> },
+    /// `shogun audit export [--since-ms N] [--until-ms N] [--format jsonl|csv] [--principal P]
+    /// [--out FILE]` (E26): the hash-chained export, the operator's (`SHOGUN_ADMIN_TOKEN`).
+    AuditExport { since_ms: Option<i64>, until_ms: Option<i64>, format: String, principal: Option<String>, out: Option<String> },
+    /// `shogun audit verify <file>` (E26): recompute an export's chain offline. No server.
+    AuditVerify { file: String },
     /// `shogun acl list|grant|revoke|teams|team` (E18).
     Acl(AclCommand),
     People(ListOrGet),
@@ -725,6 +730,8 @@ impl Command {
             Command::Acl(AclCommand::List) => Tool::AclList,
             // The operator's routes: not tools, never an agent's (E15 / E18).
             Command::Approvals(ApprovalsCommand::Decide { .. })
+            | Command::AuditExport { .. }
+            | Command::AuditVerify { .. }
             | Command::Acl(AclCommand::Grant { .. } | AclCommand::Revoke { .. } | AclCommand::Teams | AclCommand::SetTeam { .. }) => {
                 return None
             }
@@ -949,6 +956,11 @@ COMMANDS:
                               Decide as the operator (sends SHOGUN_ADMIN_TOKEN, never an agent key)
     audit [--since-ms N] [--limit N]
                               The audit log: who wrote or decided what, when (no bodies)
+    audit export [--since-ms N] [--until-ms N] [--format jsonl|csv] [--principal P] [--out FILE]
+                              Hash-chained export of the audit log (operator, SHOGUN_ADMIN_TOKEN):
+                              every record carries prev_hash and hash, a trailer the head hash
+    audit verify <file>       Recompute an export's chain offline: altered, dropped, reordered
+                              or truncated records fail (exit 1)
     acl [list]                Scratch and Team access grants
     acl grant|revoke <json>   Change a grant as the operator (SHOGUN_ADMIN_TOKEN), e.g.
                               {\"grantee\":\"agent:b\",\"agent\":\"a\",\"access\":\"read\"} or

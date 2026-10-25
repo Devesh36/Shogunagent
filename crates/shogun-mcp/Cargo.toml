@@ -28,7 +28,7 @@ desktop = ["dep:shogun-microphone", "shogun-microphone/desktop"]
 # `server` pulls in the axum listener for the REST face. OFF by default so the pure routing layer
 # (rest::route / rest::respond) tests without a runtime; the daemon enables it. axum is a server
 # framework (inbound), not an HTTP client — it does not violate the FR-TR-03 egress rule.
-server = ["dep:axum", "dep:tokio"]
+server = ["dep:axum", "dep:tokio", "dep:futures-core"]
 
 [dependencies]
 shogun-agents = { path = "../shogun-agents" }
@@ -67,6 +67,9 @@ base64 = "0.22"
 # REST server (feature `server`): localhost-bound axum listener over the pure routing layer.
 axum = { version = "0.8", optional = true }
 tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "macros", "io-util"] }
+# The audit export (E26) streams its body page by page: the `Stream` trait axum's `Body::from_stream`
+# takes. Already in the graph through axum.
+futures-core = { version = "0.3", optional = true }
 
 [dev-dependencies]
 # Mint a licence token in-test to prove that billing overrides an expired trial end-to-end.
