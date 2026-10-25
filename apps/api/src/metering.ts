@@ -36,7 +36,7 @@ import { commitTerms, discounted, type CommitTerms } from "./billing/ledger.js";
 import { LOW_BALANCE_THRESHOLD_MICROS, capReachedEvent, crossedLowBalance, lowBalanceEvent, type Notifier } from "./billing/notify.js";
 import { DEFAULT_CAPS, capsFor, periodsOf, secsUntilPeriodReset, type CapSet } from "./caps.js";
 import type { LogFn } from "./logging.js";
-import { classifyCall, quoteCost, usageOf, type MeterUnit, type Quote } from "./pricing.js";
+import { classifyCall, fixedRunPriceMicros, quoteCost, usageOf, type MeterUnit, type Quote } from "./pricing.js";
 import type { SpendBreaker } from "./spend.js";
 import { utcDate, type UsageStore } from "./usage.js";
 
@@ -197,9 +197,12 @@ export function settledListCost(quote: Quote, quantity: number): number {
   return (quote.cost_micro_usd / quote.quantity) * quantity;
 }
 
-/** Quote a classified call. A `run` needs the router's price. */
+/** Quote a classified call. A `run` needs the router's price, except a free run tool
+ * (`actions.execute`: queueing an L3 action is free, `pricing.ts` FREE_RUN_TOOLS), quoted at $0. */
 export async function quoteCall(deps: MeteringDeps, call: ClassifiedCall, principal: AgentPrincipal): Promise<Quote | { error: "run_price_unavailable" }> {
   if (call.unit !== "run") return quoteCost(call.unit, call.quantity);
+  const fixed = fixedRunPriceMicros(call.name);
+  if (fixed !== undefined) return quoteCost("run", call.quantity, fixed);
   const price = deps.runPricer ? await deps.runPricer(call.toolId, principal) : undefined;
   if (price === undefined) return { error: "run_price_unavailable" };
   return quoteCost("run", call.quantity, price);

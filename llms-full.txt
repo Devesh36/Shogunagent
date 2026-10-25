@@ -1170,6 +1170,25 @@ What the sidecar MUST send on every reply to a billable `tools/call` (`ingest`, 
 - `Mcp-Quantity: 0` for a JSON-RPC error, an `isError` result, a refusal (L2 `input_required`,
   L3 `approval_required`) and an idempotent replay that stored nothing new.
 
+The sidecar meets this (E34, `crates/shogun-mcp/src/mcp_http.rs` `settled_quantity`): every
+`tools/call` reply carries `Mcp-Quantity`, including `0` for every read (a read is never billed,
+whatever the gateway's table says, invariant 10), a declined L2 confirmation (`ran: false`), a
+write recorded as a pending intent, and a `tools/call` sent as a notification (no id: nothing
+runs, HTTP 202). Replies to other methods carry none. A call refused for its bearer is HTTP `401`
+with `WWW-Authenticate: Bearer` (the JSON-RPC `-32001` error stays the body), which the gateway
+answers as `503 core_rejected_gateway`.
+
+**`actions.execute` on `/mcp`.** The call is free: it runs `local_search` (a read), refuses the
+desktop-only kinds, and only *queues* a send, post or comment for a human's approval (L3), and
+queueing and remote approvals are free (invariant 10). It stays a `run` (it needs the `run` scope)
+priced at $0 (`FREE_RUN_TOOLS` in `apps/api/src/pricing.ts`), so the gateway no longer refuses it
+with `400 run_price_unavailable` and asks the router for nothing; `POST /v1/quote` answers $0 for
+it too. The external send happens later, when a human approves, in the principal's core with the
+principal's own connector credentials (`approval_exec`), not on this request; it is billed where
+it executes, which today means it carries no charge of its own (a send that goes through the router
+is a router `run`, E32). A per-send fee would be a new line in `packages/config/pricing.json` booked
+at execution, an owner pricing decision not taken here.
+
 The gateway bills only what the core confirmed: a sidecar that omits the header is never billed
 more than 0 for the call. An x402-funded call (`docs/api/402.md`) is captured only when `n`
 equals the reserved quantity, because an `exact` payment cannot be captured in part.
@@ -1185,8 +1204,12 @@ The sidecar resolves a bearer to a principal and an actor. The gateway presents 
   both sides): `sgw1.<principal_id>.<key_id>.<mac>`, `mac` = base64url (no padding) of
   HMAC-SHA256(secret, `"shogun/sidecar-bearer/v1\n" + principal_id + "\n" + key_id`). The sidecar
   must verify the MAC in constant time, take the principal from the token and record writes as
-  `agent:<key_id>`. Any self-registered principal works without provisioning. **Not in the sidecar
-  yet** (a `PrincipalResolver` for `sgw1` tokens, accepted by its token registry).
+  `agent:<key_id>`. Any self-registered principal works without provisioning. The sidecar does
+  this (E34, `crates/shogun-core/src/tenancy/derived_bearer.rs`) when it is given the same
+  `SHOGUN_SIDECAR_BEARER_SECRET`, for both REST and `/mcp`; a shared test vector is asserted on both
+  sides (`apps/api/test/mcp-relay.test.ts`, `derived_bearer::tests`). With it the sidecar needs no
+  `SHOGUN_PRINCIPAL_TOKENS` at all, so no principal bearer sits in its environment (threat model
+  R4).
 
 A listed token wins over a derived one. Sharding (`deploy/README.md` §5.2): each gateway talks only
 to its own pod's loopback sidecar; with `SHOGUN_SHARD=<index>/<count>` it refuses a principal whose
@@ -2200,12 +2223,16 @@ MCP tool annotations are computed from `level` by one rule (`apps/api/src/wellkn
 | `level` | `readOnlyHint` | `destructiveHint` | `idempotentHint` | `openWorldHint` |
 |---|---|---|---|---|
 | `read` | `true` | `false` | `true` | `false` |
-| `L1` | `false` | `false` | `true` | `false` |
+| `L1` | `false` | `false` | `false` | `false` |
 | `L2` | `false` | `false` | `false` | `false` |
 | `L3` | `false` | `true` | `false` | `true` |
 
 `L3` is the only tier that leaves the device (invariant 3), so it is the only one with
-`openWorldHint: true`. The SKILL.md sentence "`readOnlyHint: true` is L1; `destructiveHint: true`
+`openWorldHint: true`. The rule is the core's (`shogun_mcp::core_tools::annotations`, frozen by
+`wire-freeze`, invariant 11); the card follows it, and `apps/api/test/wellknown.test.ts` compares
+every core tool's card annotations with `crates/shogun-mcp/tests/snapshots/core_tools.json`. Until
+E34 the card said `idempotentHint: true` for `L1`, so `memory.ingest` / `memory.append_note`
+disagreed with the core's `tools/list`; the card was corrected, no wire name changed. The SKILL.md sentence "`readOnlyHint: true` is L1; `destructiveHint: true`
 with `openWorldHint: true` is L3" is a consequence of this table, not a second source.
 
 ## Validation

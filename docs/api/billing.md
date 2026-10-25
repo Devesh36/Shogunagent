@@ -143,6 +143,25 @@ What the sidecar MUST send on every reply to a billable `tools/call` (`ingest`, 
 - `Mcp-Quantity: 0` for a JSON-RPC error, an `isError` result, a refusal (L2 `input_required`,
   L3 `approval_required`) and an idempotent replay that stored nothing new.
 
+The sidecar meets this (E34, `crates/shogun-mcp/src/mcp_http.rs` `settled_quantity`): every
+`tools/call` reply carries `Mcp-Quantity`, including `0` for every read (a read is never billed,
+whatever the gateway's table says, invariant 10), a declined L2 confirmation (`ran: false`), a
+write recorded as a pending intent, and a `tools/call` sent as a notification (no id: nothing
+runs, HTTP 202). Replies to other methods carry none. A call refused for its bearer is HTTP `401`
+with `WWW-Authenticate: Bearer` (the JSON-RPC `-32001` error stays the body), which the gateway
+answers as `503 core_rejected_gateway`.
+
+**`actions.execute` on `/mcp`.** The call is free: it runs `local_search` (a read), refuses the
+desktop-only kinds, and only *queues* a send, post or comment for a human's approval (L3), and
+queueing and remote approvals are free (invariant 10). It stays a `run` (it needs the `run` scope)
+priced at $0 (`FREE_RUN_TOOLS` in `apps/api/src/pricing.ts`), so the gateway no longer refuses it
+with `400 run_price_unavailable` and asks the router for nothing; `POST /v1/quote` answers $0 for
+it too. The external send happens later, when a human approves, in the principal's core with the
+principal's own connector credentials (`approval_exec`), not on this request; it is billed where
+it executes, which today means it carries no charge of its own (a send that goes through the router
+is a router `run`, E32). A per-send fee would be a new line in `packages/config/pricing.json` booked
+at execution, an owner pricing decision not taken here.
+
 The gateway bills only what the core confirmed: a sidecar that omits the header is never billed
 more than 0 for the call. An x402-funded call (`docs/api/402.md`) is captured only when `n`
 equals the reserved quantity, because an `exact` payment cannot be captured in part.
@@ -158,8 +177,12 @@ The sidecar resolves a bearer to a principal and an actor. The gateway presents 
   both sides): `sgw1.<principal_id>.<key_id>.<mac>`, `mac` = base64url (no padding) of
   HMAC-SHA256(secret, `"shogun/sidecar-bearer/v1\n" + principal_id + "\n" + key_id`). The sidecar
   must verify the MAC in constant time, take the principal from the token and record writes as
-  `agent:<key_id>`. Any self-registered principal works without provisioning. **Not in the sidecar
-  yet** (a `PrincipalResolver` for `sgw1` tokens, accepted by its token registry).
+  `agent:<key_id>`. Any self-registered principal works without provisioning. The sidecar does
+  this (E34, `crates/shogun-core/src/tenancy/derived_bearer.rs`) when it is given the same
+  `SHOGUN_SIDECAR_BEARER_SECRET`, for both REST and `/mcp`; a shared test vector is asserted on both
+  sides (`apps/api/test/mcp-relay.test.ts`, `derived_bearer::tests`). With it the sidecar needs no
+  `SHOGUN_PRINCIPAL_TOKENS` at all, so no principal bearer sits in its environment (threat model
+  R4).
 
 A listed token wins over a derived one. Sharding (`deploy/README.md` §5.2): each gateway talks only
 to its own pod's loopback sidecar; with `SHOGUN_SHARD=<index>/<count>` it refuses a principal whose

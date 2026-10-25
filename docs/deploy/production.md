@@ -73,8 +73,8 @@ seam, and only these are supported:
 With none configured the hosted `/mcp` answers `503 upstream_unavailable` (`next_action:
 retry_after`) before anything is reserved, and the enterprise operations that need the sidecar
 answer 503. The bearer the relay presents is per principal (`SHOGUN_SIDECAR_PRINCIPAL_TOKENS`, or
-the derived `sgw1` bearer from `SHOGUN_SIDECAR_BEARER_SECRET`, which needs the sidecar resolver
-listed in the E34 plan row); contract in `docs/api/billing.md` "Hosted `/mcp`".
+the derived `sgw1` bearer from `SHOGUN_SIDECAR_BEARER_SECRET`, verified by the sidecar given the
+same secret); contract in `docs/api/billing.md` "Hosted `/mcp`".
 
 ### 1.1 Hostnames (owner decision)
 
@@ -392,7 +392,7 @@ Agent API (`AGENT_API_ENABLED=1`):
 | `SHOGUN_SIDECAR_URL` | var | with approvals, enterprise sidecar ops or the `/mcp` relay | the sidecar's base URL (open item, §1); with `SHOGUN_SIDECAR_BINDING` only a label |
 | `SHOGUN_SIDECAR_BINDING` | var | no | E34: name of a Workers service / VPC binding the `/mcp` relay reaches the sidecar through (option B, §1); named but unbound = `/mcp` stays 503 |
 | `SHOGUN_SIDECAR_PRINCIPAL_TOKENS` | secret | one of the two bearer sources turns the `/mcp` relay on | E34: the sidecar's `SHOGUN_PRINCIPAL_TOKENS` (`principal:token[:agent_id],…`); presented instead of the agent's key |
-| `SHOGUN_SIDECAR_BEARER_SECRET` | secret | one of the two bearer sources turns the `/mcp` relay on | E34: ≥ 32 characters, same value as the sidecar's; derives `sgw1.<principal>.<key>.<mac>` (needs the sidecar resolver) |
+| `SHOGUN_SIDECAR_BEARER_SECRET` | secret | one of the two bearer sources turns the `/mcp` relay on | E34: ≥ 32 characters, same value as the sidecar's; derives `sgw1.<principal>.<key>.<mac>` |
 | `SHOGUN_SHARD` | var | no | E34: `<index>/<count>` of this gateway's sidecar replica; other principals get `421 wrong_shard` (`deploy/README.md` §5.2) |
 | `WEBHOOK_SIGNING_SECRET` | secret | with approvals | ≥ 32 characters |
 | `SLACK_BOT_TOKEN` | secret | no (trio) | the three Slack settings together or none |
@@ -488,7 +488,8 @@ Not covered by `check-env-docs.mjs` (the sidecar is Rust); `deploy/README.md` is
 | `SHOGUN_MULTI_MAX_OPEN` | env | no | default 64 |
 | `SHOGUN_KMS_KEY_CACHE_SECS` | env | no | default 300 |
 | `SHOGUN_KMS_TIMEOUT_SECS` | env | no | default 10 |
-| `SHOGUN_PRINCIPAL_TOKENS` | secret | yes | `principal:token[:agent_id],…` |
+| `SHOGUN_SIDECAR_BEARER_SECRET` | secret | yes (recommended) | E34: verifies the gateway's derived `sgw1` bearers; same value as the Worker's. Replaces `SHOGUN_PRINCIPAL_TOKENS` (threat model R4) |
+| `SHOGUN_PRINCIPAL_TOKENS` | secret | no with `SHOGUN_SIDECAR_BEARER_SECRET` | `principal:token[:agent_id],…`; a listed token wins |
 | `SHOGUN_ADMIN_TOKEN` | secret | yes | operator bearer; the Worker's `SHOGUN_SIDECAR_ADMIN_TOKEN` |
 | `SHOGUN_APPROVAL_SIGNING_KEY` | secret | with approvals | same value as the Worker's |
 | `SHOGUN_APPROVAL_BASE_URL` | env | with approvals | the public approval page |

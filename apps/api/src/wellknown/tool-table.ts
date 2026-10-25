@@ -50,13 +50,17 @@ const LEVELS: ReadonlySet<string> = new Set<ToolLevel>(["read", "L1", "L2", "L3"
 const COST_UNITS: ReadonlySet<string> = new Set<ToolCostUnit>(["read", "ingest", "model_op", "run"]);
 const NAME_RE = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/;
 
-/** The one rule (docs/api/tool-table.json.md): L3 is the only tier that leaves the device. */
+/** The one rule (docs/api/tool-table.json.md): L3 is the only tier that leaves the device. It is
+ * the core's rule (`shogun_mcp::core_tools::annotations`, wire-frozen, invariant 11): L1 and L2
+ * writes are both `idempotentHint: false` (E34: the card said `true` for L1, so `memory.ingest` /
+ * `memory.append_note` disagreed with the core's `tools/list`; the derived card follows the frozen
+ * core, never the reverse, invariant 12). */
 export function annotationsFor(level: ToolLevel): ToolAnnotations {
   switch (level) {
     case "read":
       return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
     case "L1":
-      return { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+      return { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
     case "L2":
       return { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
     case "L3":

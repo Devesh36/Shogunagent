@@ -64,9 +64,20 @@ describe("tool table (fixture pending E4)", () => {
 
   it("derives annotations by the one rule: Read → readOnly, L1 → not destructive, L3 → destructive + open world", () => {
     expect(annotationsFor("read")).toEqual({ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
-    expect(annotationsFor("L1")).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false });
+    expect(annotationsFor("L1")).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });
     expect(annotationsFor("L2")).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });
     expect(annotationsFor("L3")).toEqual({ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true });
+  });
+
+  it("gives every core tool the annotations the core's tools/list carries (E34, directory checklist X4)", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const frozen = JSON.parse(readFileSync(join(here, "../../../crates/shogun-mcp/tests/snapshots/core_tools.json"), "utf8")) as { tools: Array<{ name: string; annotations: Record<string, boolean> }> };
+    const core = new Map(frozen.tools.map((t) => [t.name, t.annotations]));
+    const card = serverCard(FIXTURE_TOOL_TABLE, ctx) as { tools: Array<{ name: string; annotations: unknown }> };
+    const compared = card.tools.filter((t) => core.has(t.name));
+    expect(compared.length).toBeGreaterThan(0);
+    for (const tool of compared) expect({ name: tool.name, annotations: tool.annotations }).toEqual({ name: tool.name, annotations: core.get(tool.name) });
+    expect(compared.map((t) => t.name)).toEqual(expect.arrayContaining(["memory.ingest", "memory.append_note"]));
   });
 });
 
