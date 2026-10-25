@@ -19,6 +19,51 @@ pub mod reqwest_transport;
 /// The PostHog ingestion host every SHOGUN process sends to (debug builds may override it).
 pub const DEFAULT_HOST: &str = "https://us.i.posthog.com";
 
+/// What a missing `opt_out` field in `analytics.json` (or a missing file) means.
+///
+/// ShogunAgent E13-T4 (CLAUDE.md "No telemetry by default. Opt-in only"): the server build sends
+/// nothing unless the file says `opt_out: false`. The ShogunAI desktop app keeps its opt-out
+/// convention (the Settings switch writes the file; a file without the field is "on").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsentDefault {
+    /// Desktop (feature `desktop`, not a server): a file without `opt_out` counts as consent.
+    OptOut,
+    /// Server (feature `daemon-server`, the default build without `desktop`, or
+    /// [`SERVER_ENV`]`=1`): only an explicit `opt_out: false` is consent.
+    OptIn,
+}
+
+/// Set to `1` to force the server posture ([`ConsentDefault::OptIn`]) on any build.
+pub const SERVER_ENV: &str = "SHOGUNAGENT_SERVER";
+
+/// The posture of this build and process (pure: the three inputs are passed in).
+///
+/// Server wins over desktop: a binary built with both `desktop` and `daemon-server` is a server,
+/// and the environment variable turns any build into one. Only a desktop build that is neither
+/// keeps the opt-out default.
+pub fn consent_default_for(
+    server_feature: bool,
+    desktop_feature: bool,
+    server_env: Option<&str>,
+) -> ConsentDefault {
+    let env_says_server = server_env.map(str::trim) == Some("1");
+    if server_feature || env_says_server || !desktop_feature {
+        ConsentDefault::OptIn
+    } else {
+        ConsentDefault::OptOut
+    }
+}
+
+/// The posture of this process: the cargo features it was built with and [`SERVER_ENV`].
+pub fn consent_default() -> ConsentDefault {
+    let env = std::env::var(SERVER_ENV).ok();
+    consent_default_for(
+        cfg!(feature = "daemon-server"),
+        cfg!(feature = "desktop"),
+        env.as_deref(),
+    )
+}
+
 /// 1イベントのプロパティ集合。
 pub type Props = serde_json::Map<String, Value>;
 
@@ -316,6 +361,49 @@ mod tests {
     #[test]
     fn resolved_key_is_trimmed() {
         assert_eq!(resolve_api_key(Some(" phc_x "), None), Some("phc_x".to_string()));
+    }
+
+    // consent_default_for (E13-T4): the server posture is opt-in; only a pure desktop build keeps
+    // the opt-out default.
+
+    #[test]
+    fn a_server_build_is_opt_in_whatever_else_is_on() {
+        assert_eq!(consent_default_for(true, false, None), ConsentDefault::OptIn);
+        assert_eq!(consent_default_for(true, true, None), ConsentDefault::OptIn);
+        assert_eq!(consent_default_for(true, true, Some("0")), ConsentDefault::OptIn);
+    }
+
+    #[test]
+    fn the_default_build_without_desktop_is_a_server() {
+        assert_eq!(consent_default_for(false, false, None), ConsentDefault::OptIn);
+    }
+
+    #[test]
+    fn the_environment_turns_a_desktop_build_into_a_server() {
+        assert_eq!(consent_default_for(false, true, Some("1")), ConsentDefault::OptIn);
+        assert_eq!(consent_default_for(false, true, Some(" 1 ")), ConsentDefault::OptIn);
+    }
+
+    #[test]
+    fn only_a_plain_desktop_build_keeps_the_opt_out_default() {
+        assert_eq!(consent_default_for(false, true, None), ConsentDefault::OptOut);
+        assert_eq!(consent_default_for(false, true, Some("")), ConsentDefault::OptOut);
+        assert_eq!(consent_default_for(false, true, Some("0")), ConsentDefault::OptOut);
+        assert_eq!(consent_default_for(false, true, Some("yes")), ConsentDefault::OptOut);
+    }
+
+    #[test]
+    fn this_build_reports_the_posture_its_features_imply() {
+        // Without `desktop` (the ShogunAgent default) or with `daemon-server`, nothing is sent
+        // unless the file opts in. The env override is not set by the test runner.
+        let expected = if cfg!(feature = "daemon-server") || !cfg!(feature = "desktop") {
+            ConsentDefault::OptIn
+        } else {
+            ConsentDefault::OptOut
+        };
+        if std::env::var_os(SERVER_ENV).is_none() {
+            assert_eq!(consent_default(), expected);
+        }
     }
 
     use std::sync::atomic::AtomicBool;
