@@ -16,6 +16,11 @@ use shogun_cli::{hint, http, port, wire};
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
+    // `models …` (E24) runs locally, like `principal import`: no server, no token.
+    if args.first().map(String::as_str) == Some("models") {
+        return shogun_cli::models::run(&args[1..]);
+    }
+
     let invocation = match parse(&args) {
         Ok(inv) => inv,
         Err(err) => {

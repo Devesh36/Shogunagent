@@ -46,6 +46,12 @@ db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-mcp", "dep:shogun-integra
 # enables this; the daemon-server bundle builds on it and adds axum.
 exec = ["db", "net", "dep:shogun-agents"]
 daemon-server = ["exec", "shogun-mcp/server", "tokio/rt-multi-thread", "tokio/macros"]
+# `embed-local` (E24): the local embedding lane — `shogun-memory/embed-local` (the ONNX embedder,
+# runtime resolved at run time) plus `embed_models` (load a fetched model; `shogun models fetch`
+# downloads one over the traced egress). OFF by default; the server build profile turns it on
+# (Dockerfile, release workflow). Compiling it in fetches nothing: without a fetched model and an
+# ONNX Runtime library the server logs one line and searches lexically.
+embed-local = ["db", "net", "shogun-memory/embed-local"]
 # The MT3 audio lane: the real capture + ASR backends. macOS-only heavy deps (whisper.cpp/Metal,
 # cpal, Core Audio via objc2), so OFF by default — the pure-logic audio tests compile without them.
 # The audio module itself is part of the desktop set, so this implies `desktop`.

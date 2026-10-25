@@ -28,6 +28,10 @@ use crate::llm::anthropic::BatchLane;
 
 use super::{PrincipalId, PrincipalStore};
 
+/// Backlog rows a routed tick embeds per principal before reviewing it (when a local embedding
+/// model is attached to the store, E24). The rest waits for the next tick.
+pub const EMBED_BACKLOG_PER_TICK: usize = 2_000;
+
 /// Polls a server tick allows one hourly cycle before it leaves the cycle resumable for the next
 /// tick (the relay's synchronous review needs none).
 pub const SERVER_MAX_POLLS: u32 = 3;
@@ -205,10 +209,15 @@ where
     let mut report = Vec::with_capacity(principals.len());
     for principal in principals {
         let (outcome, lane) = match store.open(principal) {
-            Ok(open) => match lane_for(principal, open.db()) {
-                Some(lane) => (tick_principal_with_lane(open.db(), &lane, now_ms).await, TickLane::Batch),
-                None => (tick_principal_local(open.db(), now_ms), TickLane::Local),
-            },
+            Ok(open) => {
+                // Embed the principal's backlog first (a no-op without a local model, E24), so
+                // the review and the next search see vectors for the material it reviews.
+                open.db().embed_pending(EMBED_BACKLOG_PER_TICK);
+                match lane_for(principal, open.db()) {
+                    Some(lane) => (tick_principal_with_lane(open.db(), &lane, now_ms).await, TickLane::Batch),
+                    None => (tick_principal_local(open.db(), now_ms), TickLane::Local),
+                }
+            }
             Err(_) => (TickOutcome::Unavailable("store_unavailable"), TickLane::Local),
         };
         report.push(PrincipalTick { principal: principal.clone(), outcome, lane });

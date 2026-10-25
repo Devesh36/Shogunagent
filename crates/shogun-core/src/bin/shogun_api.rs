@@ -242,7 +242,11 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
         .and_then(|value| value.parse().ok())
         .unwrap_or(64);
     let clock = wall_clock();
-    let store = Arc::new(PrincipalStore::new(root.clone(), Arc::new(keys), clock.clone(), max_open));
+    let (embedder, line) = shogun_core::embed_models::load_configured();
+    eprintln!("{FACE}: {line}");
+    let store = Arc::new(
+        PrincipalStore::new(root.clone(), Arc::new(keys), clock.clone(), max_open).with_embedder(embedder),
+    );
     let state = shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), clock);
     let port = std::env::var("SHOGUN_API_PORT")
         .ok()
@@ -255,6 +259,28 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
         root.display()
     );
     serve_on(listener, state.with_port(addr.port())).await
+}
+
+/// How many backlog rows one embedding pass handles, and how often the pass runs.
+const EMBED_BATCH: usize = 256;
+const EMBED_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Attach the local embedding model when this build has `embed-local` and a fetched model loads
+/// (E24), and embed the backlog off the request path on a timer. Otherwise search stays lexical;
+/// either way one line on stderr says which.
+fn attach_local_embedder(db: Db) -> Db {
+    let (embedder, line) = shogun_core::embed_models::load_configured();
+    eprintln!("{FACE}: {line}");
+    let Some(embedder) = embedder else {
+        return db;
+    };
+    let db = db.with_embedder(embedder);
+    let worker = db.clone();
+    std::thread::spawn(move || loop {
+        while worker.embed_pending(EMBED_BATCH) > 0 {}
+        std::thread::sleep(EMBED_EVERY);
+    });
+    db
 }
 
 /// `shogun-api --dream-tick [--multi <root>]` (plan E5-T4 / E5-T5): run the hourly Dream Cycle
@@ -284,7 +310,10 @@ async fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
     let transport: std::sync::OnceLock<Option<ReqwestTransport>> = std::sync::OnceLock::new();
     // One file open at a time: the tick visits each principal once. Same open policy as
     // `--multi` (the sidecar owns these files); only files already on disk are visited.
-    let store = PrincipalStore::new(root, keys, clock, 1);
+    // The tick also embeds each visited principal's backlog when a local model is installed (E24).
+    let (embedder, line) = shogun_core::embed_models::load_configured();
+    eprintln!("{FACE}: {line}");
+    let store = PrincipalStore::new(root, keys, clock, 1).with_embedder(embedder);
     let principals = dream_tick::principals_on_disk(&store);
     let report = dream_tick::hourly_tick_routed(
         &store,
@@ -393,7 +422,7 @@ async fn main() -> std::io::Result<()> {
     if let Some(why) = store.unavailable() {
         eprintln!("{FACE}: {}", why.line());
     }
-    let db = store.db().clone();
+    let db = attach_local_embedder(store.db().clone());
     let metrics = metrics_source(db.clone());
     let backend = Arc::new(db_backend(db));
 

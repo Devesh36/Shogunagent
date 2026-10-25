@@ -43,7 +43,7 @@ command; the harness keeps only the aggregate.
   "generated_at": "2026-10-25T09:40:00Z",      // RFC 3339, UTC
   "commit": "…",                               // build-time commit of the binary; null outside a checkout
   "commit_dirty": false,                       // true: uncommitted changes, or the tree moved since the build
-  "embedding": null,                           // {model, dim} once a vector lane is wired in; null = lexical only
+  "embedding": null,                           // {model, dim} of the pinned model with --embedder; null = lexical only
   "reader": null,                              // {model} of the answering model; null = no model answered
   "judge": null,                               // {model} of the scoring model; null = metrics are exact, not judged
   "seeds": [42, 43, …],
@@ -208,8 +208,45 @@ further.
   the environment variables that will point at the datasets. Running them needs a reader model to
   answer from retrieved memory and a judge to score it; when those adapters land, `reader` and
   `judge` stop being `null` and the file names the models.
-- **No embedding.** The distribution build ships no embedder (`docs/shogunai-origin/CLAUDE.shogunai.md`,
-  2026-08-23 / #237), so every number here is lexical. A hybrid number is not comparable with it.
+- **No embedding in the committed file.** The default build has no embedder, so every number in
+  `benchmarks.json` is lexical (`embedding: null`). A hybrid number is not comparable with it.
+
+## The vector lane (E24)
+
+`--embedder <NAME>` turns the vector lane on for a run or a whole harness: `test` is the
+deterministic concept embedder (`shogun_memory::embed::TestEmbedder`, no model, CI-safe); with
+`cargo run -p memory-bench --features embed-local`, a fetched model by name
+(`nomic-embed-text-v1.5`, read from `SHOGUN_MODELS_DIR`; `shogun models fetch` writes it, and the
+ONNX Runtime 1.22 library comes from `ORT_DYLIB_PATH`). The corpus is embedded after ingest,
+outside every timed section, and every query is embedded inside the timed search.
+
+**One model for every arm.** MemDelta (arXiv 2606.29914) measured the embedding swap alone moving
+LongMemEval accuracy by 6.2 points, so arms embedded with different models are not comparable. The
+harness hands one embedder instance to every suite and seed, each per-run report names its model
+(`embedding`), the harness refuses to assemble a file whose arms disagree
+(`HarnessError::EmbeddingNotPinned`), and `benchmarks.json` records it:
+
+```json
+"embedding": { "model": "nomic-embed-text-v1.5@384", "dim": 384 }
+```
+
+`model` is the vector-space id: the model's name and the stored width (nomic's 768-wide output is
+stored as its 384-wide Matryoshka prefix). The store records the same id on every vector row and
+never ranks rows of two models against each other (V101, `shogun_memory::embedding_space`).
+
+One seed at 600 events (release build, in memory, this container), for orientation only:
+
+| arm | query p95 ms | temporal recall@1 | abstention false evidence | multi-session coverage@5 |
+|---|---:|---:|---:|---:|
+| lexical (`embedding: null`) | 2.1 | 1.000 | 0.000 | 1.000 |
+| `test` | 2.6 | 1.000 | 0.168 | 1.000 |
+| `nomic-embed-text-v1.5@384` | 21.9 | 1.000 | **1.000** | 1.000 |
+
+The abstention row is the open problem: the semantic relevance floor
+(`MAX_SEMANTIC_L2_DISTANCE = 1.0` in `search/federated.rs`, i.e. cosine ≥ 0.5) was set for e5,
+and nomic places unrelated text of the same domain inside it, so every unanswerable question
+returns a vector neighbour as evidence. The floor has to become per model (a property of the
+`ModelSpec`) before a hybrid file is published.
 - **Write cost is model spend only.** `write_cost_micro_usd` is `0.0` because ingestion makes no
   model call; it does not price CPU or storage.
 - **Not a certification.** `environment.in_memory` and `environment.profile` say what the run was;

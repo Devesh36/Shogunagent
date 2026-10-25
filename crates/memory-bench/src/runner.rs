@@ -99,6 +99,7 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     // One field separates the arms of the A/B: 0.0 is the shipped ranking exactly.
     backend.recency_weight = config.recency_weight;
     backend.search_path = config.search_path;
+    backend.embedder = config.embedder.clone();
     // Past the newest event in the corpus (see `ShogunBackend::now_ms`).
     backend.now_ms = generated.events.iter().map(|e| e.ts).max().unwrap_or(0) + 1;
     let initial_size = backend.size()?;
@@ -171,6 +172,10 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     writes.rows_after = backend.count()?;
     resources.sample(clock.elapsed_ns());
 
+    // 3b. The vector lane's index (E24): embedded after ingest, outside every timed section, as
+    //     the product does it off the write path. A no-op on a lexical run.
+    backend.embed_corpus()?;
+
     // 4. Warm up. These queries run against the finished corpus and their latencies are dropped —
     //    the first query after a bulk load pays for page-cache misses the next thousand do not.
     for i in 0..config.warmup {
@@ -207,12 +212,10 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     let query_summary = LatencySummary::of(&query_latency);
     let quality = quality.summary(config.k);
     let mode = RunMode {
-        // v0.1 measures the lexical half only. The backend passes no query embedding, so RRF fuses
-        // one list and hybrid search degenerates to FTS. Wiring the ONNX embedder in (it needs a
-        // model file on disk and an off-by-default feature) is the next commit's job; until then
-        // this flag is false and the report's SLO check is marked non-authoritative because of it,
-        // rather than the run quietly passing itself off as a hybrid measurement.
-        semantic: false,
+        // Lexical unless the run carries an embedder (E24, `--embedder`): then every query is
+        // embedded and the vector lane is fused in. The report names the model (`embedding`), and
+        // lexical and hybrid numbers are never compared to each other.
+        semantic: config.embedder.is_some(),
         in_memory,
     };
     let environment = Environment::detect();
@@ -236,6 +239,7 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         generated_queries: generated.queries.len(),
         environment,
         mode,
+        embedding: config.embedder.as_ref().map(|embedder| embedder.model_ref()),
         backend: backend.name(),
         validity,
         write_amplification: writes.write_amplification(),

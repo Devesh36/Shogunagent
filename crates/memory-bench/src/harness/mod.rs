@@ -56,6 +56,15 @@ pub enum HarnessError {
     Io(#[from] std::io::Error),
     #[error("serialising benchmarks: {0}")]
     Json(#[from] serde_json::Error),
+    /// An arm ran with another embedding model than the run's pinned one (MemDelta: the embedding
+    /// alone moves accuracy, so such arms are not comparable and are never assembled).
+    #[error("suite {suite} seed {seed} embedded with {got:?}, not the pinned {pinned:?}")]
+    EmbeddingNotPinned {
+        suite: &'static str,
+        seed: u64,
+        pinned: Option<String>,
+        got: Option<String>,
+    },
 }
 
 /// Everything that decides a harness run. Serialized into the output so a number names its setup.
@@ -72,6 +81,10 @@ pub struct HarnessConfig {
     /// atomically by `runner::run`. `None` runs in memory, which the output records.
     #[serde(skip)]
     pub db_dir: Option<String>,
+    /// The one embedder every arm uses (E24, `--embedder`), or `None` for the lexical run. Shared
+    /// by handle, so the model is pinned across suites and seeds by construction.
+    #[serde(skip)]
+    pub embedder: Option<crate::embedding::BenchEmbedder>,
 }
 
 impl HarnessConfig {
@@ -87,6 +100,7 @@ impl HarnessConfig {
             write_batch: DEFAULT_WRITE_BATCH,
             search_path: SearchPath::Federated,
             db_dir: None,
+            embedder: None,
         }
     }
 
@@ -100,6 +114,7 @@ impl HarnessConfig {
             write_batch: DEFAULT_WRITE_BATCH,
             search_path: SearchPath::Federated,
             db_dir: None,
+            embedder: None,
         }
     }
 
@@ -133,6 +148,7 @@ impl HarnessConfig {
             recency_weight: 0.0,
             search_path: self.search_path,
             slice: crate::slicer::SliceConfig::default(),
+            embedder: self.embedder.clone(),
         }
     }
 }
@@ -301,6 +317,15 @@ pub fn run(
                 seed,
                 source,
             })?;
+            let pinned = config.embedder.as_ref().map(|embedder| embedder.model_ref());
+            if report.embedding != pinned {
+                return Err(HarnessError::EmbeddingNotPinned {
+                    suite: spec.name,
+                    seed,
+                    pinned: pinned.map(|e| e.model),
+                    got: report.embedding.clone().map(|e| e.model),
+                });
+            }
             if let Some(value) = (spec.extract)(&report) {
                 values.push(value);
             }
@@ -344,7 +369,10 @@ pub fn run(
         generated_at: clock::now_rfc3339(),
         commit: environment.git_commit.clone(),
         commit_dirty: environment.git_dirty,
-        embedding: None,
+        embedding: config.embedder.as_ref().map(|embedder| {
+            let pinned = embedder.model_ref();
+            ModelRef { model: pinned.model, dim: Some(pinned.dim) }
+        }),
         reader: None,
         judge: None,
         seeds: config.seeds.clone(),
