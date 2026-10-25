@@ -490,6 +490,8 @@ mod tests {
             multi_evidence_queries: 0,
             coverage_at_5: None,
             coverage_at_10: None,
+            evidence_chars_per_query: None,
+            evidence_tokens_per_query: None,
         }
     }
 

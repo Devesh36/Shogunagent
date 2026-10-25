@@ -4,7 +4,11 @@ First reproducible measurement of SHOGUN's memory ingestion and retrieval, taken
 `crates/memory-bench` against the unmodified `shogun-memory` layer.
 
 **These numbers describe one machine on one day.** They are a baseline to compare future runs
-against, not a certification. The conditions that disqualify them from certifying an SLO are listed
+against, not a certification. **Two of them are superseded (2026-10-25, E12-T1):** the `temporal`
+row was measured with the earlier question wording ("where does {p} store its records"), which has
+since gained its recency cue ("currently"), and it ran on the hybrid path, where the fix does not
+apply; the same-harness run in `docs/benchmarks/README.md` is the current temporal and abstention
+measurement. The conditions that disqualify them from certifying an SLO are listed
 under [Validity](#validity) and are recorded in every JSON report as `mode` and
 `slo.authoritative: false`.
 

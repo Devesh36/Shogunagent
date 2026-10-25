@@ -9,7 +9,9 @@ use crate::search_documents::{
     self, EvidenceRef, SearchDocument, SearchDocumentError, SearchDocumentKind, SourceRef,
 };
 
-use super::retrieval::FtsSearchHit;
+use super::filtering::query_asks_for_latest;
+use super::lexical::ConceptWeight;
+use super::retrieval::{is_meeting_cue, FtsSearchHit};
 use super::terms::{normalize, query_concepts, Concept, MatchText};
 use super::{
     excerpt, lexical_terms, search_cold_partitions, search_meetings_in_range, ColdScan,
@@ -105,6 +107,12 @@ pub struct ComponentRanks {
 }
 
 impl ComponentRanks {
+    /// A vector lane found this hit: evidence that shares meaning, not necessarily words, so the
+    /// lexical relevance floor does not judge it.
+    const fn semantic(&self) -> bool {
+        self.warm_knn.is_some() || self.cold_scan.is_some() || self.derived_knn.is_some()
+    }
+
     fn merge(&mut self, other: Self) {
         self.event_fts = min_rank(self.event_fts, other.event_fts);
         self.derived_fts = min_rank(self.derived_fts, other.derived_fts);
@@ -212,6 +220,69 @@ pub fn event_places(
     rows.collect()
 }
 
+/// Relevance floor (E12-T1): the share of the question's content words — weighted by idf, source
+/// cues like "meeting" never required — that the best hit must contain before any evidence is
+/// returned (`relevance_floor` has the exact rule).
+///
+/// Below it the search returns no hits at all and [`RelevanceFloor::passed`] is false, so a
+/// question nothing in memory answers ("what did we decide about the kestrel compliance audit"
+/// over a log that only ever mentions kestrel) comes back empty instead of handing a downstream
+/// agent rows that merely share a project name. Calibrated on `memory-bench --workload
+/// abstention`, where the best chatter row covers one of four words (0.25) or two of four
+/// ("hardware budget" against "budget spreadsheet for kestrel", 0.50 with two words missing),
+/// against the answer-bearing workloads whose answers cover two of three or more (≥ 0.67), and
+/// checked against the golden search eval (`docs/shogunai-origin/search-eval.md`), where no
+/// positive case may lose its result; see `docs/benchmarks/README.md`.
+pub const RELEVANCE_FLOOR_COVERAGE: f64 = 0.5;
+
+/// Upper bound of the newest-first boost applied when the question asks for the latest state
+/// ([`query_asks_for_latest`] or [`FederatedSearchOptions::prefer_latest`]): among the rows that
+/// match the question equally well, the newest scores `1 + LATEST_BOOST` times the oldest, which
+/// outweighs any rank gap inside one lane (rank 1 against rank 40 is ×1.64), so order within that
+/// group follows time rather than BM25 length normalisation.
+const LATEST_BOOST: f64 = 1.0;
+
+/// Why the relevance floor let a result through or blanked it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelevanceFloorReason {
+    /// The best hit covered enough of the question.
+    Passed,
+    /// The question has no content words (only stop words, dates or source cues), so coverage
+    /// is undefined and the floor does not apply.
+    NotApplicable,
+    /// No lane produced a candidate at all.
+    NoCandidates,
+    /// Candidates existed but none covered enough of the question: no more than
+    /// [`RELEVANCE_FLOOR_COVERAGE`] of its weight, and a tie at the floor with two or more words
+    /// missing (`relevance_floor` has the exact rule).
+    BelowFloor,
+}
+
+/// The relevance floor's verdict for one search. `passed == false` means the result carries no
+/// evidence on purpose; callers map it onto their abstention signal
+/// (`AnswerabilityV1 { answerable: false, .. }` in the Memory API).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct RelevanceFloor {
+    pub passed: bool,
+    pub reason: RelevanceFloorReason,
+    /// idf-weighted share of the question's content words the best candidate contained, `None`
+    /// when there was nothing to measure.
+    pub coverage: Option<f64>,
+    pub threshold: f64,
+}
+
+impl RelevanceFloor {
+    const fn not_applicable() -> Self {
+        Self {
+            passed: true,
+            reason: RelevanceFloorReason::NotApplicable,
+            coverage: None,
+            threshold: RELEVANCE_FLOOR_COVERAGE,
+        }
+    }
+}
+
 /// Bounded, content-free match measurements retained from P0 scoring.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct MatchQualitySummary {
@@ -237,6 +308,11 @@ pub struct FederatedSearchOptions {
     /// Search raw event FTS across all history. Derived, meeting, and vector lanes remain inside
     /// `since_ts..to_ts`, avoiding archive-wide scans outside bounded indexed event text.
     pub widen_event_lexical: bool,
+    /// Order the rows that match the question equally well newest-first (by when each was last
+    /// seen), as a question containing "latest" / "currently" / 最新 does by itself
+    /// ([`query_asks_for_latest`]). A caller that knows the question is about the present state
+    /// — a "what is the current value" tool, the temporal benchmark — sets it explicitly.
+    pub prefer_latest: bool,
 }
 
 impl Default for FederatedSearchOptions {
@@ -253,6 +329,7 @@ impl Default for FederatedSearchOptions {
             per_source_limit: DEFAULT_PER_SOURCE_LIMIT,
             excerpt_chars: DEFAULT_EXCERPT_CHARS,
             widen_event_lexical: false,
+            prefer_latest: false,
         }
     }
 }
@@ -266,6 +343,9 @@ pub struct FederatedSearchResult {
     pub raw_event_ranks: Vec<(i64, f64)>,
     /// True only when bounded archive-wide raw-event BM25 completed.
     pub event_lexical_all_history: bool,
+    /// Whether the best candidate covered enough of the question to count as evidence. When it
+    /// did not, `hits` and `raw_event_ranks` are empty on purpose.
+    pub relevance: RelevanceFloor,
     pub cold: ColdScanStats,
     pub elapsed_micros: u64,
 }
@@ -294,6 +374,11 @@ struct Candidate {
     confidence: f64,
     period_start_ms: Option<i64>,
     period_end_ms: Option<i64>,
+    /// Events only: `event_log.last_seen_at`. `insert_or_touch` collapses a byte-identical
+    /// restatement onto its first row and advances this while `ts` stays at the first sighting,
+    /// so the value asserted most recently can carry the *oldest* `ts`. Newest-first ordering
+    /// reads this, never `ts` alone.
+    last_seen_ms: Option<i64>,
     ranks: ComponentRanks,
     lane_scores: [f64; SCORE_LANE_COUNT],
     lexical_coverage: f64,
@@ -337,6 +422,23 @@ impl Candidate {
         self.lexical_quality = self
             .lexical_quality
             .max(sanitize_nonnegative(quality).min(1.0));
+    }
+
+    /// When this candidate was last asserted: the later of its last sighting and its period end.
+    fn latest_ms(&self) -> Option<i64> {
+        [self.last_seen_ms, self.period_end_ms, self.period_start_ms]
+            .into_iter()
+            .flatten()
+            .max()
+    }
+
+    fn scale(&mut self, multiplier: f64) {
+        if multiplier != 1.0 {
+            self.score *= multiplier;
+            for score in &mut self.lane_scores {
+                *score *= multiplier;
+            }
+        }
     }
 }
 
@@ -387,6 +489,7 @@ pub fn search_federated(
             hits: Vec::new(),
             raw_event_ranks: Vec::new(),
             event_lexical_all_history: false,
+            relevance: RelevanceFloor::not_applicable(),
             cold: ColdScanStats::default(),
             elapsed_micros: elapsed_micros(started),
         });
@@ -406,13 +509,13 @@ pub fn search_federated(
     // Raw-event lexical lane (`lexical.rs`): bounded AND-first / relaxed-OR retrieval over the
     // trigram and gram indexes, scored on one BM25 scale. Widening searches all history; an
     // explicit range stays exact.
-    let (event_fts_hits, event_lexical_all_history) = if !raw_lanes_allowed {
-        (Vec::new(), false)
+    let (event_fts_hits, event_lexical_all_history, concept_weights) = if !raw_lanes_allowed {
+        (Vec::new(), false, Vec::new())
     } else {
         let scope = if options.widen_event_lexical { None } else { range };
         let lexical = super::lexical::search_events(conn, query, scope, source_limit)?;
         let all_history = scope.is_none() && options.widen_event_lexical && lexical.complete;
-        (lexical.hits, all_history)
+        (lexical.hits, all_history, lexical.concept_weights)
     };
     let event_ids = event_fts_hits.iter().map(|hit| hit.id).collect::<Vec<_>>();
     let warm_hits = if raw_lanes_allowed {
@@ -521,7 +624,7 @@ pub fn search_federated(
                 source: FederatedSource { kind: FederatedSourceKind::UserNote, id: FederatedSourceId::UserNote(note.id) },
                 evidence: BTreeSet::from([CanonicalEvidenceId::UserNote(note.id)]),
                 title: "User memory".into(), body: excerpt(&note.text,query,options.excerpt_chars),
-                confidence: 1.0, period_start_ms: None, period_end_ms: None,
+                confidence: 1.0, period_start_ms: None, period_end_ms: None, last_seen_ms: None,
                 ranks: ComponentRanks::default(), lane_scores: [0.0;SCORE_LANE_COUNT],
                 lexical_coverage: coverage, answerability_coverage: matched.answerability_coverage,
                 lexical_quality: coverage, anchor_coverage: 1.0, anchor_count: 0,
@@ -550,12 +653,21 @@ pub fn search_federated(
         candidate.anchor_count = anchors.len();
         let multiplier = source_intent_multiplier(options.source, &candidate.source.kind)
             * prior_multiplier(candidate, now_ms);
-        if multiplier != 1.0 {
-            candidate.score *= multiplier;
-            for score in &mut candidate.lane_scores {
-                *score *= multiplier;
-            }
-        }
+        candidate.scale(multiplier);
+    }
+    if options.prefer_latest || query_asks_for_latest(query) {
+        apply_latest_ordering(&mut candidates);
+    }
+    let relevance = relevance_floor(&concepts, &concept_weights, &candidates, options, limit);
+    if !relevance.passed {
+        return Ok(FederatedSearchResult {
+            hits: Vec::new(),
+            raw_event_ranks: Vec::new(),
+            event_lexical_all_history,
+            relevance,
+            cold: cold.stats,
+            elapsed_micros: elapsed_micros(started),
+        });
     }
 
     let mut raw_event_ranks = candidates
@@ -605,6 +717,7 @@ pub fn search_federated(
         hits,
         raw_event_ranks,
         event_lexical_all_history,
+        relevance,
         cold: cold.stats,
         elapsed_micros: elapsed_micros(started),
     })
@@ -680,6 +793,190 @@ fn hit_note_ids(hit: &FederatedHit) -> impl Iterator<Item = i64> + '_ {
 
 fn elapsed_micros(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+/// Newest-first ordering for a question about the present state (E12-T1).
+///
+/// Only the rows that match the question best — equal [`Candidate::lexical_coverage`] — take
+/// part; a recent row that matches fewer of the question's words is not promoted over an older
+/// exact match. Within that group the boost grows linearly with [`Candidate::latest_ms`] from ×1
+/// (oldest) to ×(1 + [`LATEST_BOOST`]) (newest), so a value restated most recently outranks the
+/// value it replaced even when BM25 length normalisation prefers the shorter, older sentence.
+fn apply_latest_ordering(candidates: &mut BTreeMap<CandidateKey, Candidate>) {
+    let best_coverage = candidates
+        .values()
+        .filter(|candidate| candidate.score > 0.0)
+        .map(|candidate| candidate.lexical_coverage)
+        .fold(0.0_f64, f64::max);
+    if best_coverage <= 0.0 {
+        return;
+    }
+    let group = candidates
+        .values()
+        .filter(|candidate| {
+            candidate.score > 0.0 && (candidate.lexical_coverage - best_coverage).abs() < 1e-9
+        })
+        .filter_map(|candidate| Some((candidate.key.clone(), candidate.latest_ms()?)))
+        .collect::<Vec<_>>();
+    let Some(oldest) = group.iter().map(|(_, ts)| *ts).min() else {
+        return;
+    };
+    let Some(newest) = group.iter().map(|(_, ts)| *ts).max() else {
+        return;
+    };
+    if newest <= oldest {
+        return;
+    }
+    let span = (newest - oldest) as f64;
+    for (key, ts) in group {
+        if let Some(candidate) = candidates.get_mut(&key) {
+            let position = ((ts - oldest) as f64 / span).clamp(0.0, 1.0);
+            candidate.scale(1.0 + LATEST_BOOST * position);
+        }
+    }
+}
+
+/// Does the best candidate cover enough of the question to be evidence at all?
+///
+/// Coverage is the idf-weighted share of the question's content concepts the candidate contains.
+/// Source cues ("meeting", "standup", 会議 …) name where to look, not what for: they are never
+/// required (「昨日の会議」 lists yesterday's meetings whatever their titles say) but count when
+/// they match ("standup notes" is satisfied by a row titled Standup). A concept no row in scope
+/// contains weighs like an average present one: it says nothing about the archive, and its
+/// extreme idf would otherwise blank every question that uses a verb the log never wrote down
+/// ("decide"). Without lexical weights (no raw-event lane) every concept weighs the same. A
+/// question written in two scripts (Orchid のローンチ延期) is covered when either script's words
+/// are, since the archive holds each item in one language. A candidate a vector lane found counts
+/// as full coverage: it shares meaning, not words.
+///
+/// A candidate passes when it covers more than half of the question's weight, or exactly half
+/// while missing a single word (one of two words found is a plausible answer; two of four is a
+/// question more specific than the row). The candidates considered are the `limit` best by score
+/// among those the source constraint accepts; the floor passes if any of them does.
+fn relevance_floor(
+    concepts: &[Concept],
+    weights: &[ConceptWeight],
+    candidates: &BTreeMap<CandidateKey, Candidate>,
+    options: &FederatedSearchOptions,
+    limit: usize,
+) -> RelevanceFloor {
+    let is_cue = |concept: &Concept| {
+        super::query::is_source_cue(&concept.display) || is_meeting_cue(concept)
+    };
+    let content = (0..concepts.len())
+        .filter(|&index| !is_cue(&concepts[index]))
+        .collect::<Vec<_>>();
+    if content.is_empty() {
+        return RelevanceFloor::not_applicable();
+    }
+    let weighted = weights.len() == concepts.len();
+    let present_idf = content
+        .iter()
+        .filter_map(|&index| weights.get(index))
+        .filter(|weight| weight.present)
+        .map(|weight| sanitize_nonnegative(weight.idf))
+        .collect::<Vec<_>>();
+    let absent_weight = if present_idf.is_empty() {
+        1.0
+    } else {
+        present_idf.iter().sum::<f64>() / present_idf.len() as f64
+    };
+    let weight_of = |index: usize| -> f64 {
+        if !weighted {
+            return 1.0;
+        }
+        match weights.get(index) {
+            Some(weight) if weight.present => {
+                sanitize_nonnegative(weight.idf).max(f64::MIN_POSITIVE)
+            }
+            _ => absent_weight.max(f64::MIN_POSITIVE),
+        }
+    };
+
+    // Scopes: the whole question, and each script on its own when both are present.
+    let mut scopes: Vec<Vec<usize>> = vec![content.clone()];
+    let latin = content
+        .iter()
+        .copied()
+        .filter(|&index| !concepts[index].cjk)
+        .collect::<Vec<_>>();
+    if !latin.is_empty() && latin.len() < content.len() {
+        let cjk = content
+            .iter()
+            .copied()
+            .filter(|&index| concepts[index].cjk)
+            .collect::<Vec<_>>();
+        scopes.push(latin);
+        scopes.push(cjk);
+    }
+
+    let mut considered = candidates
+        .values()
+        .filter(|candidate| {
+            candidate.score > 0.0 && source_accepts(options.source, &candidate.source.kind)
+        })
+        .collect::<Vec<_>>();
+    if considered.is_empty() {
+        return RelevanceFloor {
+            passed: false,
+            reason: RelevanceFloorReason::NoCandidates,
+            coverage: None,
+            threshold: RELEVANCE_FLOOR_COVERAGE,
+        };
+    }
+    considered.sort_by(|left, right| right.score.total_cmp(&left.score));
+
+    let hit = |candidate: &Candidate, index: usize| {
+        candidate.concept_hits.get(index).copied().unwrap_or(false)
+    };
+    let matched_cue_weight = |candidate: &Candidate| {
+        (0..concepts.len())
+            .filter(|&index| is_cue(&concepts[index]) && hit(candidate, index))
+            .map(weight_of)
+            .sum::<f64>()
+    };
+    let mut best_coverage = 0.0_f64;
+    let mut passed = false;
+    for candidate in considered.iter().take(limit.max(1)) {
+        if candidate.ranks.semantic() {
+            best_coverage = 1.0;
+            passed = true;
+            break;
+        }
+        let cues = matched_cue_weight(candidate);
+        for scope in &scopes {
+            let total = scope.iter().map(|&index| weight_of(index)).sum::<f64>();
+            if total <= 0.0 {
+                continue;
+            }
+            let matched = scope
+                .iter()
+                .filter(|&&index| hit(candidate, index))
+                .map(|&index| weight_of(index))
+                .sum::<f64>();
+            let unmatched = scope.iter().filter(|&&index| !hit(candidate, index)).count();
+            let coverage = ((matched + cues) / total).clamp(0.0, 1.0);
+            best_coverage = best_coverage.max(coverage);
+            if coverage > RELEVANCE_FLOOR_COVERAGE + 1e-9
+                || (coverage + 1e-9 >= RELEVANCE_FLOOR_COVERAGE && unmatched <= 1)
+            {
+                passed = true;
+            }
+        }
+        if passed {
+            break;
+        }
+    }
+    RelevanceFloor {
+        passed,
+        reason: if passed {
+            RelevanceFloorReason::Passed
+        } else {
+            RelevanceFloorReason::BelowFloor
+        },
+        coverage: Some(best_coverage),
+        threshold: RELEVANCE_FLOOR_COVERAGE,
+    }
 }
 
 /// Weight of distilled memory (meetings, derived facts, the user's own notes) against raw capture.
@@ -907,7 +1204,8 @@ fn hydrate_events(
 ) -> Result<(), rusqlite::Error> {
     let concepts = query_concepts(query);
     let mut stmt = conn.prepare(
-        "SELECT ts, source, window_title, content, session_id FROM event_log WHERE id = ?1",
+        "SELECT ts, source, window_title, content, session_id, last_seen_at
+           FROM event_log WHERE id = ?1",
     )?;
     for &id in ids {
         let key = CandidateKey::Event(id);
@@ -922,10 +1220,11 @@ fn hydrate_events(
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
                 ))
             })
             .optional()?;
-        let Some((ts, source_label, title, content, session_id)) = row else {
+        let Some((ts, source_label, title, content, session_id, last_seen_at)) = row else {
             continue;
         };
         let mut evidence = BTreeSet::from([CanonicalEvidenceId::Event(id)]);
@@ -949,6 +1248,7 @@ fn hydrate_events(
                 confidence: 1.0,
                 period_start_ms: Some(ts),
                 period_end_ms: Some(ts),
+                last_seen_ms: last_seen_at.map(|seen| seen.max(ts)),
                 ranks: ComponentRanks::default(),
                 lane_scores: [0.0; SCORE_LANE_COUNT],
                 lexical_coverage: matched.lexical_coverage,
@@ -1018,6 +1318,7 @@ fn hydrate_derived(
                 confidence: document.confidence,
                 period_start_ms: document.period_start_ms,
                 period_end_ms: document.period_end_ms,
+                last_seen_ms: None,
                 ranks: ComponentRanks::default(),
                 lane_scores: [0.0; SCORE_LANE_COUNT],
                 lexical_coverage: matched.lexical_coverage,
@@ -1064,6 +1365,7 @@ fn hydrate_imported(
                 confidence: item.confidence.min(crate::memory_import::CONFIDENCE_MAX),
                 period_start_ms: None,
                 period_end_ms: None,
+                last_seen_ms: None,
                 ranks: ComponentRanks::default(),
                 lane_scores: [0.0; SCORE_LANE_COUNT],
                 lexical_coverage: matched.lexical_coverage,
@@ -1180,6 +1482,7 @@ fn hydrate_meetings(
                 confidence: details.confidence,
                 period_start_ms: Some(meeting.ts),
                 period_end_ms: details.ended_at.or(Some(meeting.ts)),
+                last_seen_ms: None,
                 ranks: ComponentRanks::default(),
                 lane_scores: [0.0; SCORE_LANE_COUNT],
                 lexical_coverage: matched.lexical_coverage,

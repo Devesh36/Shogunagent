@@ -45,6 +45,21 @@ const HYDRATE_BYTES_BUDGET: usize = 2 * 1024 * 1024;
 pub(crate) struct EventLexical {
     pub hits: Vec<FtsSearchHit>,
     pub complete: bool,
+    /// One entry per query concept, in `query_concepts` order: its idf over the archive and
+    /// whether any row in scope contains it at all. The relevance floor in `federated.rs` weighs
+    /// the question's words with these; empty when the lane did not run.
+    pub concept_weights: Vec<ConceptWeight>,
+}
+
+/// How much one query concept weighs when judging whether a hit covers the question.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ConceptWeight {
+    /// BM25 idf from the postings counts (the same number the scorer uses).
+    pub idf: f64,
+    /// False when no row in the searched scope contains the concept. Such a word tells nothing
+    /// about the archive, so the floor weighs it like an average present word rather than by
+    /// the extreme idf an absent word would get.
+    pub present: bool,
 }
 
 struct Postings {
@@ -148,6 +163,7 @@ pub(crate) fn search_events(
         return Ok(EventLexical {
             hits: Vec::new(),
             complete: true,
+            concept_weights: Vec::new(),
         });
     }
     let bounds = match range {
@@ -157,6 +173,13 @@ pub(crate) fn search_events(
                 return Ok(EventLexical {
                     hits: Vec::new(),
                     complete: true,
+                    concept_weights: concepts
+                        .iter()
+                        .map(|_| ConceptWeight {
+                            idf: 1.0,
+                            present: false,
+                        })
+                        .collect(),
                 })
             }
         },
@@ -192,6 +215,14 @@ pub(crate) fn search_events(
     let idf = document_frequency
         .iter()
         .map(|df| (1.0 + (total - df + 0.5) / (df + 0.5)).ln().max(0.01))
+        .collect::<Vec<_>>();
+    let concept_weights = postings
+        .iter()
+        .zip(&idf)
+        .map(|(postings, idf)| ConceptWeight {
+            idf: *idf,
+            present: !postings.ids.is_empty(),
+        })
         .collect::<Vec<_>>();
     let candidates = candidate_ids(&postings, &sets, &idf);
 
@@ -229,6 +260,7 @@ pub(crate) fn search_events(
             .map(|(id, score)| FtsSearchHit { id, rank: -score })
             .collect(),
         complete,
+        concept_weights,
     })
 }
 

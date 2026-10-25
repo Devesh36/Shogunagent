@@ -276,9 +276,14 @@ pub fn temporal_project_count() -> usize {
 ///
 /// Each tracked project states its database choice three times — PostgreSQL, then SQLite, then
 /// PostgreSQL again — and the query asks in the present tense. Only the last statement is a
-/// correct answer; the earlier ones are `superseded`. Nothing here tries to *fix* that (v0.1
-/// changes no production behaviour); it measures how often the current retrieval path hands back a
-/// fact the user already overruled, which is the baseline a selective-update controller must beat.
+/// correct answer; the earlier ones are `superseded`. It measures how often the retrieval path
+/// hands back a fact the user already overruled.
+///
+/// The question says "currently" (E12-T1, 2026-10-25). That is the cue the real search path reads
+/// to order equally matching rows newest-first by when they were last seen
+/// (`shogun_memory::search::query_asks_for_latest`); the earlier wording "where does {p} store its
+/// records" carried no such cue, and the baselines taken with it (`BASELINE.md`, recall@1 0.000)
+/// are not comparable with runs of this wording.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TemporalWorkload;
 
@@ -371,7 +376,7 @@ impl Workload for TemporalWorkload {
                 superseded.dedup();
                 let project = PROJECTS[p % PROJECTS.len()];
                 Some(BenchQuery {
-                    ask: format!("where does {project} store its records"),
+                    ask: format!("where does {project} currently store its records"),
                     expected: vec![current],
                     superseded,
                 })

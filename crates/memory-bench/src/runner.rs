@@ -106,6 +106,9 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     // 3. Ingest, timing each write individually.
     let mut write_latency = LatencySeries::new();
     let mut fact_of: HashMap<i64, String> = HashMap::with_capacity(generated.events.len());
+    // Text length of the row behind each event id, so the context a query hands back can be
+    // sized without reading the database again (`QualitySummary::evidence_tokens_per_query`).
+    let mut chars_of: HashMap<i64, usize> = HashMap::with_capacity(generated.events.len());
     let mut writes = WriteStats {
         submitted: 0,
         deduplicated: 0,
@@ -150,6 +153,9 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
                 fact_of
                     .entry(o.event_id)
                     .or_insert_with(|| ev.fact_id.clone());
+                chars_of
+                    .entry(o.event_id)
+                    .or_insert_with(|| ev.content.chars().count());
             }
             // A failed write's latency is not a write latency; counting it would let an error path
             // that fails instantly flatter the p95.
@@ -183,6 +189,9 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
         match result {
             Ok(ids) => {
                 query_latency.record_ns(elapsed.as_nanos() as u64);
+                quality.record_evidence_chars(
+                    ids.iter().filter_map(|id| chars_of.get(id)).sum::<usize>(),
+                );
                 quality.record(&ids, &fact_of, &q.expected, &q.superseded);
             }
             Err(_) => quality.record_failure(),

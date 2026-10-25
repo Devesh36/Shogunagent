@@ -18,11 +18,12 @@ pub use excerpt::{excerpt, snippet, SNIPPET_CHARS};
 pub use federated::{
     event_places, hit_event_ids, search_federated, CanonicalEvidenceId, ComponentRanks, EventPlace, FederatedHit,
     FederatedSearchOptions, FederatedSearchResult, FederatedSource, FederatedSourceId,
-    FederatedSourceKind, MatchQualitySummary, TierMetadata, MIN_FACT_CONFIDENCE,
+    FederatedSourceKind, MatchQualitySummary, RelevanceFloor, RelevanceFloorReason, TierMetadata,
+    MIN_FACT_CONFIDENCE, RELEVANCE_FLOOR_COVERAGE,
 };
 pub use filtering::{
-    evidence_source_label, query_asks_about_screen, query_time_window, query_wants_visual_recall,
-    visual_recall_window, LocalDayBounds,
+    evidence_source_label, query_asks_about_screen, query_asks_for_latest, query_time_window,
+    query_wants_visual_recall, visual_recall_window, LocalDayBounds,
 };
 pub use grams::{maintain_gram_index, GramIndexReport};
 pub use model::SearchHit;

@@ -1042,3 +1042,307 @@ fn observed_memory_outranks_an_equally_matching_imported_claim() {
     assert!(result.hits[1].source_kind.is_imported());
     assert!(result.hits[0].fused_score > result.hits[1].fused_score);
 }
+
+// E12-T1: time bounds, newest-first ordering for "latest" questions, and the relevance floor.
+
+/// A capture written through the dedup path, as the product writes it: a byte-identical
+/// restatement collapses onto the first row and advances `last_seen_at`.
+fn capture(conn: &rusqlite::Connection, ts: i64, title: &str, text: &str) -> (i64, bool) {
+    let hash = crate::event_log::content_hash(text);
+    crate::event_log::insert_or_touch(
+        conn,
+        &NewEvent {
+            ts,
+            source: "capture",
+            kind: "text",
+            app_bundle_id: Some("com.tinyspeck.slackmacgap"),
+            window_title: Some(title),
+            content: text,
+            content_hash: &hash,
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        },
+    )
+    .unwrap()
+}
+
+const KESTREL_CHATTER: &[&str] = &[
+    "standup notes for kestrel: nothing blocking, review queue is short",
+    "Priya shared the latest kestrel dashboard screenshots in the channel",
+    "kestrel retrospective is scheduled, agenda still needs owners",
+    "someone asked whether kestrel needs another round of design review",
+    "Dana is drafting the kestrel onboarding document this week",
+    "the kestrel integration job flaked again, rerunning it now",
+    "kestrel ticket triage moved four items into the backlog",
+    "budget spreadsheet for kestrel was updated with the new headcount",
+];
+
+fn kestrel_log(conn: &rusqlite::Connection) {
+    for round in 0..4_i64 {
+        for (index, text) in KESTREL_CHATTER.iter().enumerate() {
+            let ts = 1_000 + round * 1_000 + index as i64 * 10;
+            capture(
+                conn,
+                ts,
+                "Slack — kestrel",
+                &format!("{text} [note {}]", round * 100 + index as i64),
+            );
+        }
+    }
+}
+
+#[test]
+fn relevance_floor_blanks_a_question_the_log_only_shares_a_project_name_with() {
+    let conn = crate::open_in_memory().unwrap();
+    kestrel_log(&conn);
+
+    let result = search_federated(
+        &conn,
+        "what did we decide about the kestrel compliance audit",
+        None,
+        10_000,
+        &FederatedSearchOptions::default(),
+        10,
+    )
+    .unwrap();
+    assert!(!result.relevance.passed, "{:?}", result.relevance);
+    assert_eq!(result.relevance.reason, RelevanceFloorReason::BelowFloor);
+    // Four content words (decide, kestrel, compliance, audit); the best row holds one of them.
+    let coverage = result.relevance.coverage.unwrap();
+    assert!((coverage - 0.25).abs() < 1e-6, "coverage {coverage}");
+    assert!(result.hits.is_empty(), "{:?}", result.hits);
+    assert!(result.raw_event_ranks.is_empty());
+}
+
+#[test]
+fn relevance_floor_keeps_an_answer_that_covers_most_of_the_question() {
+    let conn = crate::open_in_memory().unwrap();
+    kestrel_log(&conn);
+    let (answer, _) = capture(
+        &conn,
+        2_505,
+        "Mail — kestrel database",
+        "kestrel will store its records in PostgreSQL rather than MySQL",
+    );
+
+    let result = search_federated(
+        &conn,
+        "what did we decide about the kestrel database",
+        None,
+        10_000,
+        &FederatedSearchOptions::default(),
+        10,
+    )
+    .unwrap();
+    assert!(result.relevance.passed, "{:?}", result.relevance);
+    assert_eq!(result.relevance.reason, RelevanceFloorReason::Passed);
+    // "decide" is absent from the whole log and so weighs like an average present word: two of
+    // three content words covered.
+    let coverage = result.relevance.coverage.unwrap();
+    assert!((coverage - 2.0 / 3.0).abs() < 1e-6, "coverage {coverage}");
+    assert_eq!(result.hits[0].source_id, FederatedSourceId::Event(answer));
+}
+
+#[test]
+fn relevance_floor_reports_no_candidates_when_nothing_matches_at_all() {
+    let conn = crate::open_in_memory().unwrap();
+    kestrel_log(&conn);
+    let result = search_federated(
+        &conn,
+        "vacation photos from Hokkaido",
+        None,
+        10_000,
+        &FederatedSearchOptions::default(),
+        10,
+    )
+    .unwrap();
+    assert!(!result.relevance.passed);
+    assert_eq!(result.relevance.reason, RelevanceFloorReason::NoCandidates);
+    assert!(result.hits.is_empty());
+}
+
+#[test]
+fn a_question_about_the_latest_state_ranks_the_most_recently_restated_value_first() {
+    let conn = crate::open_in_memory().unwrap();
+    kestrel_log(&conn);
+    let (postgres, _) = capture(
+        &conn,
+        1_500,
+        "Slack — kestrel",
+        "update: kestrel will store its records in PostgreSQL from now on",
+    );
+    let (sqlite, _) = capture(
+        &conn,
+        2_500,
+        "Slack — kestrel",
+        "update: kestrel will store its records in SQLite from now on",
+    );
+    // Restating the first value collapses onto its row (dedup) and advances `last_seen_at`; its
+    // `ts` stays at 1_500, older than the SQLite row it supersedes.
+    let (again, deduplicated) = capture(
+        &conn,
+        3_500,
+        "Slack — kestrel",
+        "update: kestrel will store its records in PostgreSQL from now on",
+    );
+    assert!(deduplicated);
+    assert_eq!(again, postgres);
+
+    let latest = search_federated(
+        &conn,
+        "where does kestrel currently store its records",
+        None,
+        10_000,
+        &FederatedSearchOptions::default(),
+        10,
+    )
+    .unwrap();
+    assert!(latest.relevance.passed, "{:?}", latest.relevance);
+    assert_eq!(latest.raw_event_ranks[0].0, postgres, "{:?}", latest.raw_event_ranks);
+    assert_eq!(latest.hits[0].source_id, FederatedSourceId::Event(postgres));
+    assert_eq!(latest.raw_event_ranks[1].0, sqlite);
+
+    // The same question without the cue, but with the caller stating the intent.
+    let explicit = search_federated(
+        &conn,
+        "where does kestrel store its records",
+        None,
+        10_000,
+        &FederatedSearchOptions {
+            prefer_latest: true,
+            ..FederatedSearchOptions::default()
+        },
+        10,
+    )
+    .unwrap();
+    assert_eq!(explicit.raw_event_ranks[0].0, postgres, "{:?}", explicit.raw_event_ranks);
+
+    // Both rows match the question equally well; without the cue the shipped ranking decides and
+    // the floor still passes — the two statements are evidence either way.
+    let plain = search_federated(
+        &conn,
+        "where does kestrel store its records",
+        None,
+        10_000,
+        &FederatedSearchOptions::default(),
+        10,
+    )
+    .unwrap();
+    assert!(plain.relevance.passed);
+    let top_two: Vec<i64> = plain.raw_event_ranks.iter().take(2).map(|(id, _)| *id).collect();
+    assert!(top_two.contains(&postgres) && top_two.contains(&sqlite), "{top_two:?}");
+}
+
+#[test]
+fn latest_ordering_does_not_promote_a_recent_partial_match_over_an_older_full_one() {
+    let conn = crate::open_in_memory().unwrap();
+    kestrel_log(&conn);
+    let (full, _) = capture(
+        &conn,
+        1_200,
+        "Mail — kestrel vendor",
+        "kestrel picked the Dublin vendor over the Lisbon one",
+    );
+    // Newer, mentions the project but not the vendor decision.
+    capture(
+        &conn,
+        9_000,
+        "Slack — kestrel",
+        "kestrel changelog entry still needs a proper description [note 999]",
+    );
+    let result = search_federated(
+        &conn,
+        "which vendor did kestrel pick, latest",
+        None,
+        10_000,
+        &FederatedSearchOptions::default(),
+        10,
+    )
+    .unwrap();
+    assert_eq!(result.raw_event_ranks[0].0, full, "{:?}", result.raw_event_ranks);
+}
+
+#[test]
+fn an_explicit_time_range_bounds_the_event_lane_both_ways() {
+    let conn = crate::open_in_memory().unwrap();
+    let (dublin, _) = capture(&conn, 1_000, "Mail", "quarry vendor picked Dublin for onboarding");
+    let (lisbon, _) = capture(&conn, 5_000, "Mail", "quarry vendor picked Lisbon for onboarding");
+
+    let early = search_federated(
+        &conn,
+        "quarry vendor onboarding",
+        None,
+        10_000,
+        &FederatedSearchOptions {
+            since_ts: Some(0),
+            to_ts: Some(2_000),
+            ..FederatedSearchOptions::default()
+        },
+        10,
+    )
+    .unwrap();
+    let early_ids: Vec<i64> = early.raw_event_ranks.iter().map(|(id, _)| *id).collect();
+    assert_eq!(early_ids, vec![dublin], "{early_ids:?}");
+
+    let late = search_federated(
+        &conn,
+        "quarry vendor onboarding",
+        None,
+        10_000,
+        &FederatedSearchOptions {
+            since_ts: Some(4_000),
+            to_ts: Some(6_000),
+            ..FederatedSearchOptions::default()
+        },
+        10,
+    )
+    .unwrap();
+    let late_ids: Vec<i64> = late.raw_event_ranks.iter().map(|(id, _)| *id).collect();
+    assert_eq!(late_ids, vec![lisbon], "{late_ids:?}");
+
+    // `to_ts` is exclusive: a window ending exactly at the row's timestamp leaves it out.
+    let edge = search_federated(
+        &conn,
+        "quarry vendor onboarding",
+        None,
+        10_000,
+        &FederatedSearchOptions {
+            since_ts: Some(1_000),
+            to_ts: Some(5_000),
+            ..FederatedSearchOptions::default()
+        },
+        10,
+    )
+    .unwrap();
+    let edge_ids: Vec<i64> = edge.raw_event_ranks.iter().map(|(id, _)| *id).collect();
+    assert_eq!(edge_ids, vec![dublin], "{edge_ids:?}");
+}
+
+#[test]
+fn latest_cues_are_recognised_in_english_and_japanese_and_not_elsewhere() {
+    for question in [
+        "where does kestrel currently store its records",
+        "latest on the Orchid launch",
+        "what is the current price",
+        "Kestrel vendor now",
+        "青葉プロジェクトの最新のリリース日",
+        "現在の価格",
+        "いまの担当者",
+    ] {
+        assert!(crate::search::query_asks_for_latest(question), "{question}");
+    }
+    for question in [
+        "yesterday meeting",
+        "田中さんの件",
+        "what did we decide about the kestrel database",
+        "nowhere to be found",
+    ] {
+        assert!(!crate::search::query_asks_for_latest(question), "{question}");
+    }
+    // The cue is not searched for as text.
+    assert!(!lexical_terms("where does kestrel currently store its records")
+        .iter()
+        .any(|term| term == "currently"));
+    assert!(!lexical_terms("現在の価格").iter().any(|term| term == "現在"));
+}

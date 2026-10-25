@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use memory_bench::config::{
     BenchConfig, DEFAULT_EVENTS, DEFAULT_K, DEFAULT_QUERIES, DEFAULT_WARMUP, DEFAULT_WRITE_BATCH,
 };
+use memory_bench::harness::{self, HarnessConfig};
 use memory_bench::{report, runner};
 
 const USAGE: &str = "\
@@ -16,6 +17,7 @@ memory-bench — ShogunAI memory ingestion and retrieval benchmark
 
 USAGE:
     memory-bench [OPTIONS]
+    memory-bench harness [HARNESS OPTIONS]      (see HARNESS below)
 
 OPTIONS:
     --workload <NAME>   Corpus to generate. Default: clean
@@ -67,11 +69,26 @@ REPRODUCIBILITY:
     lexical-only runs cannot certify an SLO. Dirty, unknown-provenance, failed, or undersampled
     runs are invalid for automated comparison.
 
+HARNESS (E12-T2 — the same-harness publication, docs/benchmarks/README.md):
+    memory-bench harness [--seeds N] [--first-seed N] [--events N] [--k N] [--warmup N]
+                         [--path hybrid|federated] [--db-dir DIR] [--out FILE]
+    Runs query_p95 (clean), temporal_recall_at_1, abstention_false_evidence and
+    multi_session_coverage_at_5 over N seeds (default 10, from 42) at --events (default 100000)
+    on the federated path (the daemon's), then writes benchmarks.json (default
+    docs/benchmarks/benchmarks.json) with mean, 95% interval, tokens per answer, write-path
+    model cost and p95 per suite, plus not-run entries for the OmniMemEval and Mem0 harnesses
+    (SHOGUN_OMNIMEMEVAL_DIR / SHOGUN_MEM0_HARNESS_DIR). No model is called. --db-dir names a
+    parent directory for one fresh scratch database per run; without it every run is in-memory.
+
 EXAMPLES:
     memory-bench --workload clean --events 100000 --queries 500 --seed 42 --db /tmp/bench-run --out reports
     memory-bench --workload duplicate --events 10000 --queries 200
-    memory-bench --workload temporal --events 50000 --queries 12
+    memory-bench --workload temporal --events 50000 --queries 12 --path federated
+    memory-bench harness --seeds 10 --events 100000 --out docs/benchmarks/benchmarks.json
 ";
+
+/// Default location of the published artifact.
+const DEFAULT_HARNESS_OUT: &str = "docs/benchmarks/benchmarks.json";
 
 /// Parse `--flag value` pairs. Returns the usage string as an error for anything malformed, so a
 /// typo prints help rather than silently running a different benchmark than the one intended.
@@ -150,8 +167,102 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
     Ok(Some(cfg))
 }
 
+/// Parse `memory-bench harness ...`. Same hand-rolled `--flag value` style as [`parse`].
+fn parse_harness(args: &[String]) -> Result<Option<(HarnessConfig, String)>, String> {
+    let mut seeds = harness::DEFAULT_SEEDS;
+    let mut first_seed = harness::DEFAULT_FIRST_SEED;
+    let mut cfg = HarnessConfig::publish(DEFAULT_EVENTS);
+    let mut out = DEFAULT_HARNESS_OUT.to_string();
+
+    let mut i = 0;
+    while i < args.len() {
+        let flag = args[i].as_str();
+        if flag == "-h" || flag == "--help" {
+            return Ok(None);
+        }
+        let value = args
+            .get(i + 1)
+            .ok_or_else(|| format!("{flag} needs a value"))?;
+        let num = |what: &str| -> Result<usize, String> {
+            value
+                .parse::<usize>()
+                .map_err(|_| format!("{what} must be a number, got {value:?}"))
+        };
+        match flag {
+            "--seeds" => seeds = num("--seeds")?,
+            "--first-seed" => {
+                first_seed = value
+                    .parse::<u64>()
+                    .map_err(|_| format!("--first-seed must be a number, got {value:?}"))?
+            }
+            "--events" => cfg.events = num("--events")?,
+            "--k" => cfg.k = num("--k")?,
+            "--warmup" => cfg.warmup = num("--warmup")?,
+            "--write-batch" => cfg.write_batch = num("--write-batch")?,
+            "--path" => {
+                cfg.search_path = memory_bench::backend::SearchPath::parse(value)
+                    .ok_or_else(|| format!("--path must be hybrid|federated, got {value:?}"))?
+            }
+            "--db-dir" => cfg.db_dir = Some(value.clone()),
+            "--out" => out = value.clone(),
+            other => return Err(format!("unknown harness flag {other:?}")),
+        }
+        i += 2;
+    }
+    if seeds == 0 {
+        return Err("--seeds must be at least 1".to_string());
+    }
+    cfg.seeds = (0..seeds as u64)
+        .map(|offset| first_seed.saturating_add(offset))
+        .collect();
+    if out.is_empty() {
+        return Err("--out must not be empty".to_string());
+    }
+    cfg.validate().map_err(|error| error.to_string())?;
+    Ok(Some((cfg, out)))
+}
+
+fn run_harness(args: &[String]) -> ExitCode {
+    let (cfg, out) = match parse_harness(args) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => {
+            print!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("error: {e}\n");
+            print!("{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let total = harness::SUITES.len() * cfg.seeds.len();
+    let mut done = 0usize;
+    let benchmarks = match harness::run(&cfg, |suite, seed, _| {
+        done += 1;
+        eprintln!("[{done}/{total}] {suite} seed {seed}");
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("harness failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    print!("{}", harness::render_summary(&benchmarks));
+    match harness::write(&benchmarks, &out) {
+        Ok(()) => println!("\nWrote {out}\n"),
+        Err(e) => {
+            eprintln!("could not write {out}: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("harness") {
+        return run_harness(&args[1..]);
+    }
     let cfg = match parse(&args) {
         Ok(Some(c)) => c,
         Ok(None) => {
@@ -262,6 +373,47 @@ mod tests {
         assert!(parse(&args(&["--k", "0"])).is_err());
         assert!(parse(&args(&["--k", "1001"])).is_err());
         assert!(parse(&args(&["--warmup", "100001"])).is_err());
+    }
+
+    #[test]
+    fn harness_defaults_are_the_publishing_configuration() {
+        let (cfg, out) = parse_harness(&[]).expect("parse").expect("config");
+        assert_eq!(cfg.seeds.len(), harness::DEFAULT_SEEDS);
+        assert_eq!(cfg.seeds[0], harness::DEFAULT_FIRST_SEED);
+        assert_eq!(cfg.events, DEFAULT_EVENTS);
+        assert_eq!(
+            cfg.search_path,
+            memory_bench::backend::SearchPath::Federated
+        );
+        assert!(cfg.db_dir.is_none());
+        assert_eq!(out, DEFAULT_HARNESS_OUT);
+    }
+
+    #[test]
+    fn harness_flags_are_applied_and_bad_ones_rejected() {
+        let (cfg, out) = parse_harness(&args(&[
+            "--seeds",
+            "3",
+            "--first-seed",
+            "100",
+            "--events",
+            "2000",
+            "--out",
+            "x.json",
+            "--db-dir",
+            "/tmp/h",
+        ]))
+        .expect("parse")
+        .expect("config");
+        assert_eq!(cfg.seeds, vec![100, 101, 102]);
+        assert_eq!(cfg.events, 2_000);
+        assert_eq!(out, "x.json");
+        assert_eq!(cfg.db_dir.as_deref(), Some("/tmp/h"));
+        assert!(parse_harness(&args(&["--seeds", "0"])).is_err());
+        assert!(parse_harness(&args(&["--nope", "1"])).is_err());
+        // Too small for the multi-session suite's 48 split answers.
+        assert!(parse_harness(&args(&["--events", "10"])).is_err());
+        assert!(parse_harness(&args(&["--help"])).expect("parse").is_none());
     }
 
     #[test]

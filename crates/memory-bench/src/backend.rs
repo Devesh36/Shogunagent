@@ -101,6 +101,10 @@ pub trait MemoryBackend {
     fn write(&mut self, ev: &BenchEvent) -> Result<WriteOutcome, BackendError>;
 
     /// Retrieve up to `k` event ids, best first.
+    ///
+    /// An empty list is a legitimate answer: the federated path returns nothing when no row
+    /// covers enough of the question (`shogun_memory::search::RelevanceFloor`), and the
+    /// abstention workload scores exactly that.
     fn search(&self, query: &str, k: usize) -> Result<Vec<i64>, BackendError>;
 
     /// Rows durably held. Compared against writes submitted to get write amplification.
@@ -215,6 +219,10 @@ impl MemoryBackend for ShogunBackend {
             SearchPath::Hybrid => {
                 let opts = SearchOptions {
                     since_ts: None,
+                    // The as-of bound every product caller carries (`now`): rows the corpus has
+                    // not "seen yet" cannot answer, and passing it keeps the bound's own code
+                    // path under measurement (E12-T1).
+                    until_ts: Some(self.now_ms),
                     depth: SearchDepth::WarmOnly,
                     recency_epsilon: self.recency_weight,
                     ..Default::default()
@@ -234,7 +242,14 @@ impl MemoryBackend for ShogunBackend {
                 // right comparison: the corpus contains only `event_log` rows, so the clustered
                 // `hits` would be the same rows wearing a different shape, and taking them would
                 // mix a clustering decision into a retrieval measurement.
+                // The daemon (`shogun-core/src/daemon/search.rs`) always hands the federated
+                // search both bounds of the resolved range; so does the bench, over the whole
+                // corpus, so `since_ts` / `to_ts` filtering is on the measured path and a
+                // question's own recency cue ("currently") is read by the search itself, not
+                // simulated here (E12-T1).
                 let opts = shogun_memory::search::FederatedSearchOptions {
+                    since_ts: Some(0),
+                    to_ts: Some(self.now_ms),
                     depth: SearchDepth::WarmOnly,
                     ..Default::default()
                 };
