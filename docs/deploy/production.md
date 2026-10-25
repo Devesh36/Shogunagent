@@ -43,7 +43,8 @@ required.
       hashes, tenants; never a body)
         │
         │  SHOGUN_SIDECAR_URL + SHOGUN_SIDECAR_ADMIN_TOKEN (Team sync, audit export, purges,
-        │  approvals) and, after E34, the per-principal /mcp relay
+        │  approvals, connector tokens and the connect flow, E50) and, after E34, the
+        │  per-principal /mcp relay
         ▼
      Sidecar fleet: `shogun-api --multi` per region (container image from release.yml)
      per-principal SQLCipher stores on volumes; data keys wrapped by the region's KMS key
@@ -164,8 +165,7 @@ psql "<relay connection string as shogun_relay>" -v ON_ERROR_STOP=1 -c 'SET sear
 | 18 | `apps/api/sql/enterprise-permissions.sql` | `shogun_relay` | with 17 | after 17 |
 | 19 | `apps/api/sql/live-store.sql` | `shogun_relay` | before `LIVE_AI_ENABLED=1` | live lane admission (#1101) |
 | 20 | `apps/api/sql/live-store-access.sql` | `shogun_relay` | with 19 | after 19; re-runnable since E48 |
-| 21 | `apps/api/sql/connector-tokens.sql` | `shogun_relay` | before the connector-token route (`docs/api/connector-tokens.md`) is served | hosted connector token store; read by that route (E48) only in a runtime that supplies a KMS key wrapper, which none does yet |
-| 22 | `apps/api/sql/connector-tokens-permissions.sql` | `shogun_relay` | with 21 | after 21 (E48) |
+| 21–22 | — (`connector-tokens.sql` and its permissions file were removed in E50) | — | never | connector credentials live in each principal's sidecar token store (`docs/api/connector-tokens.md`); a database that already has `relay.connector_tokens` may drop it, nothing reads or writes it |
 | 23 | `apps/router/sql/settlement-outbox.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | the durable outbox (E33) |
 | 24 | `apps/router/sql/settlement-outbox-permissions.sql` | router role | with 23 | after 23 |
 | 25 | `apps/router/sql/run-idempotency.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | cross-isolate run idempotency (E48); without it every metered run is refused `503` (the store fails closed) |
@@ -211,7 +211,8 @@ $ROUTER hyperdrive create shogunagent-router-outbox --caching-disabled \
 1. Create the region's KMS key (deletion protection on) and the workload identity grant (§3.2 there).
 2. Create the Kubernetes Secret with the sidecar's secrets (§5.4 below): principal tokens, admin token,
    approval signing key (the same value the Worker gets as `SHOGUN_APPROVAL_SIGNING_KEY`), KMS
-   credentials if not IRSA / Workload Identity.
+   credentials if not IRSA / Workload Identity, and the connect flow's OAuth client secrets
+   (`SHOGUN_CONNECT_*`, E50) once the vendor apps exist.
 3. `helm install shogunagent deploy/helm/shogunagent -n shogunagent --create-namespace -f <region values>`
    with `region`, `keyProvider.*`, `serviceAccount.annotations`, `secrets.existingSecret`, the image
    tag, and `sharding.acknowledged=true` only if `replicaCount > 1`.
@@ -287,7 +288,8 @@ Each lane: apply its SQL (step 2), set its secrets, add its `vars` in a PR, depl
 4. Approvals: `SHOGUN_APPROVAL_SIGNING_KEY`, `WEBHOOK_SIGNING_SECRET`, `SHOGUN_SIDECAR_URL`; Slack
    trio only if wanted. Needs the open item in §1.
 5. Router wallet and payouts: `ROUTER_SETTLEMENT_TOKEN` (same value as the router's),
-   `PAYOUTS_STATE_SECRET`.
+   `PAYOUTS_STATE_SECRET`. Connector credentials (E50, once the vendor apps of §9 exist):
+   `SHOGUN_SIDECAR_ADMIN_TOKEN` with the `/mcp` relay settings, then `CONNECTOR_CONNECT_SECRET`.
 6. Enterprise: `ENTERPRISE_SECRET`, `ENTERPRISE_ENABLED: "1"`, `SHOGUN_REGION`,
    `SHOGUN_REGION_ENDPOINTS`, `SHOGUN_SIDECAR_ADMIN_TOKEN`.
 7. Live lanes (#1101): `OPENAI_LIVE_API_KEY`, `GROQ_LIVE_API_KEY`, `LIVE_HMAC_KEY`,
@@ -315,10 +317,11 @@ Each lane: apply its SQL (step 2), set its secrets, add its `vars` in a PR, depl
    principal's own token per run from the relay's `POST /v1/internal/router/connector-token`
    (`docs/api/connector-tokens.md`), and the development flag is ignored (logged
    `dev_shared_credentials_ignored`). The relay serves that route (E48, with
-   `ROUTER_SETTLEMENT_TOKEN`), but it opens the sealed `connector_tokens` rows only in a runtime that
-   supplies a KMS key wrapper, and none does yet: until then every caller gets
-   `connector_not_connected` and the relay logs `connector_vault_unconfigured`. Keep those tools out
-   of the hosted catalog until it does (§9).
+   `ROUTER_SETTLEMENT_TOKEN`) from the principal's sidecar (E50): it needs the `/mcp` relay's
+   transport and bearer source and `SHOGUN_SIDECAR_ADMIN_TOKEN`; without them every caller gets
+   `connector_not_connected` and the relay logs `connector_vault_unconfigured`. A human connects an
+   account through the hosted connect flow (`CONNECTOR_CONNECT_SECRET` on the relay, the vendor
+   clients on the sidecar). Keep those tools out of the hosted catalog until §9's item is done.
 5. After the first request, `wrangler tail` shows the boot words (fixed, one per decision):
    `wallet_wired_with_outbox`, `idempotency_postgres`, `connector_credentials_per_caller`. Any of
    `wallet_outbox_missing`, `idempotency_in_memory`, `wallet_in_memory_dev` or
@@ -459,7 +462,8 @@ Enterprise (`ENTERPRISE_ENABLED=1`, agent API on):
 | `SHOGUN_REGION_ENDPOINTS` | var | no | JSON of the other regions' origins, only named in `421` answers |
 | `SCIM_DELETE_GRACE_DAYS` | var | no | default 30 |
 | `SSO_CLOCK_SKEW_SECS` | var | no | default 120 |
-| `SHOGUN_SIDECAR_ADMIN_TOKEN` | secret | no | the sidecar's `SHOGUN_ADMIN_TOKEN`; Team sync, audit export, purges |
+| `SHOGUN_SIDECAR_ADMIN_TOKEN` | secret | no | the sidecar's `SHOGUN_ADMIN_TOKEN`; Team sync, audit export, purges, and (E50, with the `/mcp` relay settings) the router's connector tokens from the principal's sidecar |
+| `CONNECTOR_CONNECT_SECRET` | secret | no | E50: ≥ 32 characters; seals the hosted connect flow's links and OAuth states. Set, with the sidecar vault, = `POST /v1/connectors/{provider}/connect`, the human's page and `/v1/connectors/callback` are served (the sidecar's `SHOGUN_CONNECT_REDIRECT_URI` names that callback). Rotating it voids links and flows in progress only |
 
 Live lanes (#1101; read by `src/worker.ts` and `src/live-config.ts` only when `LIVE_AI_ENABLED=1`):
 
@@ -505,7 +509,7 @@ read **only in development** with `ROUTER_DEV_SHARED_CREDENTIALS=1` and no `ROUT
 **never set in production**, see §3 step 8). In production each run fetches the calling principal's
 token for the slot below from the relay (`docs/api/connector-tokens.md`):
 
-| Name (development only) | Connectors | Production source (slot in `connector_tokens`) |
+| Name (development only) | Connectors | Production source (slot in the principal's sidecar token store) |
 |---|---|---|
 | `GOOGLE_OAUTH_ACCESS_TOKEN` | `gmail`, `calendar` | `gmail-tokenset`, `gcal-tokenset` |
 | `GITHUB_TOKEN` | `github` | `github-tokenset` |
@@ -543,7 +547,11 @@ Not covered by `check-env-docs.mjs` (the sidecar is Rust); `deploy/README.md` is
 | `SHOGUN_APPROVAL_SIGNING_KEY` | secret | with approvals | same value as the Worker's |
 | `SHOGUN_APPROVAL_BASE_URL` | env | with approvals | the public approval page |
 | `SHOGUN_API_PORT` | env | no | loopback port, default 7464 |
-| `SHOGUN_TOKEN_STORE_DIR` | env | no | default `<root>/.tokens` |
+| `SHOGUN_TOKEN_STORE_DIR` | env | no | default `<root>/.tokens`; holds the connector grants (E50): keep it on the PVC |
+| `SHOGUN_CONNECT_REDIRECT_URI` | env | with the connect flow | E50: `https://<api host>/v1/connectors/callback`, registered with each vendor |
+| `SHOGUN_CONNECT_GOOGLE_CLIENT_ID`, `SHOGUN_CONNECT_GOOGLE_CLIENT_SECRET` | env / secret | with Gmail / Calendar | E50: a Google "Web application" client; the secret is required |
+| `SHOGUN_CONNECT_SLACK_CLIENT_ID`, `SHOGUN_CONNECT_SLACK_CLIENT_SECRET` | env / secret | with Slack | E50: user scopes; the secret is optional for a PKCE-enabled app |
+| `SHOGUN_CONNECT_LINEAR_CLIENT_ID`, `SHOGUN_CONNECT_LINEAR_CLIENT_SECRET` | env / secret | with Linear | E50: the secret is optional |
 | `SHOGUN_REGION` | env | yes | set by the chart from `region` |
 | `SHOGUN_AWS_KMS_KEY_ID`, `SHOGUN_AWS_KMS_REGION`, `SHOGUN_AWS_KMS_ENDPOINT`, `SHOGUN_AWS_STS_ENDPOINT`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` | env | with `aws-kms` | IRSA preferred over static `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
 | `SHOGUN_GCP_KMS_KEY`, `SHOGUN_GCP_KMS_ENDPOINT`, `SHOGUN_GCP_ACCESS_TOKEN_FILE` | env | with `gcp-kms` | Workload Identity preferred |
@@ -687,18 +695,30 @@ Owner decisions still open:
       `docs/decisions/0002-x402.md`); `x402-payments.sql` not required.
 - [ ] **Worker → sidecar path** (§1) and E34 live, so `/mcp` stops answering 503.
 - [ ] **Per-principal connector credentials** for the router's first-party Gmail, Calendar, GitHub,
-      Linear and Slack tools: the router side (E48, `caller_connector`) and the relay's
-      `POST /v1/internal/router/connector-token` (`docs/api/connector-tokens.md`) are built, but no
-      runtime supplies the KMS key wrapper that opens `connector_tokens` rows, nothing writes those
-      rows (the hosted connect flow), and no OAuth refresh path is wired. Until all three exist,
-      leave those tools out of the hosted catalog at launch.
+      Linear and Slack tools (`docs/api/connector-tokens.md`). Built: the router side (E48,
+      `caller_connector`); the relay's `POST /v1/internal/router/connector-token`, served from the
+      principal's sidecar (E50), which opens the grant from its KMS-keyed token store, refreshes it
+      through the core's egress under a per-(principal, slot) lock and writes it back; the hosted
+      connect flow (`POST /v1/connectors/{provider}/connect` → the human's page → the vendor →
+      `/v1/connectors/callback`, the code exchanged and stored by the sidecar) for Gmail, Calendar,
+      Slack and Linear. Still needed before any of them is listed in the hosted catalog: (a) the
+      vendor OAuth apps (Google "Web application" client with the restricted `gmail.modify` scope
+      verified and its security assessment passed, a Slack app with user scopes, a Linear OAuth
+      app), their ids and secrets in the sidecar's `SHOGUN_CONNECT_*` and the callback registered
+      with each; (b) the Worker → sidecar path above, with `SHOGUN_SIDECAR_ADMIN_TOKEN` and
+      `CONNECTOR_CONNECT_SECRET` on the relay; (c) the sidecar's NetworkPolicy egress to the
+      vendors' token endpoints (`deploy/README.md` §3.3); (d) one staging run per provider: connect,
+      run a tool, let the token expire and run again (refresh), revoke at the vendor and see
+      `connector_not_connected`. GitHub stays out until the core has a hosted GitHub flow (device
+      flow on the sidecar, or a GitHub App web flow). A disconnect and status read on all three
+      faces is a follow-up, not a launch blocker for the four connectable tools.
 - [ ] **The deploy workflow** (`.github/workflows/deploy.yml`, §3.1) is written and has never run:
       create the `staging` and `production` environments with their reviewers, secrets and
       variables, then do one dry run per component and environment before the first real deploy;
       or decide in writing to keep deploying from the owner's machine.
 - [ ] **OpenAI directory credit rule** resolved (`docs/directories/openai-credit-rule.md`).
 - [ ] **RLS for the remaining relay tables** — files written (E48: `approval-webhooks-`,
-      `provider-payouts-`, `x402-payments-`, `connector-tokens-permissions.sql`); apply them (§3 step
+      `provider-payouts-`, `x402-payments-`; `connector-tokens-permissions.sql` was removed in E50); apply them (§3 step
       2) and run the step 2 check, which must return no row.
 - [ ] **TypeSafe retention terms** for text on the company key (inherited open item).
 - [ ] **Anthropic zero retention**: apply, or state the 29-day Batch result window in the privacy

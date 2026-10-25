@@ -23,6 +23,7 @@ code that enforces it; a mitigation without a pointer is a hope and is listed un
 | A7 Approval decisions (L3) | Sidecar approval queue; decision tokens `sat1.…` | The human gate on external sends (invariant 3) |
 | A8 Tenant directory, SSO configuration, SCIM tokens | Enterprise store (`apps/api/src/enterprise/store.ts`) | Who is an admin of a tenant |
 | A9 Operational telemetry (logs, `/metrics`, OTLP spans) | Workers Logs, the operator's collector | Must stay content-free; also reconnaissance for an attacker |
+| A10 Connector grants (vendor access and refresh tokens for Gmail, Calendar, Slack, Linear, GitHub; E50) | The principal's sidecar token store (`SHOGUN_TOKEN_STORE_DIR`), sealed per principal under a key derived from its KMS-unwrapped store key (`tenancy/credentials.rs`); an access token transits the gateway and the router for one vendor request | Acting as the human at the vendor: read mail, send, post |
 
 ## 2. Trust boundaries
 
@@ -34,6 +35,8 @@ agent / MCP client ──(1)──▶ gateway (apps/api, Workers) ──(2)─�
 human approver ──(6)──▶ approval page / Slack / webhooks ──▶ gateway ──▶ sidecar
 IdP (customer) ◀──(8)── SSO / SCIM ──▶ gateway (enterprise lane)
 operator ──(9)──▶ /metrics, admin routes, OTLP collector
+human ──(10)──▶ connect page / callback (gateway) ──▶ sidecar connector routes ──▶ vendor OAuth token endpoints
+router ──(10)──▶ gateway connector-token route ──▶ sidecar connector routes
 ```
 
 ## 3. STRIDE per boundary
@@ -118,6 +121,23 @@ operator ──(9)──▶ /metrics, admin routes, OTLP collector
 | I: OTLP credentials leaking | `OTEL_EXPORTER_OTLP_HEADERS` is held in config (apps/api) or read at send time (router `transport.ts`); https required except a loopback collector; URL userinfo refused |
 | D: collector outage slowing requests | Spans are buffered (bounded) and posted off the request path; failures drop and count (`observability.ts`) |
 
+### (10) Connector credentials (E50)
+
+The router's first-party tools need the calling principal's vendor token; a human connects the
+account. Contract: `docs/api/connector-tokens.md`.
+
+| Threat | Mitigation (code) |
+|---|---|
+| S: the router (or anyone with `ROUTER_SETTLEMENT_TOKEN`) asking for another principal's token | The principal comes from the caller's own key in `X-Caller-Authorization` (hash lookup, `run` scope), never the body (`apps/api/src/connector-tokens.ts`); the gateway names it to the sidecar only by that principal's derived `sgw1` bearer, which the sidecar verifies (`server_governance.rs` `connector_principal`); unknown body fields are `400` on both hops |
+| S/E: an agent bearer reaching the sidecar's connector routes | They need the operator's admin credential *and* the principal's bearer; an agent bearer alone is `403 admin_required` (`crates/shogun-core/tests/connector_vault.rs`) |
+| E: an agent connecting an account by itself (granting itself a vendor credential) | The agent route only returns a link (`202`, `next_action: ask_human`, `connector-connect.ts`); Continue needs the page's CSRF cookie and same origin; the callback needs the flow cookie of the browser that pressed Continue, so a consent URL forwarded to another person cannot bind their account to this principal (`apps/api/test/connector-connect.test.ts`) |
+| T: a forged or replayed callback | The state is sealed (AES-256-GCM, `CONNECTOR_CONNECT_SECRET`, purpose-bound), expires in 10 minutes, and the sidecar's pending flow is single use and bound to the principal that started it (`hosted_connect.rs`); PKCE S256 with the verifier only in the sidecar's memory |
+| I: tokens, codes or refresh tokens leaking | The refresh token never leaves the sidecar; the access token crosses the gateway in one `no-store` response and the router drops it after one vendor request; the code passes through one request; logs carry route templates and fixed words only (`logging.ts` `routeTemplate` never includes a query); `.expose(` only in the allowlisted `hosted_connect.rs` / `connector_vault.rs`; the gateway stores nothing (the E48 `connector_tokens` table was removed) |
+| I: a grant read across principals | Grants are keyed principal × slot in the file-sealed store, sealed with the principal's own key; `hosted_connect` tests and `connector_vault.rs` prove one principal's bearer reads only its own slot |
+| T/D: two runs burning a rotating refresh token | A per-(principal, slot) lock around read-refresh-write with a re-read under the lock (`hosted_connect.rs`, concurrency test) |
+| D: vendor or sidecar outage | `503` with `Retry-After: 5`, the run settles at $0; a still-valid token is served when a refresh does not get through; a failed refresh never deletes the grant |
+| R: who connected what | The sidecar logs nothing per call today; see R10 |
+
 ## 4. Mitigations mapped to invariant guards
 
 | Guard | Holds |
@@ -154,6 +174,7 @@ operator ──(9)──▶ /metrics, admin routes, OTLP collector
 | R7 | **Single-principal write throughput**: concurrent ingest to one principal serialises on its SQLCipher file (p95 ~200 ms at 8 concurrent writers locally, `docs/slo.md`). A noisy agent can raise latency for every agent of that principal. | Low | Per-principal write queue with back-pressure (429 with `Retry-After`) |
 | R8 | Secret scanning in CI. | Low | Mitigated (E48): `secret-scan.yml` runs gitleaks with `.gitleaks.toml`; the first CI run may need allowlist entries for test values |
 | R9 | Fuzzing: seeded property tests on stable; libFuzzer targets in `fuzz/` need nightly. | Low | Mitigated (E48): `fuzz-nightly.yml` runs both targets time-boxed on a schedule |
+| R10 | **Connector credentials (E50): no per-principal audit of connects and refreshes, and the pending connect flows live in one sidecar's memory.** A connect or a refresh writes no row in the principal's audit / traceability log, and vendor token-endpoint calls are not on the principal's traceability screen; a sidecar restart drops flows in progress (the human starts again). The sidecar also needs egress to the vendors' token endpoints, which the default NetworkPolicy does not open. | Low | Record `connector.connected` / `connector.refreshed` (ids, slot, time; no token) in the principal's audit log; open the egress per vendor with `egress.extraRules` (`deploy/README.md` §3.3) |
 
 ## 7. Fuzzing findings (E38)
 
