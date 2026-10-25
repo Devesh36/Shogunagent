@@ -49,9 +49,10 @@ Source: `Torutesu/ShogunAI-` at the commit recorded in `docs/shogunai-origin/SOU
 ## Verification at migration time (Linux)
 
 - `cargo check --workspace --all-targets --locked`: pass
-- `cargo clippy` for the workspace and the `db` / `exec` / `daemon-server` / `server` feature builds: see the commit message of the migration commit
+- `cargo clippy --workspace --all-targets --locked`, plus `-p shogun-core --features db` / `exec` / `daemon-server` and `-p shogun-mcp --features server`: pass, zero warnings
+- `cargo test --workspace --locked --no-fail-fast`, plus `-p shogun-core --features daemon-server` and `-p shogun-mcp --features server`: pass, zero failures
 - `scripts/check-{http-egress,secret-exposure,media-writes,log-hygiene,migrations,batch-source-filter}.py --self-test` and full runs: pass
-- `pnpm --filter @shogun-ai/api typecheck` and `test:node`: see the commit message
+- `pnpm --filter @shogun-ai/api typecheck` and `test:node`: pass (the Workers-pool suite and the Postgres-backed tests need `DATABASE_URL` and were not run here)
 
 ## Keeping in step with ShogunAI
 
