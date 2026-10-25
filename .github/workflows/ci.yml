@@ -83,6 +83,8 @@ jobs:
       # Invariant 12: the committed agent-readable files equal what the generators produce.
       - name: llms.txt / llms-full.txt are generated from the docs (E10-T4)
         run: node scripts/gen-llms-txt.mjs --check
+      - name: /privacy and /terms are generated from docs/legal (E23)
+        run: node scripts/gen-legal-pages.mjs --check
       - name: the agent card's skills are generated from SKILL.md (E10-T3)
         run: node scripts/gen-agent-skills.mjs --check
       - name: server.json validates against the MCP Registry schema (E10-T2)
