@@ -25,6 +25,7 @@ pub mod config;
 pub mod embedding;
 pub mod harness;
 pub mod metrics;
+pub mod multilingual;
 pub mod report;
 pub mod resources;
 pub mod rng;

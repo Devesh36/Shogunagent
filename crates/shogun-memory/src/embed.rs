@@ -80,7 +80,21 @@ impl ModelSpec {
     pub fn onnx_file(&self) -> Option<&'static str> {
         self.files.iter().map(|f| f.local).find(|name| name.ends_with(".onnx"))
     }
+
+    /// Whether this build pins the model's bytes: a 40-hex commit and a 64-hex SHA-256 for every
+    /// file. `shogun models fetch` downloads only a pinned model and `shogun models verify` checks
+    /// only against real pins; a spec whose pins are [`UNPINNED`] placeholders is refused by both
+    /// (E43: the multilingual model's pins could not be read offline, so the operator records
+    /// them once, `docs/embedding-model-setup.md`).
+    pub fn is_pinned(&self) -> bool {
+        let hex = |value: &str, len: usize| value.len() == len && value.chars().all(|c| c.is_ascii_hexdigit());
+        hex(self.revision, 40) && !self.files.is_empty() && self.files.iter().all(|file| hex(file.sha256, 64))
+    }
 }
+
+/// The placeholder for a revision or SHA-256 this build does not know. A spec carrying it is not
+/// [`ModelSpec::is_pinned`]: nothing downloads it, nothing verifies against it.
+pub const UNPINNED: &str = "";
 
 /// The vector lane's cutoff for a space that is no known model (the hashing [`MockEmbedder`] of
 /// unit tests, an `unspecified` space): the value the lane was first tuned with, for e5.
@@ -163,16 +177,75 @@ pub const NOMIC_EMBED_TEXT_V15: ModelSpec = ModelSpec {
     max_l2_distance: NOMIC_MAX_L2_DISTANCE,
 };
 
-/// The developer model ShogunAI used (`multilingual-e5-small`, MIT, 384 native). Not fetchable by
-/// `shogun models fetch`: place `model.onnx` and `tokenizer.json` by hand
-/// (`docs/shogunai-origin/embedding-model-setup.md`).
+/// `multilingual-e5-small`'s cutoff: **0.63**, i.e. cosine ≥ 0.80 between the `query:` vector and
+/// the `passage:` vector (both mean-pooled over the attention mask and L2-normalised, 384 native).
+/// Conservative on purpose, favouring abstention, like nomic's:
+///
+/// - e5 was trained with an InfoNCE temperature of 0.01, which packs its cosine scores into a
+///   narrow high band: its model card says scores sit around 0.7–1.0 even for unrelated text.
+///   The 1.0 this spec carried before E43 (cosine ≥ 0.5, the value ShogunAI's vector lane was
+///   first tuned with) therefore admits nearly every row of a store as a neighbour: no abstention.
+/// - The one real-model measurement in this repository (ShogunAI, Apple Silicon, 2026-07-25,
+///   `embed_onnx` tests) put an answering passage at cosine 0.796 and an on-topic non-answer at
+///   0.830 for the same question. Unrelated text of the same domain lands below that band, so the
+///   cutoff goes at its lower edge: 0.80. That measured answer sits just outside, which is what
+///   "conservative" costs: a dropped same-language paraphrase is still reachable lexically, while
+///   a wrong neighbour handed over as evidence is the failure the abstention suites exist to
+///   catch. The cost falls on cross-lingual questions, which only the vector lane can answer.
+/// - The real model cannot be fetched here (no network to model hubs), so the value is not
+///   measured. Recalibrate on a machine with the model, on the multilingual suite and the
+///   abstention suite together: keep the largest cutoff at which `false_answerable` (every
+///   language) and `abstention_false_evidence` stay 0.000 (`docs/benchmarks/README.md`,
+///   "Multilingual retrieval (E43)").
+pub const MULTILINGUAL_E5_MAX_L2_DISTANCE: f32 = 0.63;
+
+/// **The multilingual local model (E43): `multilingual-e5-small`**, the fp32 ONNX export in the
+/// model's own repository (`onnx/model.onnx`, about 470 MB: the export ShogunAI ran through this
+/// same ONNX path on device). MIT licence. A 118M-parameter XLM-RoBERTa encoder (12 layers, 384
+/// hidden) trained on about 100 languages, among them every language of the multilingual suite
+/// (Japanese, Chinese, Spanish, German, French, English).
+///
+/// - **Dims:** 384 native, so it fills the `float[384]` tables with no truncation and no new
+///   vector table (no migration).
+/// - **Pooling:** mean over the attention mask, then L2-normalise (no layer norm, no Matryoshka).
+/// - **Prefixes:** `query: ` for questions and `passage: ` for stored text; the model degrades
+///   silently without them.
+/// - **Tokenizer:** XLM-R SentencePiece (`tokenizer.json`), which segments CJK without spaces.
+///   Some exports take `token_type_ids` and some do not; the embedder asks the graph.
+/// - **Max input:** 512 tokens.
+///
+/// Chosen over `Qwen3-Embedding-0.6B` (Apache-2.0, stronger on multilingual MTEB) because that
+/// model does not run under the existing ONNX path: it is a decoder that needs last-token pooling
+/// and an `Instruct: …` query template, its ONNX exports are community conversions with extra
+/// inputs (`position_ids`, past key values), and at 600M parameters it is about 1.2 GB at fp16
+/// against e5-small's 470 MB fp32. Over `multilingual-e5-base` because its 768 dims are not a
+/// Matryoshka space, so a 384 prefix is not a valid embedding and a 768 table would need a
+/// migration. Over nomic v1.5 for this role because nomic is English-first.
+///
+/// **Not pinned in this build.** The commit and the files' SHA-256s could not be read offline, so
+/// they are [`UNPINNED`] and `shogun models fetch --model multilingual-e5-small` refuses until the
+/// operator records them (`docs/embedding-model-setup.md`); files placed by hand still load.
 pub const MULTILINGUAL_E5_SMALL: ModelSpec = ModelSpec {
     name: "multilingual-e5-small",
     space_id: "multilingual-e5-small@384",
     repo: "intfloat/multilingual-e5-small",
-    revision: "main",
+    // Pin: the 40-hex commit of intfloat/multilingual-e5-small the SHA-256s below were taken at.
+    revision: UNPINNED,
     license: "MIT",
-    files: &[],
+    files: &[
+        ModelFile {
+            remote: "onnx/model.onnx",
+            local: "model.onnx",
+            // Pin: `sha256sum` of onnx/model.onnx at `revision`.
+            sha256: UNPINNED,
+        },
+        ModelFile {
+            remote: "tokenizer.json",
+            local: "tokenizer.json",
+            // Pin: `sha256sum` of tokenizer.json at `revision`.
+            sha256: UNPINNED,
+        },
+    ],
     native_dim: E5_SMALL_DIM,
     stored_dim: STORED_DIM,
     query_prefix: "query: ",
@@ -180,11 +253,11 @@ pub const MULTILINGUAL_E5_SMALL: ModelSpec = ModelSpec {
     pooling: Pooling::Mean,
     layer_norm_before_truncate: false,
     max_tokens: 512,
-    // The cutoff the vector lane was tuned with for e5 (cosine ≥ 0.5). Unchanged.
-    max_l2_distance: 1.0,
+    max_l2_distance: MULTILINGUAL_E5_MAX_L2_DISTANCE,
 };
 
-/// The default model and every model this build knows.
+/// The default model and every model this build knows. The multilingual model is opt-in
+/// (`SHOGUN_EMBED_MODEL=multilingual-e5-small`) until the owner's calibration run (E43).
 pub const DEFAULT_MODEL: &ModelSpec = &NOMIC_EMBED_TEXT_V15;
 pub const MODELS: &[&ModelSpec] = &[&NOMIC_EMBED_TEXT_V15, &MULTILINGUAL_E5_SMALL];
 
@@ -307,31 +380,63 @@ impl Embedder for MockEmbedder {
 
 /// A deterministic, model-free embedder with a **meaning** signal, for the tests that must show
 /// the vector lane recovering a paraphrase the lexical lane cannot (E24). A small fixed table maps
-/// synonyms (English and Japanese) to one shared dimension each — "cost", "price", "fee", 費用,
-/// 料金 all land on the same axis — and every other word is hashed, at a lower weight, into the
-/// remaining dimensions. It has its own space id, so it never shares a store's space with a real
-/// model or with [`MockEmbedder`]. NOT for production.
+/// synonyms to one shared dimension each — "cost", "price", "fee", 費用, 料金 all land on the same
+/// axis — and every other word is hashed, at a lower weight, into the remaining dimensions. Since
+/// E43 each axis also carries its Spanish, German, French and Chinese words (precio, Kosten, coût,
+/// 费用 …), so a question in one language lands next to an answer written in another: the
+/// cross-lingual half of the multilingual suite runs in CI with no model. It has its own space id,
+/// so it never shares a store's space with a real model or with [`MockEmbedder`]. NOT for
+/// production.
 #[derive(Debug, Clone, Default)]
 pub struct TestEmbedder;
 
-/// Concept groups of [`TestEmbedder`]: each group is one dimension.
+/// Concept groups of [`TestEmbedder`]: each group is one dimension. ASCII keys without a space
+/// match whole words; every other key (non-ASCII, or with a space) matches as a substring of the
+/// lower-cased text, which is how CJK keys match inside unsegmented sentences.
 const TEST_CONCEPTS: &[&[&str]] = &[
-    &["cost", "costs", "price", "prices", "pricing", "fee", "fees", "spend", "budget", "how much", "費用", "料金", "値段", "コスト", "金額", "予算"],
-    &["meeting", "meetings", "sync", "standup", "call", "打ち合わせ", "打合せ", "会議", "ミーティング", "定例"],
-    &["contract", "agreement", "renewal", "nda", "契約", "更新"],
-    &["deadline", "due", "by friday", "by monday", "締め切り", "締切", "期限"],
-    &["invoice", "bill", "billing", "payment", "pay", "請求", "支払い", "支払"],
-    &["vacation", "holiday", "leave", "time off", "休暇", "休み"],
-    &["bug", "crash", "error", "outage", "incident", "障害", "不具合", "エラー"],
-    &["hire", "hiring", "recruit", "recruiting", "candidate", "採用", "候補者"],
-    &["launch", "release", "ship", "rollout", "リリース", "公開"],
-    &["travel", "flight", "trip", "hotel", "出張", "フライト"],
+    &[
+        "cost", "costs", "price", "prices", "pricing", "fee", "fees", "spend", "budget", "how much", "費用", "料金", "値段",
+        "コスト", "金額", "予算", "precio", "coste", "costo", "cuesta", "cuánto", "presupuesto", "kosten", "kostet", "preis",
+        "gebühr", "coût", "prix", "frais", "tarif", "费用", "价格", "多少钱", "预算",
+    ],
+    &[
+        "meeting", "meetings", "sync", "standup", "call", "打ち合わせ", "打合せ", "会議", "ミーティング", "定例", "reunión",
+        "reuniones", "sitzung", "besprechung", "réunion", "会议", "开会",
+    ],
+    &[
+        "contract", "agreement", "renewal", "nda", "契約", "更新", "contrato", "renovación", "vertrag", "verlängerung",
+        "contrat", "renouvellement", "合同", "续签", "续约",
+    ],
+    &[
+        "deadline", "due", "by friday", "by monday", "締め切り", "締切", "期限", "plazo", "fecha límite", "frist",
+        "abgabetermin", "échéance", "date limite", "截止",
+    ],
+    &[
+        "invoice", "bill", "billing", "payment", "pay", "請求", "支払い", "支払", "factura", "pago", "rechnung", "zahlung",
+        "facture", "paiement", "发票", "付款",
+    ],
+    &["vacation", "holiday", "leave", "time off", "休暇", "休み", "vacaciones", "urlaub", "congés", "vacances", "休假", "假期"],
+    &[
+        "bug", "crash", "error", "outage", "incident", "障害", "不具合", "エラー", "fallo", "fehler", "absturz", "panne",
+        "erreur", "plantage", "故障", "错误", "崩溃",
+    ],
+    &[
+        "hire", "hiring", "recruit", "recruiting", "candidate", "採用", "候補者", "contratación", "contratar", "einstellung",
+        "bewerber", "recrutement", "embauche", "candidat", "招聘", "候选人",
+    ],
+    &[
+        "launch", "release", "ship", "rollout", "リリース", "公開", "lanzamiento", "lanzar", "veröffentlichung",
+        "markteinführung", "lancement", "发布", "上线",
+    ],
+    &["travel", "flight", "trip", "hotel", "出張", "フライト", "viaje", "vuelo", "reise", "dienstreise", "flug", "déplacement", "出差", "航班"],
 ];
 const TEST_CONCEPT_WEIGHT: f32 = 1.0;
 const TEST_WORD_WEIGHT: f32 = 0.2;
 
 impl TestEmbedder {
-    pub const SPACE_ID: &'static str = "shogun-test/concept-v1@384";
+    /// `v2` since E43 added the other languages' words to the axes: vectors of `v1` are not the
+    /// same space.
+    pub const SPACE_ID: &'static str = "shogun-test/concept-v2@384";
 
     pub fn new() -> Self {
         Self
@@ -425,15 +530,62 @@ mod tests {
         assert_eq!(spaces.len(), MODELS.len(), "every model has its own space");
     }
 
+    /// E43: the multilingual model is a full spec: fetchable files, its own space, its prefixes,
+    /// 384 native (no truncation), and a cutoff of its own. Its pins are placeholders until the
+    /// operator records them, and an unpinned spec is never treated as pinned.
+    #[test]
+    fn the_multilingual_model_is_a_complete_spec_that_waits_for_its_pins() {
+        let spec = &MULTILINGUAL_E5_SMALL;
+        assert_eq!(model_spec("multilingual-e5-small"), Some(spec));
+        assert!(MODELS.iter().any(|m| std::ptr::eq(*m, spec)));
+        assert_eq!(spec.license, "MIT");
+        assert_eq!((spec.native_dim, spec.stored_dim), (STORED_DIM, STORED_DIM), "no Matryoshka cut");
+        assert!(!spec.layer_norm_before_truncate);
+        assert_eq!((spec.query_prefix, spec.passage_prefix), ("query: ", "passage: "));
+        assert_eq!(spec.pooling, Pooling::Mean);
+        assert_eq!(spec.onnx_file(), Some("model.onnx"));
+        assert!(spec.files.iter().any(|f| f.local == "tokenizer.json"));
+        assert!(!spec.is_pinned(), "placeholders are not pins");
+        assert!(spec.files.iter().all(|f| f.sha256 == UNPINNED) && spec.revision == UNPINNED);
+        assert!(DEFAULT_MODEL.is_pinned(), "the default model is pinned");
+        assert!(!ModelSpec { revision: "main", ..NOMIC_EMBED_TEXT_V15 }.is_pinned(), "a branch is not a pin");
+        assert!(!ModelSpec { files: &[], ..NOMIC_EMBED_TEXT_V15 }.is_pinned(), "nothing to pin");
+        assert_ne!(spec.space_id, DEFAULT_MODEL.space_id);
+    }
+
+    /// The test embedder's concept axes span the multilingual suite's languages, so a question in
+    /// one language lands next to its answer written in another, and an unrelated row does not.
+    #[test]
+    fn test_embedder_concepts_cross_languages() {
+        let e = TestEmbedder::new();
+        let l2 = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt();
+        let answer = e.embed_passages(&["Kestrelとの契約更新の費用は月額12万円で確定"]).unwrap()[0].clone();
+        for question in [
+            "¿Cuánto cuesta la renovación del contrato?",
+            "Was kostet die Verlängerung vom Vertrag?",
+            "Quel est le coût du renouvellement du contrat ?",
+            "续签合同的费用是多少",
+            "how much is the contract renewal",
+        ] {
+            let q = e.embed_query(question).unwrap();
+            assert!(l2(&q, &answer) <= TEST_EMBEDDER_MAX_L2_DISTANCE, "{question}: {}", l2(&q, &answer));
+        }
+        let unrelated = e.embed_query("¿Cuándo son las vacaciones del equipo?").unwrap();
+        assert!(l2(&unrelated, &answer) > TEST_EMBEDDER_MAX_L2_DISTANCE);
+    }
+
     #[test]
     fn the_vector_cutoff_is_a_property_of_the_model() {
         assert_eq!(max_l2_distance_for(NOMIC_EMBED_TEXT_V15.space_id), NOMIC_MAX_L2_DISTANCE);
         assert_eq!(max_l2_distance_for("nomic-embed-text-v1.5"), NOMIC_MAX_L2_DISTANCE);
-        assert_eq!(max_l2_distance_for(MULTILINGUAL_E5_SMALL.space_id), 1.0, "e5 keeps the value it was tuned with");
+        assert_eq!(max_l2_distance_for(MULTILINGUAL_E5_SMALL.space_id), MULTILINGUAL_E5_MAX_L2_DISTANCE);
+        assert_eq!(max_l2_distance_for("multilingual-e5-small"), MULTILINGUAL_E5_MAX_L2_DISTANCE);
         assert_eq!(max_l2_distance_for(TestEmbedder::SPACE_ID), TEST_EMBEDDER_MAX_L2_DISTANCE);
         assert_eq!(max_l2_distance_for(crate::embedding_space::UNSPECIFIED_MODEL), DEFAULT_MAX_L2_DISTANCE);
-        // nomic's is stricter than e5's (favours abstention) and every cutoff is a real distance.
-        const { assert!(NOMIC_MAX_L2_DISTANCE < MULTILINGUAL_E5_SMALL.max_l2_distance) };
+        // e5 packs unrelated text into a high cosine band, so its cutoff is the strictest of the
+        // real models, and stricter than the unknown-space default; every cutoff is a real distance.
+        const { assert!(MULTILINGUAL_E5_MAX_L2_DISTANCE < NOMIC_MAX_L2_DISTANCE) };
+        const { assert!(MULTILINGUAL_E5_MAX_L2_DISTANCE < DEFAULT_MAX_L2_DISTANCE) };
         for spec in MODELS {
             assert!(spec.max_l2_distance > 0.0 && spec.max_l2_distance <= 2.0, "{}", spec.name);
         }

@@ -1,7 +1,7 @@
 //! The ONNX-backed embedder (on-device, no cloud embedding API), driven by a
 //! [`crate::embed::ModelSpec`]: the server's default [`crate::embed::NOMIC_EMBED_TEXT_V15`]
-//! (feature `embed-local`, E24) or ShogunAI's developer model
-//! [`crate::embed::MULTILINGUAL_E5_SMALL`]. Feature-gated behind `onnx` — see Cargo.toml.
+//! (feature `embed-local`, E24) or the opt-in multilingual model
+//! [`crate::embed::MULTILINGUAL_E5_SMALL`] (E43). Feature-gated behind `onnx` — see Cargo.toml.
 //!
 //! Nothing here downloads anything: the model files come from `shogun models fetch` (an explicit
 //! operator step) and the ONNX Runtime library is resolved at run time (`load-dynamic`). Without

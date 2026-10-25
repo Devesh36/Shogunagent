@@ -25,7 +25,8 @@ shogun models list               Known local embedding models (default marked *)
 shogun models path               The models dir (SHOGUN_MODELS_DIR, else the user data dir)
 shogun models fetch [--model M]  Download the pinned model files (default: the default model),
                                  checking each SHA-256. The only command that downloads a model;
-                                 needs a CLI built with --features embed-local
+                                 needs a CLI built with --features embed-local. Refuses a model
+                                 listed as unpinned (docs/embedding-model-setup.md)
 shogun models verify [--model M] Check installed files against their pinned SHA-256";
 
 /// Parse the words after `models`.
@@ -52,6 +53,18 @@ fn spec(model: Option<&str>) -> Result<&'static ModelSpec, String> {
     }
 }
 
+/// The `models list` state column. An unpinned model (placeholder pins, E43) cannot be fetched or
+/// verified; it is listed as such, installed by hand or not.
+fn state_label(no_files: bool, pinned: bool, installed: bool) -> &'static str {
+    match (no_files, pinned, installed) {
+        (true, _, _) => "manual",
+        (false, false, true) => "hand-placed",
+        (false, false, false) => "unpinned",
+        (false, true, true) => "installed",
+        (false, true, false) => "not installed",
+    }
+}
+
 /// Run a `models` command. Exit codes follow the CLI's: 0 ok, 1 failure, 2 a usage error.
 pub fn run(args: &[String]) -> ExitCode {
     let command = match parse(args) {
@@ -66,13 +79,7 @@ pub fn run(args: &[String]) -> ExitCode {
         ModelsCommand::List => {
             for model in MODELS {
                 let default = if std::ptr::eq(*model, DEFAULT_MODEL) { "*" } else { " " };
-                let state = if model.files.is_empty() {
-                    "manual"
-                } else if installed(&root, model) {
-                    "installed"
-                } else {
-                    "not installed"
-                };
+                let state = state_label(model.files.is_empty(), model.is_pinned(), installed(&root, model));
                 // log-hygiene-ok: the built-in model table, no user data
                 println!("{default} {:<24} {:<11} {:<13} {}", model.name, model.license, state, model.space_id);
             }
@@ -160,6 +167,18 @@ mod tests {
     fn the_default_spec_is_the_default_model() {
         assert_eq!(spec(None).unwrap().name, DEFAULT_MODEL.name);
         assert!(spec(Some("nope")).is_err());
+    }
+
+    #[test]
+    fn unpinned_models_are_labelled_and_the_multilingual_model_is_one() {
+        assert_eq!(state_label(false, false, false), "unpinned");
+        assert_eq!(state_label(false, false, true), "hand-placed");
+        assert_eq!(state_label(false, true, true), "installed");
+        assert_eq!(state_label(false, true, false), "not installed");
+        assert_eq!(state_label(true, false, false), "manual");
+        let e5 = spec(Some("multilingual-e5-small")).unwrap();
+        assert!(!e5.is_pinned());
+        assert!(spec(None).unwrap().is_pinned());
     }
 
     #[test]

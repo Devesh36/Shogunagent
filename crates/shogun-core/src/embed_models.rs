@@ -8,6 +8,11 @@
 //! starts with `embed-local` only *looks* for those files ([`load_configured`]); missing files or
 //! a missing ONNX Runtime library leave search lexical with one line on stderr, never an error.
 //!
+//! **Only a pinned model downloads** ([`ModelSpec::is_pinned`]): a spec whose commit or SHA-256s
+//! are placeholders (`multilingual-e5-small` in this build, E43) is refused by [`fetch`] and
+//! [`verify`] before anything is requested, with a message naming the pinning step
+//! (`docs/embedding-model-setup.md`). Its files may still be placed by hand and loaded.
+//!
 //! Layout: `<models dir>/<model name>/{model.onnx, tokenizer.json}`, the models dir being
 //! `SHOGUN_MODELS_DIR`, else `$XDG_DATA_HOME/shogun/models` (`dirs::data_local_dir`), else
 //! `./models`. `SHOGUN_EMBED_MODEL` picks another known model by name; the default is
@@ -19,7 +24,7 @@ use shogun_memory::embed::{model_spec, ModelSpec, DEFAULT_MODEL};
 
 /// Overrides the models directory.
 pub const MODELS_DIR_VAR: &str = "SHOGUN_MODELS_DIR";
-/// Picks the model by name (`nomic-embed-text-v1.5`); unset = the default.
+/// Picks the model by name (`nomic-embed-text-v1.5`, `multilingual-e5-small`); unset = the default.
 pub const MODEL_VAR: &str = "SHOGUN_EMBED_MODEL";
 
 /// Where models live: `SHOGUN_MODELS_DIR`, else the user data dir, else `./models`.
@@ -75,8 +80,25 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Check every installed file of `spec` against its pinned hash.
+/// Why `spec` cannot be downloaded or verified in this build, if it cannot: its pins are
+/// placeholders. Checked before any request.
+pub fn unpinned_reason(spec: &ModelSpec) -> Option<String> {
+    (!spec.is_pinned()).then(|| {
+        format!(
+            "{} is not pinned in this build (its commit or SHA-256s are placeholders), so nothing \
+             downloads or verifies it; record the pins in crates/shogun-memory/src/embed.rs and rebuild \
+             (docs/embedding-model-setup.md), or place model.onnx and tokenizer.json under the models dir by hand",
+            spec.name
+        )
+    })
+}
+
+/// Check every installed file of `spec` against its pinned hash. An unpinned spec has nothing to
+/// check against and is refused.
 pub fn verify(root: &Path, spec: &ModelSpec) -> Result<(), String> {
+    if let Some(why) = unpinned_reason(spec) {
+        return Err(why);
+    }
     let dir = model_dir(root, spec);
     for file in spec.files {
         let path = dir.join(file.local);
@@ -110,6 +132,11 @@ pub fn fetch(
 ) -> Result<FetchReport, String> {
     if spec.files.is_empty() {
         return Err(format!("{} is not fetchable; place its files by hand", spec.name));
+    }
+    // Refused before the directory exists or a request is recorded: a placeholder pin would
+    // download whatever the repository serves today.
+    if let Some(why) = unpinned_reason(spec) {
+        return Err(why);
     }
     let dir = model_dir(root, spec);
     std::fs::create_dir_all(&dir).map_err(|_| "cannot create the models directory".to_string())?;
@@ -215,6 +242,42 @@ mod tests {
         assert!(installed(&root, &NOMIC_EMBED_TEXT_V15), "present");
         assert!(verify(&root, &NOMIC_EMBED_TEXT_V15).is_err(), "but not the pinned bytes");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// E43: the multilingual model is known, installable by hand and loadable, but its pins are
+    /// placeholders, so verify (and fetch, below) refuse it and say how to pin it.
+    #[test]
+    fn an_unpinned_model_is_refused_with_the_pinning_step() {
+        use shogun_memory::embed::MULTILINGUAL_E5_SMALL;
+        let why = unpinned_reason(&MULTILINGUAL_E5_SMALL).expect("unpinned");
+        assert!(why.contains("not pinned") && why.contains("embedding-model-setup.md"), "{why}");
+        assert_eq!(unpinned_reason(&NOMIC_EMBED_TEXT_V15), None);
+
+        let root = std::env::temp_dir().join(format!("shogun_embed_unpinned_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = model_dir(&root, &MULTILINGUAL_E5_SMALL);
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in MULTILINGUAL_E5_SMALL.files {
+            std::fs::write(dir.join(file.local), b"placed by hand").unwrap();
+        }
+        assert!(installed(&root, &MULTILINGUAL_E5_SMALL), "files placed by hand count as installed");
+        assert!(verify(&root, &MULTILINGUAL_E5_SMALL).unwrap_err().contains("not pinned"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Fetching an unpinned model sends nothing: the refusal comes before the first request is
+    /// recorded and before the model directory is created.
+    #[cfg(feature = "net")]
+    #[test]
+    fn fetching_an_unpinned_model_requests_nothing() {
+        use shogun_memory::embed::MULTILINGUAL_E5_SMALL;
+        let trace = crate::llm::traceability::RecordingSink::new();
+        let root = std::env::temp_dir().join(format!("shogun_embed_fetch_unpinned_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let error = fetch(&root, &MULTILINGUAL_E5_SMALL, &trace).unwrap_err();
+        assert!(error.contains("not pinned"), "{error}");
+        assert!(trace.records().is_empty(), "no request was recorded, so none was sent");
+        assert!(!model_dir(&root, &MULTILINGUAL_E5_SMALL).exists(), "nothing was created");
     }
 
     #[test]

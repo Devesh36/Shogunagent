@@ -18,6 +18,7 @@ memory-bench — ShogunAI memory ingestion and retrieval benchmark
 USAGE:
     memory-bench [OPTIONS]
     memory-bench harness [HARNESS OPTIONS]      (see HARNESS below)
+    memory-bench multilingual [OPTIONS]         (see MULTILINGUAL below)
 
 OPTIONS:
     --workload <NAME>   Corpus to generate. Default: clean
@@ -91,11 +92,22 @@ HARNESS (E12-T2 — the same-harness publication, docs/benchmarks/README.md):
     --embedder pins ONE embedding model for every suite and seed and records it as
     `embedding: {model, dim}`; without it `embedding` is null (lexical).
 
+MULTILINGUAL (E43 — docs/benchmarks/README.md, section Multilingual retrieval):
+    memory-bench multilingual [--embedder NAME] [--vector-cutoff F] [--out FILE]
+    One fixed corpus in English, Japanese, Spanish, German, French and Chinese; questions in the
+    fact's language, paraphrased, cross-lingual, as 2-3 character CJK words, as unsegmented CJK
+    sentences, and unanswerable ones. Prints R@5, MRR and false-answerable per query language
+    and per kind on the federated path; --out writes the same as JSON. Without --embedder the run
+    is lexical; `test` is the deterministic concept embedder; with --features embed-local a
+    fetched model by name (multilingual-e5-small) from SHOGUN_MODELS_DIR. Exact, not sampled:
+    the corpus has no seed.
+
 EXAMPLES:
     memory-bench --workload clean --events 100000 --queries 500 --seed 42 --db /tmp/bench-run --out reports
     memory-bench --workload duplicate --events 10000 --queries 200
     memory-bench --workload temporal --events 50000 --queries 12 --path federated
     memory-bench harness --seeds 10 --events 100000 --out docs/benchmarks/benchmarks.json
+    memory-bench multilingual --embedder test
 ";
 
 /// `--vector-cutoff`: a finite L2 distance in (0, 2] (unit vectors are at most 2 apart).
@@ -248,6 +260,69 @@ fn parse_harness(args: &[String]) -> Result<Option<(HarnessConfig, String)>, Str
     Ok(Some((cfg, out)))
 }
 
+/// Parse `memory-bench multilingual ...`: the suite's config and the optional JSON path.
+fn parse_multilingual(
+    args: &[String],
+) -> Result<Option<(memory_bench::multilingual::MultilingualConfig, Option<String>)>, String> {
+    let mut cfg = memory_bench::multilingual::MultilingualConfig::default();
+    let mut out = None;
+    let mut i = 0;
+    while i < args.len() {
+        let flag = args[i].as_str();
+        if flag == "-h" || flag == "--help" {
+            return Ok(None);
+        }
+        let value = args
+            .get(i + 1)
+            .ok_or_else(|| format!("{flag} needs a value"))?;
+        match flag {
+            "--embedder" => cfg.embedder = Some(memory_bench::embedding::BenchEmbedder::parse(value)?),
+            "--vector-cutoff" => cfg.vector_cutoff = Some(parse_cutoff(value)?),
+            "--out" if !value.is_empty() => out = Some(value.clone()),
+            "--out" => return Err("--out must not be empty".to_string()),
+            other => return Err(format!("unknown multilingual flag {other:?}")),
+        }
+        i += 2;
+    }
+    Ok(Some((cfg, out)))
+}
+
+fn run_multilingual(args: &[String]) -> ExitCode {
+    let (cfg, out) = match parse_multilingual(args) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) => {
+            print!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("error: {e}\n");
+            print!("{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let report = match memory_bench::multilingual::run(&cfg) {
+        Ok(report) => report,
+        Err(e) => {
+            eprintln!("multilingual suite failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    print!("{}", memory_bench::multilingual::render(&report));
+    if let Some(path) = out {
+        let written = serde_json::to_string_pretty(&report)
+            .map_err(|e| e.to_string())
+            .and_then(|json| std::fs::write(&path, format!("{json}\n")).map_err(|e| e.to_string()));
+        match written {
+            Ok(()) => println!("\nWrote {path}\n"),
+            Err(e) => {
+                eprintln!("could not write {path}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 fn run_harness(args: &[String]) -> ExitCode {
     let (cfg, out) = match parse_harness(args) {
         Ok(Some(parsed)) => parsed,
@@ -288,6 +363,9 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("harness") {
         return run_harness(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("multilingual") {
+        return run_multilingual(&args[1..]);
     }
     let cfg = match parse(&args) {
         Ok(Some(c)) => c,
@@ -440,6 +518,22 @@ mod tests {
         // Too small for the multi-session suite's 48 split answers.
         assert!(parse_harness(&args(&["--events", "10"])).is_err());
         assert!(parse_harness(&args(&["--help"])).expect("parse").is_none());
+    }
+
+    #[test]
+    fn multilingual_flags_are_applied_and_bad_ones_rejected() {
+        let (cfg, out) = parse_multilingual(&[]).expect("parse").expect("config");
+        assert!(cfg.embedder.is_none() && cfg.vector_cutoff.is_none() && out.is_none());
+        let (cfg, out) = parse_multilingual(&args(&["--embedder", "test", "--vector-cutoff", "0.6", "--out", "m.json"]))
+            .expect("parse")
+            .expect("config");
+        assert!(cfg.embedder.is_some());
+        assert_eq!(cfg.vector_cutoff, Some(0.6));
+        assert_eq!(out.as_deref(), Some("m.json"));
+        assert!(parse_multilingual(&args(&["--vector-cutoff", "3"])).is_err());
+        assert!(parse_multilingual(&args(&["--seeds", "3"])).is_err());
+        assert!(parse_multilingual(&args(&["--out", ""])).is_err());
+        assert!(parse_multilingual(&args(&["--help"])).expect("parse").is_none());
     }
 
     #[test]

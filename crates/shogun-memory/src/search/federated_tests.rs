@@ -1451,3 +1451,46 @@ fn the_vector_cutoff_is_the_active_models() {
     let e5 = FederatedSearchOptions { max_vector_distance: Some(1.0), ..FederatedSearchOptions::default() };
     assert!(warm(&e5), "inside the e5 cutoff: the false evidence the per-model cutoff removes");
 }
+
+/// E43: the multilingual model's cutoff is the one search applies when its space is active. Two
+/// neighbours of the same query, at L2 0.60 and 0.67 (cosine 0.82 and 0.776), straddle it: with the
+/// store's space on `multilingual-e5-small@384` (cutoff 0.63) only the nearer one is evidence; the
+/// same rows re-recorded under nomic's space (cutoff 0.70) both are. Nothing but the active
+/// space's model id changes between the two searches.
+#[test]
+fn the_multilingual_models_cutoff_applies_when_its_space_is_active() {
+    use crate::embed::{max_l2_distance_for, MULTILINGUAL_E5_SMALL, NOMIC_EMBED_TEXT_V15, STORED_DIM};
+    let conn = crate::open_in_memory().unwrap();
+    let near = event(&conn, 10, "Kestrel の契約更新は来月", "e43-near");
+    let mid = event(&conn, 11, "Kestrel の定例は木曜", "e43-mid");
+    let at_cosine = |c: f32| {
+        let mut v = vec![0.0f32; STORED_DIM];
+        v[0] = c;
+        v[1] = (1.0 - c * c).sqrt();
+        v
+    };
+    let mut query = vec![0.0f32; STORED_DIM];
+    query[0] = 1.0;
+    let (near_vec, mid_vec) = (at_cosine(0.82), at_cosine(0.77555));
+    let warm_ids = |conn: &rusqlite::Connection| -> Vec<i64> {
+        // A question with no word in either row: only the vector lane can return them.
+        search_federated(conn, "¿cuánto cuesta la renovación?", Some(&query), 100, &FederatedSearchOptions::default(), 5)
+            .unwrap()
+            .hits
+            .iter()
+            .filter(|hit| hit.component_ranks.warm_knn.is_some())
+            .flat_map(|hit| hit.sources.iter().filter_map(|s| match s.id {
+                FederatedSourceId::Event(id) => Some(id),
+                _ => None,
+            }))
+            .collect()
+    };
+    for (spec, expect_mid) in [(&MULTILINGUAL_E5_SMALL, false), (&NOMIC_EMBED_TEXT_V15, true)] {
+        crate::embedding_space::activate(&conn, spec.space_id, STORED_DIM, 1).unwrap();
+        crate::vector::upsert_in(&conn, near, spec.space_id, &near_vec).unwrap();
+        crate::vector::upsert_in(&conn, mid, spec.space_id, &mid_vec).unwrap();
+        let found = warm_ids(&conn);
+        assert!(found.contains(&near), "{}: the near neighbour is evidence: {found:?}", spec.name);
+        assert_eq!(found.contains(&mid), expect_mid, "{} (cutoff {}): {found:?}", spec.name, max_l2_distance_for(spec.space_id));
+    }
+}

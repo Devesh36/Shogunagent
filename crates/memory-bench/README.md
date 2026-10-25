@@ -46,6 +46,10 @@ cargo run -p memory-bench --release -- --workload temporal  --events 50000 --que
 # The same-harness publication (E12-T2): every suite over ten seeds, one benchmarks.json.
 cargo run -p memory-bench --release -- harness --seeds 10 --events 100000 --out docs/benchmarks/benchmarks.json
 
+# The multilingual suite (E43): six languages, cross-lingual, CJK, abstention; R@5 / MRR /
+# false-answerable per language. Add --embedder test (or a fetched model) for the vector lane.
+cargo run -p memory-bench --release -- multilingual
+
 cargo run -p memory-bench -- --help
 ```
 

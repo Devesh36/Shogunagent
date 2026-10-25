@@ -198,6 +198,61 @@ mod tests {
         assert!(pending(&conn, 10).unwrap().is_empty());
     }
 
+    /// E43: one space per store, and switching to the multilingual model **re-embeds** (it never
+    /// refuses and never mixes). Until its job first runs, the new model's queries do not match
+    /// the store's space (`Db::query_embedding` then keeps the vector lane out); from its first
+    /// batch on, search reads only the rows it has re-embedded; at the end every row is in its
+    /// space, replaced in place, and the cutoff search applies is the multilingual model's.
+    #[test]
+    fn switching_to_the_multilingual_model_re_embeds_and_never_mixes() {
+        use crate::embed::{
+            max_l2_distance_for, Embedder, TestEmbedder, MULTILINGUAL_E5_MAX_L2_DISTANCE, MULTILINGUAL_E5_SMALL,
+            NOMIC_EMBED_TEXT_V15, STORED_DIM,
+        };
+        use crate::embedding_space::{active, counts, matches, EVENT_VEC};
+        /// The test embedder's vectors under a real model's space id.
+        struct As(&'static str);
+        impl Embedder for As {
+            fn dim(&self) -> usize {
+                STORED_DIM
+            }
+            fn model_id(&self) -> &str {
+                self.0
+            }
+            fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
+                TestEmbedder::new().embed_passages(texts)
+            }
+            fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
+                TestEmbedder::new().embed_query(text)
+            }
+        }
+        let (nomic, e5) = (As(NOMIC_EMBED_TEXT_V15.space_id), As(MULTILINGUAL_E5_SMALL.space_id));
+        let mut conn = crate::open_in_memory().unwrap();
+        add(&conn, "契約の費用は月額12万円", "ml0");
+        add(&conn, "Die Reise nach Osaka ist gebucht", "ml1");
+        add(&conn, "La factura llega el viernes", "ml2");
+        assert_eq!(embed_all_pending(&mut conn, &nomic, 8).unwrap(), 3);
+        assert_eq!(counts(&conn, EVENT_VEC).unwrap(), vec![(nomic.0.to_string(), 3)]);
+
+        assert!(!matches(&conn, e5.model_id()).unwrap(), "the new model's query is not used before its job runs");
+        assert_eq!(embed_batch(&mut conn, &e5, 1).unwrap(), 1, "the first batch switches the space");
+        assert!(matches(&conn, e5.model_id()).unwrap());
+        assert_eq!(
+            counts(&conn, EVENT_VEC).unwrap(),
+            vec![(e5.0.to_string(), 1), (nomic.0.to_string(), 2)],
+            "mid-switch both models' rows exist"
+        );
+        let q = e5.embed_query("¿cuánto cuesta?").unwrap();
+        assert_eq!(crate::vector::knn(&conn, &q, 10).unwrap().len(), 1, "but only the re-embedded row is ever searched");
+
+        assert_eq!(embed_all_pending(&mut conn, &e5, 8).unwrap(), 2);
+        assert_eq!(counts(&conn, EVENT_VEC).unwrap(), vec![(e5.0.to_string(), 3)]);
+        assert_eq!(crate::vector::count(&conn).unwrap(), 3, "replaced in place");
+        assert_eq!(crate::vector::knn(&conn, &q, 10).unwrap().len(), 3);
+        let space = active(&conn).unwrap().unwrap();
+        assert_eq!(max_l2_distance_for(&space.model_id), MULTILINGUAL_E5_MAX_L2_DISTANCE);
+    }
+
     /// Vectors written before V102 carry no model: once an embedder runs they are re-embedded.
     #[test]
     fn unattributed_vectors_are_re_embedded() {
