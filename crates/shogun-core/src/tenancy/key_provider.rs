@@ -360,7 +360,7 @@ impl KeyProviderKind {
             "aws-kms" => Ok(Self::AwsKms),
             "gcp-kms" => Ok(Self::GcpKms),
             "vault" => Ok(Self::Vault),
-            _ => Err(TenancyError::KmsConfig("--key-provider must be one of env, aws-kms, gcp-kms, vault")),
+            _ => Err(TenancyError::KmsConfig("--key-provider (one of env, aws-kms, gcp-kms, vault)")),
         }
     }
 
