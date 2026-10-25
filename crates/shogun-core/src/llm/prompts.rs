@@ -88,7 +88,8 @@ pub const DREAM_CONSOLIDATION: PromptTag = PromptTag::new("dream_consolidation",
 /// "Which stored people / projects are the same?" (Batch lane, `dreamcycle::entities`).
 pub const ENTITY_DEDUPE: PromptTag = PromptTag::new("entity_dedupe", 1);
 /// The loop consolidator's short list of commitments / open loops (Batch lane, `dreamcycle::loops`).
-pub const LOOPS_CONSOLIDATE: PromptTag = PromptTag::new("loops_consolidate", 1);
+/// v2 (E49): describes the "Outcomes noticed in later messages" section and re-dating by re-list.
+pub const LOOPS_CONSOLIDATE: PromptTag = PromptTag::new("loops_consolidate", 2);
 /// Person / project page rewrite (Batch lane, `dreamcycle::pages`).
 pub const ENTITY_PAGE: PromptTag = PromptTag::new("entity_page", 1);
 /// Morning Brief generation (Batch lane, `ModelClass::Brief` — wiring tracked by #316).

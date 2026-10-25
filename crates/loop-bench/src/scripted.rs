@@ -180,15 +180,24 @@ pub fn answer_consolidator(chunk: &str) -> Value {
 }
 
 /// The offline Batch lane: answers the two review purposes with the scripts above. Counts calls.
-#[derive(Debug, Default)]
+/// With a sink ([`ScriptedReviewer::traced`]) it writes one traceability row per item into the
+/// principal's store before answering, as the relay does, so the consolidator's gate (at most
+/// hourly, eight a local day, counted from those rows) holds in the benchmark as in production.
+#[derive(Default)]
 pub struct ScriptedReviewer {
     pub window_calls: AtomicU64,
     pub consolidator_calls: AtomicU64,
     pub other_calls: AtomicU64,
     submitted: Mutex<Vec<String>>,
+    sink: Option<shogun_core::db_sink::DbTraceabilitySink>,
 }
 
 impl ScriptedReviewer {
+    /// A reviewer that traces every item into `db` (digest and size, never the text).
+    pub fn traced(db: &shogun_core::daemon::Db) -> Self {
+        Self { sink: Some(db.traceability_sink()), ..Self::default() }
+    }
+
     fn answer(&self, item: &BatchItem) -> String {
         match item.purpose.as_str() {
             shogun_core::dreamcycle::jobs::WINDOW_PURPOSE => {
@@ -209,6 +218,12 @@ impl ScriptedReviewer {
 
 impl BatchLane for ScriptedReviewer {
     async fn review(&self, items: &[BatchItem]) -> Result<Vec<BatchResult>, LlmError> {
+        use shogun_core::llm::traceability::{Route, TraceRecord, TraceabilitySink};
+        if let Some(sink) = &self.sink {
+            for item in items {
+                sink.try_record(TraceRecord::for_chunk(Route::BatchRelay, item.purpose.clone(), "scripted.invalid", &item.chunk, false))?;
+            }
+        }
         Ok(items
             .iter()
             .map(|item| BatchResult { custom_id: item.custom_id.clone(), text: Some(self.answer(item)), error: None })
@@ -237,8 +252,9 @@ impl BatchLane for ScriptedReviewer {
 }
 
 /// ShogunAgent with its Batch lane answered by [`ScriptedReviewer`]: the same ingest and read as
-/// [`ShogunAgentAdapter`]; after each hour the hourly review through the lane
-/// (`tick_principal_with_lane`) and then the loop consolidator (`consolidate_loops`).
+/// [`ShogunAgentAdapter`]; after each hour the production Batch tick
+/// (`shogun_core::tenancy::dream_tick::tick_principal_batch`): the hourly review through the lane,
+/// then the loop consolidator when its gate says it is due.
 pub struct ScriptedReviewAdapter {
     inner: ShogunAgentAdapter,
     lane: Arc<ScriptedReviewer>,
@@ -276,7 +292,6 @@ impl SystemAdapter for ScriptedReviewAdapter {
     }
 
     fn reset(&mut self, dataset: &Dataset) -> Result<(), String> {
-        self.lane = Arc::new(ScriptedReviewer::default());
         self.consolidations = 0;
         self.applied = Default::default();
         if self.runtime.is_none() {
@@ -284,7 +299,9 @@ impl SystemAdapter for ScriptedReviewAdapter {
                 tokio::runtime::Builder::new_current_thread().enable_time().build().map_err(|_| "runtime_unavailable".to_string())?,
             );
         }
-        self.inner.reset(dataset)
+        self.inner.reset(dataset)?;
+        self.lane = Arc::new(ScriptedReviewer::traced(self.inner.db_ref()?));
+        Ok(())
     }
 
     fn ingest(&mut self, events: &[Event]) -> Result<(), String> {
@@ -292,16 +309,12 @@ impl SystemAdapter for ScriptedReviewAdapter {
     }
 
     fn advance(&mut self, now_ms: i64) -> Result<(), String> {
-        use shogun_core::tenancy::dream_tick::{tick_principal_with_lane, TickOutcome};
+        use shogun_core::tenancy::dream_tick::{tick_principal_batch, TickOutcome};
         self.inner.set_clock(now_ms);
         let runtime = self.runtime.as_ref().ok_or("reset was not called")?;
         let db = self.inner.db_ref()?;
         let lane = self.lane.as_ref();
-        let (outcome, applied) = runtime.block_on(async {
-            let outcome = tick_principal_with_lane(db, lane, now_ms).await;
-            let applied = shogun_core::dreamcycle::loops::consolidate_loops(db, lane).await;
-            (outcome, applied)
-        });
+        let (outcome, applied) = runtime.block_on(tick_principal_batch(db, lane, now_ms));
         let stats = &mut self.inner.stats;
         match outcome {
             TickOutcome::Ran { complete: true } => stats.ticks_ran += 1,
