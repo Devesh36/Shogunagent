@@ -1,0 +1,618 @@
+<title>ShogunAgent Strategy</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+JP:wght@400;500;700&family=Shippori+Mincho:wght@600;700&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap">
+<style>
+/* Layout: one reading column (~68ch), sticky bar with language switch, section chips, tables scroll in their own box. */
+:root {
+  --bg: #f4f6f9;
+  --paper: #ffffff;
+  --fg: #1b2230;
+  --muted: #5b6577;
+  --line: #d9dfe8;
+  --accent: #2c4a8a;        /* 藍 indigo */
+  --accent-soft: #e4eaf6;
+  --warn: #b5432a;          /* 朱 vermilion, sparingly */
+  --warn-soft: #f7e7e2;
+  --ok: #2f6b4f;
+  --ok-soft: #e3f0e8;
+  --chip: #eef1f6;
+  --font-body: "IBM Plex Sans", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  --font-display: "Source Serif 4", "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", Georgia, serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161e; --paper: #1a2029; --fg: #e6eaf1; --muted: #9aa5b8; --line: #2c3442;
+    --accent: #8fa9e0; --accent-soft: #233052; --warn: #e0876f; --warn-soft: #3d2521;
+    --ok: #86c4a2; --ok-soft: #1f3529; --chip: #232b38; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161e; --paper: #1a2029; --fg: #e6eaf1; --muted: #9aa5b8; --line: #2c3442;
+  --accent: #8fa9e0; --accent-soft: #233052; --warn: #e0876f; --warn-soft: #3d2521;
+  --ok: #86c4a2; --ok-soft: #1f3529; --chip: #232b38; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font-body); font-size: 16px; line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--paper); }
+body.lang-en [lang="ja"] { display: none !important; }
+body:not(.lang-en) [lang="en"] { display: none !important; }
+body.lang-en { font-size: 16px; }
+body:not(.lang-en) { font-family: "Noto Sans JP", "IBM Plex Sans", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif; line-height: 1.9; }
+body:not(.lang-en) h1, body:not(.lang-en) h2, body:not(.lang-en) h3 { font-family: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", "Source Serif 4", serif; }
+
+a { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 9;
+  background: var(--paper); border-bottom: 1px solid var(--line);
+}
+.bar-in {
+  max-width: 980px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.brand { font-family: var(--font-display); font-weight: 700; font-size: 17px; letter-spacing: 0.01em; white-space: nowrap; }
+.brand small { font-family: var(--font-body); font-weight: 500; color: var(--muted); font-size: 12px; margin-left: 8px; letter-spacing: 0.08em; text-transform: uppercase; }
+.switch { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 2px; background: var(--chip); }
+.switch button {
+  appearance: none; border: 0; background: transparent; color: var(--muted);
+  font: inherit; font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 999px; cursor: pointer;
+}
+.switch button[aria-pressed="true"] { background: var(--accent); color: var(--paper); }
+
+.wrap {
+  max-width: 980px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 64px;
+}
+.hero { display: grid; gap: 18px; padding-bottom: 28px; border-bottom: 1px solid var(--line); }
+.eyebrow { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 { font-family: var(--font-display); font-weight: 700; font-size: clamp(28px, 5.2vw, 44px); line-height: 1.2; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+.lede { font-size: 18px; line-height: 1.65; color: var(--fg); max-width: 68ch; margin: 0; }
+.meta { color: var(--muted); font-size: 13px; }
+.verdicts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 6px; }
+.verdict { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 4px; min-width: 0; }
+.verdict .k { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.verdict .v { font-weight: 600; line-height: 1.45; }
+.verdict.no .v { color: var(--warn); }
+.verdict.yes .v { color: var(--ok); }
+
+.toc { display: flex; gap: 8px; overflow-x: auto; padding-block: 16px; margin-bottom: 8px; scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+.toc a { flex: 0 0 auto; background: var(--chip); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 13px; text-decoration: none; color: var(--fg); white-space: nowrap; }
+.toc a:hover { border-color: var(--accent); }
+
+section { padding-block: 28px; border-bottom: 1px solid var(--line); scroll-margin-top: 72px; }
+section:last-of-type { border-bottom: 0; }
+h2 { font-family: var(--font-display); font-weight: 700; font-size: clamp(22px, 3.6vw, 30px); line-height: 1.3; margin: 0 0 14px; text-wrap: balance; letter-spacing: -0.005em; }
+h3 { font-family: var(--font-display); font-weight: 600; font-size: 19px; line-height: 1.35; margin: 24px 0 8px; text-wrap: balance; }
+p { margin: 0 0 14px; max-width: 72ch; }
+ul, ol { margin: 0 0 14px; padding-left: 1.3em; max-width: 72ch; }
+li { margin-bottom: 6px; }
+li::marker { color: var(--accent); }
+strong { font-weight: 600; }
+code { font-family: var(--font-mono); font-size: 0.88em; background: var(--chip); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+
+.callout { background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 14px 16px; margin: 16px 0; }
+.callout p:last-child { margin-bottom: 0; }
+.callout.warn { background: var(--warn-soft); border-left-color: var(--warn); }
+.quote { font-family: var(--font-display); font-size: 19px; line-height: 1.5; font-style: italic; color: var(--fg); margin: 16px 0; padding-left: 14px; border-left: 2px solid var(--accent); max-width: 68ch; }
+
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 14px 0; }
+.panel { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.panel h4 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+.panel.build h4 { color: var(--ok); }
+.panel.skip h4 { color: var(--warn); }
+.panel ul { margin: 0; max-width: none; }
+.panel li { font-size: 15px; }
+
+.tbl { overflow-x: auto; margin: 14px 0; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 14.5px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--chip); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+.est { color: var(--muted); font-size: 13px; }
+
+.gaps { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 14px 0; }
+.gap { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+.gap .n { font-family: var(--font-display); font-size: 26px; font-weight: 700; color: var(--accent); line-height: 1; margin-bottom: 6px; }
+.gap h4 { margin: 0 0 6px; font-size: 16px; }
+.gap p { margin: 0; font-size: 14.5px; color: var(--muted); }
+
+footer { color: var(--muted); font-size: 13px; padding-top: 24px; }
+footer p { max-width: none; }
+
+@media (max-width: 480px) {
+  .brand small { display: none; }
+  .switch button { padding: 6px 11px; }
+  .lede { font-size: 17px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+</style>
+
+<div class="bar">
+  <div class="bar-in">
+    <div class="brand">ShogunAgent <small>Strategy</small></div>
+    <div class="switch" role="group" aria-label="Language / 言語">
+      <button type="button" id="btn-ja" aria-pressed="true" data-set-lang="ja">日本語</button>
+      <button type="button" id="btn-en" aria-pressed="false" data-set-lang="en">English</button>
+    </div>
+  </div>
+</div>
+
+<main class="wrap">
+
+<!-- ===================== HERO ===================== -->
+<header class="hero">
+  <div class="eyebrow"><span lang="ja">方針レポート · 2026年10月25日時点</span><span lang="en">Strategy report · as of 25 Oct 2026</span></div>
+  <h1 lang="ja">ShogunAgent は「記憶」ではなく「仕事の状態」を売れ</h1>
+  <h1 lang="en">ShogunAgent should sell “state of work,” not “memory”</h1>
+  <p class="lede" lang="ja">AI エージェント向けメモリ API は飽和した。空いているのは、人・プロジェクト・コミットメント・オープンループを provenance と confidence 付きで推定し、L1/L2/L3 の承認階層ごしに複数エージェントへ貸し出す層である。ShogunAI の「難しい部分」の 70% 以上はそこへそのまま持ち越せる。</p>
+  <p class="lede" lang="en">The agent-memory API market is saturated. The open space is a layer that infers people, projects, commitments and open loops with provenance and confidence on every fact, and lends that state to many agents through L1/L2/L3 approval tiers. More than 70% of ShogunAI’s hard parts carry over directly.</p>
+  <div class="verdicts">
+    <div class="verdict yes"><div class="k"><span lang="ja">ポジショニング</span><span lang="en">Positioning</span></div><div class="v"><span lang="ja">仕事の状態（state of work）レイヤー</span><span lang="en">The state-of-work layer for agents</span></div></div>
+    <div class="verdict yes"><div class="k"><span lang="ja">最初に建てる</span><span lang="en">Build first</span></div><div class="v"><span lang="ja"><code>shogun_api</code> をテナント別に多重化 + Streamable HTTP MCP</span><span lang="en">Multiplex <code>shogun_api</code> per tenant + Streamable HTTP MCP</span></div></div>
+    <div class="verdict no"><div class="k"><span lang="ja">Monid 型アグリゲータ</span><span lang="en">Monid-style aggregator</span></div><div class="v"><span lang="ja">作らない。載る。</span><span lang="en">Don’t build it. Get listed on them.</span></div></div>
+    <div class="verdict"><div class="k"><span lang="ja">価格（推定）</span><span lang="en">Pricing (estimate)</span></div><div class="v">$0 / $19 / $99 / $399+</div></div>
+    <div class="verdict"><div class="k"><span lang="ja">再利用率</span><span lang="en">Reuse ratio</span></div><div class="v"><span lang="ja">行数 30〜40%、難所 70%+</span><span lang="en">30–40% by LOC, 70%+ of hard parts</span></div></div>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <a href="#market"><span lang="ja">1 市場</span><span lang="en">1 Market</span></a>
+  <a href="#supermemory"><span lang="ja">2 supermemory</span><span lang="en">2 supermemory</span></a>
+  <a href="#assets"><span lang="ja">3 持ち越せる資産</span><span lang="en">3 Reusable assets</span></a>
+  <a href="#api"><span lang="ja">4 API と設計</span><span lang="en">4 API &amp; architecture</span></a>
+  <a href="#pricing"><span lang="ja">5 価格</span><span lang="en">5 Pricing</span></a>
+  <a href="#gtm"><span lang="ja">6 GTM</span><span lang="en">6 Go-to-market</span></a>
+  <a href="#monid"><span lang="ja">7 Monid</span><span lang="en">7 Monid</span></a>
+  <a href="#decision"><span lang="ja">8 決定事項</span><span lang="en">8 Decisions</span></a>
+  <a href="#roadmap"><span lang="ja">9 ロードマップ</span><span lang="en">9 Roadmap</span></a>
+  <a href="#risks"><span lang="ja">10 リスク</span><span lang="en">10 Risks</span></a>
+</nav>
+
+<!-- ===================== 1 MARKET ===================== -->
+<section id="market">
+  <h2 lang="ja">1. 競合は「ユーザーの事実を覚える API」で飽和し、「仕事の状態」は空白</h2>
+  <h2 lang="en">1. Competitors saturate “remember the user’s facts”; “state of work” is empty</h2>
+
+  <div lang="ja">
+    <p>開発者向けメモリ API はこの 18 か月で API 形状・価格・配布経路がすべて収斂した。形状は「add/ingest → 非同期抽出 → search/retrieve → 任意で graph/profile」、配布は「Apache-2.0/MIT の OSS コア＋マネージドクラウド＋MCP サーバー」、価格は「Free → $19〜20 → $100〜400 → Enterprise」。計量単位だけがばらつく：トークン（supermemory $0.005/1K SM tokens）、バイト（Zep 1 credit/350 bytes、検索無料）、リクエスト（Mem0 Starter $19、Pro $249）、アクティブエージェント（Letta $0.10/agent/月）。<a href="https://supermemory.ai/pricing">supermemory</a> · <a href="https://www.getzep.com/pricing">Zep</a> · <a href="https://mem0.ai/pricing">Mem0</a> · <a href="https://docs.letta.com/letta-code/pricing">Letta</a></p>
+    <p>資金は Mem0 の $24M Series A（<a href="https://techcrunch.com/2025/10/28/mem0-raises-24m-from-yc-peak-xv-and-basis-set-to-build-the-memory-layer-for-ai-apps/">TechCrunch</a>）と「学習型メモリ」を掲げて $98M で登場した Engram（<a href="https://pulse2.com/engram-launches-with-98-million-to-build-ai-memory-layer-for-enterprises/">Pulse 2.0</a>）を除けばシード規模で、あるトラッカーはこのカテゴリを 14 件・$124M・中央値 $5.88M と数え、メモリは 2026 Q2 のエージェント AI 投資の約 1%（<a href="https://agentmarketcap.ai/blog/2026/04/08/agentic-ai-funding-velocity-2026-sector-map-vertical-distribution">agentmarketcap</a>）。投資家の総意は「ラボがパーソナライズ記憶を吸収する」。OpenAI は 2026-06-04 に背景プロセス "Dreaming"（<a href="https://openai.com/index/chatgpt-memory-dreaming/">OpenAI</a>）、Anthropic は Managed Agents の memory（2026-04-23 公開ベータ）と "dreaming"（2026-05-06）、AWS は長期記憶を $0.75/1,000 記録/月＋$0.50/1,000 取得で売る（<a href="https://aws.amazon.com/bedrock/agentcore/pricing/">AWS</a>）。ハイパースケーラーの価格が保存単価の床であり、第三者が勝てるのは抽出品質・時間推論・可搬性・推論（inference）に限られる。</p>
+  </div>
+  <div lang="en">
+    <p>Developer memory APIs converged over the last 18 months on shape, price and distribution. Shape: add/ingest → async extraction → search/retrieve → optional graph/profile. Distribution: Apache-2.0/MIT open core + managed cloud + MCP server. Price: Free → $19–20 → $100–400 → Enterprise. Only the metering unit varies: tokens (supermemory $0.005/1K SM tokens), bytes (Zep 1 credit per 350 bytes, retrieval free), requests (Mem0 Starter $19, Pro $249), active agents (Letta $0.10/agent/month). <a href="https://supermemory.ai/pricing">supermemory</a> · <a href="https://www.getzep.com/pricing">Zep</a> · <a href="https://mem0.ai/pricing">Mem0</a> · <a href="https://docs.letta.com/letta-code/pricing">Letta</a></p>
+    <p>Apart from Mem0’s $24M Series A (<a href="https://techcrunch.com/2025/10/28/mem0-raises-24m-from-yc-peak-xv-and-basis-set-to-build-the-memory-layer-for-ai-apps/">TechCrunch</a>) and Engram’s $98M launch as “learning memory” (<a href="https://pulse2.com/engram-launches-with-98-million-to-build-ai-memory-layer-for-enterprises/">Pulse 2.0</a>), funding is seed-scale: one tracker counts 14 deals, $124M, $5.88M median, and memory is about 1% of Q2 2026 agentic capital (<a href="https://agentmarketcap.ai/blog/2026/04/08/agentic-ai-funding-velocity-2026-sector-map-vertical-distribution">agentmarketcap</a>). Investor consensus: the labs absorb personalization memory. OpenAI shipped background “Dreaming” on 2026-06-04 (<a href="https://openai.com/index/chatgpt-memory-dreaming/">OpenAI</a>); Anthropic shipped Managed Agents memory (public beta 2026-04-23) and “dreaming” (2026-05-06); AWS sells long-term memory at $0.75 per 1,000 records/month plus $0.50 per 1,000 retrievals (<a href="https://aws.amazon.com/bedrock/agentcore/pricing/">AWS</a>). Hyperscaler prices are the floor for storage; a third party wins only on extraction quality, temporal reasoning, portability, or inference.</p>
+  </div>
+
+  <h3 lang="ja">空いている三つの交差点</h3>
+  <h3 lang="en">Three open intersections</h3>
+  <div class="gaps">
+    <div class="gap"><div class="n">1</div>
+      <h4 lang="ja">推定された仕事の状態</h4><h4 lang="en">Inferred state of work</h4>
+      <p lang="ja">メールやカレンダーからオープンループやコミットメントを推定する専用製品は無い。最も近い Microsoft 365 Copilot の「communication memory」は M365 テナントに閉じている。</p>
+      <p lang="en">No product infers open loops and commitments from mail and calendar. The closest, Microsoft 365 Copilot “communication memory,” is locked to the M365 tenant.</p></div>
+    <div class="gap"><div class="n">2</div>
+      <h4 lang="ja">複数エージェント＋人の共有状態</h4><h4 lang="en">Shared state across agents and humans</h4>
+      <p lang="ja">Memory Store は $500K シード、ByteRover はプレシード、Tabnine は機能にとどまる。Futurum は「共有メモリが 2027 年に RFP 標準要件になるか」を問う段階。</p>
+      <p lang="en">Memory Store is a $500K seed, ByteRover pre-seed, Tabnine a feature. Futurum asks whether shared memory becomes a standard RFP item in 2027.</p></div>
+    <div class="gap"><div class="n">3</div>
+      <h4 lang="ja">本当のローカルファースト／ゼロ保持</h4><h4 lang="en">True local-first / zero retention</h4>
+      <p lang="ja">資金調達済みベンダーは全てクラウドファースト。ローカルは MemPalace や SuperLocalMemory など OSS 趣味プロジェクトが担う。Limitless は Meta に買収、Rewind は停止、Graphlit は縮小、Khoj Cloud は終了。</p>
+      <p lang="en">Every funded vendor is cloud-first; local is left to hobby OSS such as MemPalace and SuperLocalMemory. Limitless sold to Meta, Rewind stopped capture, Graphlit wound down, Khoj Cloud closed.</p></div>
+  </div>
+
+  <div lang="ja">
+    <p>「生の記録」に消費者は払わなかったが、生の記録を<strong>構造化された状態</strong>に変える推論層は誰も商用化していない。a16z は「エージェントはビジネス文脈の欠如で失敗する」と書き（<a href="https://a16z.com/your-data-agents-need-context/">a16z</a>）、Deep Feed はメモリを「型付きビジネス知識／証明付き学習／セッション状態／ユーザー個人化」の 4 製品に分け、最後のものだけがラボにネイティブ提供されると整理した（<a href="https://www.thedeepfeed.ai/posts/2026-06-12-agent-memory-seed-wave/">The Deep Feed</a>）。ShogunAgent は「型付きビジネス知識」側に立つべきで、比較対象は Mem0 ではなく Jedify（$24M Series A）や Interloom（$16.5M シード）である。</p>
+    <p>需要側の信号は間接的だが強い。LangChain の調査（1,340 回答）では 57.3% がエージェントを本番運用し、1 万人超企業の自由記述は「大規模な文脈管理の継続的な困難」を挙げる（<a href="https://langchain.com/state-of-agent-engineering">LangChain</a>）。Claude Code のランレート収益は 2026 年 2 月に $2.5B を超え（<a href="https://feeds.simonwillison.net/2026/Feb/12/anthropic/">Simon Willison</a>）、権限プロンプトは <strong>93% が承認される</strong>（<a href="https://neuraltrust.ai/blog/human-in-the-loop-ai-agents">NeuralTrust</a>）。承認 UX は壊れており、「ローカル可逆は即実行、外部送信だけ専用ボタン」という L1/L2/L3 はそこに応える。</p>
+  </div>
+  <div lang="en">
+    <p>Consumers did not pay for raw recordings, but nobody has commercialized the inference layer that turns raw records into <strong>structured state</strong>. a16z writes that agents fail for lack of business context (<a href="https://a16z.com/your-data-agents-need-context/">a16z</a>); The Deep Feed splits memory into four products (typed business knowledge, verified learning, session state, user personalization) and notes only the last is natively supplied by labs (<a href="https://www.thedeepfeed.ai/posts/2026-06-12-agent-memory-seed-wave/">The Deep Feed</a>). ShogunAgent belongs on the typed-business-knowledge side; its comparables are Jedify ($24M Series A) and Interloom ($16.5M seed), not Mem0.</p>
+    <p>Demand signals are indirect but strong. In LangChain’s survey (1,340 responses) 57.3% run agents in production and 10k+ enterprises write in “ongoing difficulty managing context at scale” (<a href="https://langchain.com/state-of-agent-engineering">LangChain</a>). Claude Code passed a $2.5B run rate in Feb 2026 (<a href="https://feeds.simonwillison.net/2026/Feb/12/anthropic/">Simon Willison</a>), and <strong>93% of its permission prompts are approved</strong> (<a href="https://neuraltrust.ai/blog/human-in-the-loop-ai-agents">NeuralTrust</a>). Approval UX is broken; “local reversible runs now, external sends get a dedicated button” is the L1/L2/L3 answer.</p>
+  </div>
+</section>
+
+<!-- ===================== 2 SUPERMEMORY ===================== -->
+<section id="supermemory">
+  <h2 lang="ja">2. supermemory は「開いたクライアント・閉じたエンジン」で、構造化状態と権限を持たない</h2>
+  <h2 lang="en">2. supermemory: open clients, closed engine, no structured state, no permissions</h2>
+  <div lang="ja">
+    <p>supermemory は消費者製品（Nova、Company Brain）を 2026-09-09 に閉じて「メモリエンジン一本」に絞り（<a href="https://supermemory.ai/blog/an-update-to-supermemory">公式ブログ</a>）、API v5（2026-10-07）、hosted MCP（17 ツール）、7 つのコーディングエージェント・プラグイン、SMFS、自己ホスト用バイナリを出している。資金は $2.6M シード（エンジェルに Jeff Dean、Cloudflare CTO）、チーム約 9 名、GitHub 31.4k スターは 2024 年の消費者アプリから継承（<a href="https://github.com/supermemoryai/supermemory">GitHub</a>）。</p>
+    <div class="callout"><p><strong>MIT リポジトリにメモリエンジンは入っていない。</strong> <code>apps/{web,docs,mcp}</code> と <code>packages/{tools,validation,memory-graph,…}</code> はすべて <code>api.supermemory.ai</code> を呼ぶクライアント。自己ホスト用バイナリは「別の非公開コードベースから構築」と明記され、Issue #1299「supermemory-server のソースはどこか」は 2026-07 から開いたまま。ローカル版は BYO モデルで品質が劣り、テレメトリ既定 ON、データ損失や OOM の Issue（#1826、#1827、#1806）が並ぶ。<strong>真にローカルファーストでエンジンが開いている立ち位置は丸ごと空いている。</strong></p></div>
+    <p>データモデルも質的に異なる。グラフはノードが <code>document | memory</code> の 2 種、エッジが <code>updates | extends | derives</code> の 3 種で、人物やプロジェクトのエンティティは無い。自ら「system of record ではない。SQL も join も主キー検索も無い」と規定する（<a href="https://supermemory.ai/docs/overview/what-is-supermemory">docs</a>）。権限は MCP アノテーションと名前空間ごとの read/write だけで、行動階層・確認フロー・エージェント書き込みの監査は無い。既定の dreaming では新しい名前空間は数分間メモリ 0。<strong>CJK テキストが索引されない Issue #1740</strong> も開いており、日本語 132 問で R@5 0.985 を出す ShogunAI にとって直接の差別化点になる。</p>
+    <p>ベンチマークは「#1 on every major AI memory benchmark」を掲げるが、看板の 97% は Recall@20 で、同じレポートの end-to-end 正答率は 81.6〜85.2%（<a href="https://supermemory.ai/research/longmembench">supermemory</a>）。競合運営の同一ハーネス OmniMemEval では LoCoMo 73.53／LongMemEval 66.07 で MemOS や Letta の下にいる（<a href="https://github.com/MemTensor/OmniMemEval/blob/main/docs/user_memory/results.md">OmniMemEval</a>）。</p>
+    <h3>借りるべき設計</h3>
+    <ul>
+      <li>名前空間を URL に置く v5（<code>/ns/{namespace}/document</code>）、<code>include{documents,related,forgotten}</code> による展開</li>
+      <li><code>dryRun</code> 必須の一括 forget、<code>who_am_i</code>/<code>list_spaces</code> の発見ツール、破壊的／追加的のアノテーション分離</li>
+      <li><code>&lt;supermemory context="user-memories" readonly&gt;</code> という置換可能・エスケープ済みのシステムプロンプト注入ブロック</li>
+      <li>SKILL.md ＋ <code>npx supermemory help --json</code> ＋ docs MCP という「エージェントが自分で導入する」三点セット</li>
+      <li>逆に避けること：12 か月で 3 世代の API を回し 11 本の移行ページを抱える churn。ShogunAgent は v1 の wire name を凍結し 12 か月の非推奨ポリシーを最初から宣言する</li>
+    </ul>
+  </div>
+  <div lang="en">
+    <p>supermemory shut its consumer products (Nova, Company Brain) on 2026-09-09 to go “all in on the memory engine” (<a href="https://supermemory.ai/blog/an-update-to-supermemory">blog</a>) and now ships API v5 (2026-10-07), a hosted MCP with 17 tools, 7 coding-agent plugins, SMFS, and a self-host binary. Funding is a $2.6M seed (angels include Jeff Dean and Cloudflare’s CTO), the team is about 9 people, and the 31.4k GitHub stars were inherited from the 2024 consumer app (<a href="https://github.com/supermemoryai/supermemory">GitHub</a>).</p>
+    <div class="callout"><p><strong>The MIT repo does not contain the memory engine.</strong> <code>apps/{web,docs,mcp}</code> and <code>packages/{tools,validation,memory-graph,…}</code> are all clients of <code>api.supermemory.ai</code>. The self-host binary is “built from a separate, non-public codebase,” and issue #1299 (“where is the supermemory-server source?”) has been open since July 2026. The local build runs on BYO models with lower quality, telemetry on by default, and open data-loss and OOM issues (#1826, #1827, #1806). <strong>A truly local-first product with an open engine is an unoccupied position.</strong></p></div>
+    <p>The data model differs in kind. The graph has two node types (<code>document | memory</code>) and three edge types (<code>updates | extends | derives</code>); there are no person or project entities. The docs say it is “not a system of record: no SQL, no joins, no primary-key lookups” (<a href="https://supermemory.ai/docs/overview/what-is-supermemory">docs</a>). Permissions are MCP annotations plus per-namespace read/write; there are no action tiers, confirmation flows, or audit of agent writes. With default dreaming, a new namespace has zero memories for minutes. <strong>Issue #1740, CJK text never indexed</strong>, is still open, a direct differentiator for ShogunAI, which scores R@5 0.985 on 132 Japanese queries.</p>
+    <p>The “#1 on every major AI memory benchmark” claim rests on Recall@20 = 97%; the same report’s end-to-end accuracy is 81.6–85.2% (<a href="https://supermemory.ai/research/longmembench">supermemory</a>). On the competitor-run same-harness OmniMemEval it scores LoCoMo 73.53 / LongMemEval 66.07, below MemOS and Letta (<a href="https://github.com/MemTensor/OmniMemEval/blob/main/docs/user_memory/results.md">OmniMemEval</a>).</p>
+    <h3>Designs worth borrowing</h3>
+    <ul>
+      <li>Namespace in the URL (<code>/ns/{namespace}/document</code>) and <code>include{documents,related,forgotten}</code> expansion</li>
+      <li>Mandatory <code>dryRun</code> on bulk forget, <code>who_am_i</code>/<code>list_spaces</code> discovery tools, separate destructive vs. additive annotations</li>
+      <li>A replaceable, escaped system-prompt block: <code>&lt;supermemory context="user-memories" readonly&gt;</code></li>
+      <li>The self-onboarding trio: SKILL.md + <code>npx supermemory help --json</code> + a docs MCP</li>
+      <li>And one thing to avoid: three API generations in 12 months with 11 migration pages. ShogunAgent freezes v1 wire names and declares a 12-month deprecation policy on day one</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ===================== 3 ASSETS ===================== -->
+<section id="assets">
+  <h2 lang="ja">3. ShogunAI の「難しい部分」は 70% 持ち越せるが、macOS 層は 0%</h2>
+  <h2 lang="en">3. 70% of ShogunAI’s hard parts carry over; the macOS layer carries 0%</h2>
+  <div lang="ja">
+    <p>コードベース（約 330,000 行の Rust、テスト 5,719、マイグレーション V1〜V91、テーブル 114）のうち、ShogunAgent に差別化をもたらす資産は 8 つある。</p>
+    <ol>
+      <li><strong>provenance ＋ confidence ＋ 逐語 quote 検証付きの状態モデルと supersession。</strong> <code>state_provenance</code> が空の INSERT はリポジトリ層が拒否し、<code>shogun-fusion/src/confidence.rs</code> が High ≥0.8／Medium 0.5〜0.8／Low &lt;0.5 を強制、半減期減衰、<code>state_disputes</code>、<code>loop_signals</code> → consolidator（MIN_CONFIDENCE 0.84、quote 完全一致）の二段構え。研究が「削除が派生エントリに伝播しない」と指摘する欠落への実装済みの答えで、GDPR Art.17 のカスケード削除をそのまま売れる。</li>
+      <li><strong>L1/L2/L3 と <code>ApprovalQueue</code>。</strong> <code>shogun-agents</code>（依存ゼロ）の <code>SendAction</code> は型で L3、<code>ApprovalOrigin {Ui, Api, Mcp, Cli}</code> が同一フロー、10 分タイムアウト。</li>
+      <li><strong>低コスト抽出パイプライン。</strong> セッション化（行 1,650 → セッション 30〜80）、prefilter、anchor 検証、毎時冪等サイクル、relay 側スキーマ強制。<code>docs/unit-economics.md</code> は LLM 原価を $67.94 → $9.08 → <strong>$2.08/人・月</strong>と見積もる。これがそのまま抽出 API の粗利になる。</li>
+      <li><strong>ゼロ保持ゲートウェイ。</strong> <code>traceability_log</code> は本文カラム無し、<code>shogun-redact</code> は秘密情報 recall 1.000・FP 0、<code>instruction_shaped</code> ゲートは OWASP ASI06「Memory and Context Poisoning」の書き込み経路防御そのもの。</li>
+      <li><strong>評価ハーネス 6 種</strong>（memory-bench、pii-bench、dedup-bench、extract-eval、fusion-eval、日英 golden search eval）。</li>
+      <li><strong>日本語品質</strong>（NFKC、送り仮名折り畳み、漢字 bigram）。</li>
+      <li><code>shogun-memory-import/v1</code>（ChatGPT/Claude/Cursor からの移行導線）。</li>
+      <li><strong>Memory API 三面対称。</strong> 158 ツール中 85 が Read、core 20 本は約 3k トークン、Claude Code/Codex/Cursor へ起動時に read 接続を自動投入。</li>
+    </ol>
+    <p>持ち越せないのは取得層全部（AX、OCR、音声、ノッチ）、Keychain 依存の秘密保管、Tauri デスクトップ 86k 行、そして<strong>単一テナント前提</strong>（SQLCipher ファイル 1 個＝1 ユーザー、REST は <code>127.0.0.1:7464</code> 固定、承認 UI はデスクトップ）。</p>
+  </div>
+  <div lang="en">
+    <p>Of the codebase (about 330,000 lines of Rust, 5,719 tests, migrations V1–V91, 114 tables), eight assets differentiate ShogunAgent.</p>
+    <ol>
+      <li><strong>A state model with provenance, confidence, verbatim-quote verification and supersession.</strong> The repository layer rejects any INSERT with empty <code>state_provenance</code>; <code>shogun-fusion/src/confidence.rs</code> enforces High ≥0.8 / Medium 0.5–0.8 / Low &lt;0.5, half-life decay, <code>state_disputes</code>, and a two-stage <code>loop_signals</code> → consolidator (MIN_CONFIDENCE 0.84, exact quote match). This is an implemented answer to the research finding that deletions rarely propagate to derived entries, and GDPR Art. 17 cascade deletion can be sold as is.</li>
+      <li><strong>L1/L2/L3 and <code>ApprovalQueue</code>.</strong> In dependency-free <code>shogun-agents</code>, <code>SendAction</code> is L3 by type, <code>ApprovalOrigin {Ui, Api, Mcp, Cli}</code> share one flow, 10-minute timeout.</li>
+      <li><strong>A low-cost extraction pipeline.</strong> Sessionization (1,650 rows → 30–80 sessions), prefilter, anchor verification, hourly idempotent cycles, relay-side schema enforcement. <code>docs/unit-economics.md</code> estimates LLM cost at $67.94 → $9.08 → <strong>$2.08 per person per month</strong>. That is the extraction API’s gross margin.</li>
+      <li><strong>A zero-retention gateway.</strong> <code>traceability_log</code> has no body column; <code>shogun-redact</code> scores secret recall 1.000 with 0 false positives; the <code>instruction_shaped</code> gate is exactly the write-path defense OWASP ASI06 “Memory and Context Poisoning” recommends.</li>
+      <li><strong>Six eval harnesses</strong> (memory-bench, pii-bench, dedup-bench, extract-eval, fusion-eval, JA/EN golden search eval).</li>
+      <li><strong>Japanese text quality</strong> (NFKC, okurigana folding, kanji bigrams).</li>
+      <li><code>shogun-memory-import/v1</code> (migration path from ChatGPT/Claude/Cursor).</li>
+      <li><strong>Three-way symmetric Memory API.</strong> 85 of 158 tools are read-only, the core 20 cost about 3k tokens, and read connections are auto-installed into Claude Code/Codex/Cursor on launch.</li>
+    </ol>
+    <p>What does not carry over: the whole capture layer (AX, OCR, audio, notch), Keychain-bound secret storage, the 86k-line Tauri desktop, and the <strong>single-tenant assumption</strong> (one SQLCipher file = one user, REST fixed to <code>127.0.0.1:7464</code>, approval UI on the desktop).</p>
+  </div>
+
+  <div class="tbl"><table>
+    <thead><tr><th><span lang="ja">領域</span><span lang="en">Area</span></th><th><span lang="ja">再利用率（推定）</span><span lang="en">Reuse (estimate)</span></th></tr></thead>
+    <tbody>
+      <tr><td>shogun-fusion / shogun-agents / shogun-redact</td><td>90%</td></tr>
+      <tr><td><span lang="ja">検索・identity・dedup・sanitize</span><span lang="en">search, identity, dedup, sanitize</span></td><td>80–90%</td></tr>
+      <tr><td><span lang="ja">評価ハーネス</span><span lang="en">eval harnesses</span></td><td>80%</td></tr>
+      <tr><td>apps/api + license API</td><td>70%</td></tr>
+      <tr><td>shogun-memory</td><td><span lang="ja">SQLite 継続なら 60〜70%（Postgres 移植なら 25%）</span><span lang="en">60–70% if SQLite stays (25% on a Postgres port)</span></td></tr>
+      <tr><td>shogun-mcp</td><td><span lang="ja">40%（デスクトップ固有 約 100 本は不要）</span><span lang="en">40% (about 100 desktop-only tools not needed)</span></td></tr>
+      <tr><td>shogun-core</td><td>25–30%</td></tr>
+      <tr><td><span lang="ja">デスクトップ</span><span lang="en">desktop</span></td><td>0%</td></tr>
+    </tbody>
+  </table></div>
+
+  <div lang="ja">
+    <div class="callout"><p><code>shogun-core/src/bin/shogun_api.rs</code> と <code>shogun_mcp.rs</code> は<strong>既に「DB パスを指定して立つ単体メモリサーバー」</strong>であり、Linux CI は全クレートが通る。最短経路は、このバイナリをテナントごとの SQLCipher ファイルで多重化し、<code>apps/api</code> を認証・計量の前段に置くこと。</p></div>
+    <p>欠けているものは 9 項目：テナンシー（Cloudflare Agent Memory も supermemory も「1 ユーザー＝1 Durable Object＋SQLite」を選んでおり、「1 人＝1 ワールドモデル」と一致）、エージェント認証（<code>apps/api/src/auth.ts</code> の Ed25519 トークンを流用）、汎用取り込み API、意味検索（埋め込み再導入）、承認フローの遠隔化（Web/Slack/webhook）、SDK と Streamable HTTP MCP、名前空間・ACL・監査、従量課金（Stripe metered）、サーバー側スケジューラ。</p>
+  </div>
+  <div lang="en">
+    <div class="callout"><p><code>shogun-core/src/bin/shogun_api.rs</code> and <code>shogun_mcp.rs</code> are <strong>already standalone memory servers that start from a DB path</strong>, and every crate passes Linux CI. The shortest path is to multiplex that binary across per-tenant SQLCipher files and put <code>apps/api</code> in front for auth and metering.</p></div>
+    <p>Nine things are missing: tenancy (Cloudflare Agent Memory and supermemory both chose “one user = one Durable Object + SQLite,” matching “one person = one world model”), agent auth (reuse the Ed25519 tokens in <code>apps/api/src/auth.ts</code>), a generic ingest API, semantic search (re-enable embeddings), remote approvals (web/Slack/webhook), SDKs and Streamable HTTP MCP, namespaces/ACL/audit, metered billing (Stripe metered), and a server-side scheduler.</p>
+  </div>
+</section>
+
+<!-- ===================== 4 API ===================== -->
+<section id="api">
+  <h2 lang="ja">4. プロダクト／API／アーキテクチャ：三つのインターフェース形状と MCP 2026-07-28 に合わせる</h2>
+  <h2 lang="en">4. Product, API, architecture: serve all three interface shapes and MCP 2026-07-28</h2>
+  <div lang="ja">
+    <p>2026 年 10 月にエージェントが実際に呼ぶメモリ・インターフェースは三形状に収斂している。</p>
+    <ul>
+      <li><strong>ファイル形状</strong>：Anthropic の <code>memory_20250818</code>（<code>view/create/str_replace/insert/delete/rename</code> を <code>/memories</code> 配下で）、Claude Code の <code>MEMORY.md</code>（先頭 200 行／25KB）、Letta の git バック MemFS（<a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool">Anthropic</a>）。</li>
+      <li><strong>動詞形状の MCP ツール</strong>：標準名は無く、Cloudflare は <code>ingest/remember/recall/forget/list</code> を選んだ。</li>
+      <li><strong>予算付き文脈注入</strong>：Honcho の <code>contextTokens</code>、Mastra Observational Memory の安定・追記のみ観測ログ（プロンプトキャッシュで 4〜10× のコスト削減、<a href="https://mastra.ai/research/observational-memory">Mastra</a>）。</li>
+    </ul>
+    <p>ShogunAgent は三つ全部に応えるべきで、既存資産で安い：<code>memory.get_context_pack</code> はそのまま予算付き注入 API、<code>entity_pages</code> の wikilink 付きページは <code>/memories/people/&lt;name&gt;.md</code>、<code>/memories/projects/&lt;id&gt;.md</code>、<code>/memories/open_loops.md</code>、<code>/memories/INDEX.md</code> という仮想ファイルシステムに射影でき、<code>memory_20250818</code> の <code>view</code> にゼロ統合で応答できる。動詞形状は core 20 本を v1 として凍結し、<code>memory.ingest(events[] | turns[], source, actor, thread_key, metadata)</code> と <code>memory.recall(query, budget_tokens)</code> を追加する。</p>
+    <h3>MCP 2026-07-28 仕様への写像</h3>
+    <p>この版は <code>initialize</code> と <code>Mcp-Session-Id</code> を廃してステートレス化し、<code>Mcp-Method</code>／<code>Mcp-Name</code> ヘッダを必須化、list/read 応答に <code>ttlMs</code>／<code>cacheScope</code>、サーバー起点 elicitation を Multi Round-Trip Requests（<code>input_required</code>）に置き換え、DCR を CIMD へ移した。Tier 1 SDK は月間約 5 億ダウンロード（<a href="https://blog.modelcontextprotocol.io/posts/2026-07-28/">MCP</a>）。含意は三つ：</p>
+    <ol>
+      <li><code>Mcp-Method</code>/<code>Mcp-Name</code> でプロキシ層計量が無料になり、per-operation 課金が <code>apps/api</code> の reserve-then-settle 台帳にそのまま載る。</li>
+      <li><strong>L1 = 即時、L2 = MRTR <code>input_required</code> のフォーム確認、L3 = URL モード elicitation で帯域外の人間承認</strong>という標準準拠の写像が得られ、<code>ApprovalOrigin::Mcp</code> の既存キューがそのまま裏側になる。</li>
+      <li>ロードマップが agent identity（DPoP、WIF、ID-JAG）と progressive discovery を優先項目に置いた以上（<a href="https://blog.modelcontextprotocol.io/posts/mcp-roadmap/">MCP roadmap</a>）、ACL はいまから tenant × agent × end-user の 3 軸で設計する。</li>
+    </ol>
+    <p>組織境界を越える引き渡しには A2A v1.0 の署名付き Agent Card を出す。A2A は「メッセージ」を運ぶが引き渡し内容は無標準で、7 製品を試した検証は「メモリ可搬性は実質存在しない」と結論した（<a href="https://dev.to/stantyan/i-tested-7-ai-memory-products-for-portability-all-7-lock-you-in-31pm">dev.to</a>）。可搬性標準は W3C AI Agent Memory Interoperability CG（2026 年 6 月憲章）と 4 形式が競合中で、公開エクスポート形式を初日から出し CG に参加するのが正しい賭けである。</p>
+    <h3>アーキテクチャの判断</h3>
+    <p>業界は「生の証拠 → 型付き・双時間・provenance 付き状態 → 要約」の三層＋背景統合に収斂し、ShogunAI の event_log → state → period_summaries ＋ Dream Cycle を裏書きする。同時に<strong>グラフ「エンジン」は退潮</strong>：Mem0 は traversable な relations を外し、Graphiti は Kuzu を非推奨、Kuzu は Apple 買収で 2025-10 にアーカイブ（<a href="https://www.theregister.com/2025/10/14/kuzudb_abandoned/">The Register</a>）。SQLite の型付き関係行と再帰 CTE で十分で、グラフ DB は買わない。埋め込みは fastembed-rs ＋ Qwen3-Embedding-0.6B または nomic をローカル既定にし、ベンチマーク全腕で固定する（MemDelta は埋め込みの差し替えだけで +6.2pp 動き結論が反転することを示した）。</p>
+    <p>ベンチマークは LoCoMo を追わない：Penfield Labs の監査で解答キーの 6.4% が誤り、既定の LLM 採点者は意図的な誤答の 62.81% を受け入れた（<a href="https://dev.to/penfieldlabs/we-audited-locomo-64-of-the-answer-key-is-wrong-and-the-judge-accepts-up-to-63-of-intentionally-33lg">Penfield Labs</a>）。信頼を得る方法は OmniMemEval と Mem0 公開ハーネスでの同一ハーネス走行と、誰も測っていない「オープンループ／コミットメント追跡」ベンチを自分で定義すること。memory-bench の既知の弱点（temporal recall@1 0.000、abstention false-evidence 100%）は公開前に閉じる。</p>
+    <p>セキュリティは機能である。メモリ汚染（MINJA、OWASP ASI06）への推奨緩和策は <code>sanitize::persist_body</code>、<code>state_provenance.quote</code>、L2/L3 承認として実装済み。agent-scratch 名前空間を principal のワールドモデルから分離し、全書き込みに actor を記録する。ユーザー保持鍵による暗号化は商用メモリベンダーに存在せず（AWS は CMK のみ）、SQLCipher ＋ Keychain 鍵の既存設計は「鍵をユーザーが持つ」階層として売れる。</p>
+  </div>
+  <div lang="en">
+    <p>By October 2026 the memory interfaces agents actually call have converged on three shapes.</p>
+    <ul>
+      <li><strong>File-shaped</strong>: Anthropic’s <code>memory_20250818</code> (<code>view/create/str_replace/insert/delete/rename</code> under <code>/memories</code>), Claude Code’s <code>MEMORY.md</code> (first 200 lines / 25KB), Letta’s git-backed MemFS (<a href="https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool">Anthropic</a>).</li>
+      <li><strong>Verb-shaped MCP tools</strong>: no standard names; Cloudflare chose <code>ingest/remember/recall/forget/list</code>.</li>
+      <li><strong>Budgeted context injection</strong>: Honcho’s <code>contextTokens</code>, Mastra Observational Memory’s stable append-only log (4–10× cheaper via prompt caching, <a href="https://mastra.ai/research/observational-memory">Mastra</a>).</li>
+    </ul>
+    <p>ShogunAgent should serve all three, cheaply, from existing assets: <code>memory.get_context_pack</code> is already a budgeted injection API; wikilinked <code>entity_pages</code> project onto a virtual filesystem (<code>/memories/people/&lt;name&gt;.md</code>, <code>/memories/projects/&lt;id&gt;.md</code>, <code>/memories/open_loops.md</code>, <code>/memories/INDEX.md</code>) that answers <code>memory_20250818</code>’s <code>view</code> with zero integration. For verbs, freeze the core 20 tools as v1 and add <code>memory.ingest(events[] | turns[], source, actor, thread_key, metadata)</code> and <code>memory.recall(query, budget_tokens)</code>.</p>
+    <h3>Mapping onto MCP 2026-07-28</h3>
+    <p>This revision makes MCP stateless (no <code>initialize</code>, no <code>Mcp-Session-Id</code>), mandates <code>Mcp-Method</code>/<code>Mcp-Name</code> headers, adds <code>ttlMs</code>/<code>cacheScope</code> to list/read responses, replaces server-initiated elicitation with Multi Round-Trip Requests (<code>input_required</code>), and moves DCR to CIMD. Tier-1 SDKs see about 500M downloads a month (<a href="https://blog.modelcontextprotocol.io/posts/2026-07-28/">MCP</a>). Three implications:</p>
+    <ol>
+      <li><code>Mcp-Method</code>/<code>Mcp-Name</code> make proxy-layer metering free, so per-operation billing lands directly in <code>apps/api</code>’s reserve-then-settle ledger.</li>
+      <li>A standards-compliant mapping: <strong>L1 = immediate, L2 = MRTR <code>input_required</code> form confirmation, L3 = URL-mode elicitation for out-of-band human approval</strong>, backed by the existing <code>ApprovalOrigin::Mcp</code> queue.</li>
+      <li>With agent identity (DPoP, WIF, ID-JAG) and progressive discovery on the roadmap (<a href="https://blog.modelcontextprotocol.io/posts/mcp-roadmap/">MCP roadmap</a>), design ACLs now on three axes: tenant × agent × end-user.</li>
+    </ol>
+    <p>For cross-organization handoff, publish a signed A2A v1.0 Agent Card. A2A moves messages, but handoff content is unstandardized; a test of seven memory products found “no portability, all seven lock you in” (<a href="https://dev.to/stantyan/i-tested-7-ai-memory-products-for-portability-all-7-lock-you-in-31pm">dev.to</a>). Portability standards are contested between the W3C AI Agent Memory Interoperability CG (chartered June 2026) and four formats; the right bet is to ship a public export format on day one and join the CG.</p>
+    <h3>Architecture calls</h3>
+    <p>The industry has converged on three layers (raw evidence → typed, bi-temporal, provenance-carrying state → summaries) plus background consolidation, which endorses ShogunAI’s event_log → state → period_summaries + Dream Cycle. At the same time <strong>graph engines are receding</strong>: Mem0 removed traversable relations, Graphiti deprecated Kuzu, and Kuzu was archived in Oct 2025 after Apple acquired it (<a href="https://www.theregister.com/2025/10/14/kuzudb_abandoned/">The Register</a>). Typed relation rows in SQLite with recursive CTEs suffice; do not buy a graph DB. Default embeddings to fastembed-rs + Qwen3-Embedding-0.6B or nomic locally and pin them across every benchmark arm (MemDelta showed swapping embeddings alone moves accuracy +6.2pp and flips conclusions).</p>
+    <p>Do not chase LoCoMo: Penfield Labs found 6.4% of the answer key wrong and the default LLM judge accepting 62.81% of intentionally wrong answers (<a href="https://dev.to/penfieldlabs/we-audited-locomo-64-of-the-answer-key-is-wrong-and-the-judge-accepts-up-to-63-of-intentionally-33lg">Penfield Labs</a>). Earn trust with same-harness runs on OmniMemEval and Mem0’s public harness, and define the “open-loop / commitment tracking” benchmark nobody else measures. Close memory-bench’s known weaknesses (temporal recall@1 0.000, abstention false-evidence 100%) before publishing.</p>
+    <p>Security is a feature. The recommended mitigations for memory poisoning (MINJA, OWASP ASI06) are already implemented as <code>sanitize::persist_body</code>, <code>state_provenance.quote</code>, and L2/L3 approvals. Separate agent-scratch namespaces from the principal’s world model and record an actor on every write. No commercial memory vendor offers user-held-key encryption (AWS offers customer-managed keys only); the existing SQLCipher + Keychain design sells as a “you hold the key” tier.</p>
+  </div>
+</section>
+
+<!-- ===================== 5 PRICING ===================== -->
+<section id="pricing">
+  <h2 lang="ja">5. 価格は $19 の階段に乗せ、計量は「取り込み」に置き、読み取りは無料にする</h2>
+  <h2 lang="en">5. Pricing: ride the $19 ladder, meter ingest, make reads free</h2>
+  <div lang="ja">
+    <p>原則は三つ。第一に <strong>$19〜20 の開発者ティアは信用の前提</strong>（supermemory、Mem0、Letta、Pinecone、Browserbase が並ぶ）。実収益は $100〜400 と企業最低額（Pinecone $500/月、E2B $3,000/月）にある。第二に<strong>コンプライアンスが収益化レバー</strong>：SOC 2、HIPAA、BYOC、ZDR は全社が $399+ か Enterprise に閉じ、Composio は ZDR を +$0.0001/call のアドオンで売る。ローカルファーストの ShogunAgent は既定でデータが端末を出ないので、この姿勢を低ティアで提供し、同期・多端末・チーム共有・遠隔承認に課金できる。第三に <strong>COGS は抽出（LLM）が支配</strong>：GraphMem の試算で抽出 $2,000/百万文書 vs 埋め込み $130、MemDelta で Mem0 の書き込み経路はプレーン RAG の約 50×。原価のある場所（ingest）で取り、無い場所（lookup）で与える。</p>
+  </div>
+  <div lang="en">
+    <p>Three principles. First, <strong>a $19–20 developer tier is table stakes</strong> (supermemory, Mem0, Letta, Pinecone, Browserbase all sit there). Real revenue is in the $100–400 tiers and enterprise minimums (Pinecone $500/mo, E2B $3,000/mo). Second, <strong>compliance is the monetization lever</strong>: SOC 2, HIPAA, BYOC and ZDR are gated to $399+ or Enterprise everywhere; Composio sells ZDR as a +$0.0001/call add-on. Because ShogunAgent is local-first, data never leaves the device by default, so it can offer that posture low in the ladder and charge for sync, multi-device, team sharing and remote approvals instead. Third, <strong>COGS is dominated by LLM extraction</strong>: GraphMem estimates $2,000 per million documents for extraction vs. $130 for embeddings, and MemDelta puts Mem0’s write path at about 50× plain RAG. Charge where cost lives (ingest) and give where it doesn’t (lookup).</p>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr>
+      <th><span lang="ja">ティア（提案・推定）</span><span lang="en">Tier (proposal, estimate)</span></th>
+      <th><span lang="ja">価格</span><span lang="en">Price</span></th>
+      <th><span lang="ja">含むもの</span><span lang="en">Includes</span></th>
+      <th><span lang="ja">計量</span><span lang="en">Metering</span></th>
+    </tr></thead>
+    <tbody>
+      <tr><td>Local (OSS)</td><td>$0</td>
+        <td><span lang="ja">Rust エンジン（MIT/Apache-2.0）、ローカル MCP/REST/CLI、1 principal、抽出は BYOK か ShogunAI Mac アプリの relay</span><span lang="en">Rust engine (MIT/Apache-2.0), local MCP/REST/CLI, 1 principal, extraction via BYOK or the ShogunAI Mac relay</span></td>
+        <td><span lang="ja">無し</span><span lang="en">None</span></td></tr>
+      <tr><td>Pro</td><td><span lang="ja">$19/月（$20 クレジット込み）</span><span lang="en">$19/mo (incl. $20 credits)</span></td>
+        <td><span lang="ja">hosted sync、遠隔 L2/L3 承認（Web/Slack）、エージェント数無制限、hosted Batch 抽出、SDK、エクスポート</span><span lang="en">Hosted sync, remote L2/L3 approvals (web/Slack), unlimited agents, hosted batch extraction, SDKs, export</span></td>
+        <td><span lang="ja">ingest $0.50/1K イベント、モデル起動 op $0.10/1K、<strong>読み取りは無料</strong></span><span lang="en">Ingest $0.50/1K events, model-invoking ops $0.10/1K, <strong>reads free</strong></span></td></tr>
+      <tr><td>Team</td><td>$99/principal/mo</td>
+        <td><span lang="ja">共有ワールドモデル、エージェント間 ACL と監査、A2A Agent Card、DPA セルフサーブ、ShogunAI Pro 1 席含む</span><span lang="en">Shared world model, cross-agent ACL and audit, A2A Agent Card, self-serve DPA, one ShogunAI Pro seat</span></td>
+        <td><span lang="ja">同上、クレジット $120 相当</span><span lang="en">Same, $120 credits</span></td></tr>
+      <tr><td>Enterprise</td><td>$399/mo+</td>
+        <td><span lang="ja">BYOC/オンプレ・サイドカー、国内リージョン、SSO/SCIM、監査エクスポート、ZDR 契約、SLA、ガイドライン v1.2 準拠文書</span><span lang="en">BYOC/on-prem sidecar, in-country region, SSO/SCIM, audit export, contractual ZDR, SLA, Japan AI-guideline v1.2 documentation</span></td>
+        <td><span lang="ja">年間コミット</span><span lang="en">Annual commit</span></td></tr>
+    </tbody>
+  </table></div>
+  <p class="est" lang="ja">すべて推定値。design partner 5 社の実測で 6 か月目に改定する。402 を「クレジット枯渇」として返す規約を初日から採用し、x402/MPP 決済自体は 2027 年の賭けとして後回し（実商取引は 1 日約 $28K で約半分がテストトラフィック）。ShogunAI Pro（$99）に ShogunAgent Pro 相当を同梱し、Mac を持つ人は最良のワールドモデル・ソースを、持たない開発者はホスト版を使う二面構成にする。</p>
+  <p class="est" lang="en">All figures are estimates, to be revised at month 6 from five design partners’ real usage. Adopt the 402 = “credits exhausted” convention from day one; defer x402/MPP payments as a 2027 bet (real commerce is about $28K/day, roughly half test traffic). Bundle ShogunAgent Pro into ShogunAI Pro ($99): Mac users get the best world-model source, developers without a Mac use the hosted edition.</p>
+</section>
+
+<!-- ===================== 6 GTM ===================== -->
+<section id="gtm">
+  <h2 lang="ja">6. GTM：グローバルファーストの配布、日本ファーストの企業ウェッジ</h2>
+  <h2 lang="en">6. Go-to-market: global-first distribution, Japan-first enterprise wedge</h2>
+  <div lang="ja">
+    <p>配布は供給側の実績が証明済みの経路を、英語で、最初の 90 日に全部やる：MIT/Apache SDK ＋ MCP サーバー ＋ Claude Code プラグイン → Anthropic directory（<a href="https://code.claude.com/docs/en/plugins/publish.md">Claude Code publish</a>）、公式 MCP Registry（<code>server.json</code>、約 3 万サーバー）、OpenAI Plugin directory、Composio/Smithery/Glama、<code>llms.txt</code>。Mem0 の API 呼び出しが 2 四半期で 35M → 186M に伸びた動力はフレームワーク内の 1 行統合であり、Vercel AI SDK／OpenAI Agents SDK／Mastra 向けの <code>withShogunAgent()</code> ミドルウェアを SDK に含める。</p>
+    <p>日本側は資本ではなく顧客と非希薄資金を取る。日本の AI 投資は基盤モデル（Sakana $2.65B）に集中し開発者向けインフラは薄いが、情報漏えい不安は調査国中最高の 46.4%。2026 年 APPI 改正はデータ国内保持を義務づけないが越境移転の同意・開示義務は残り、AI 事業者ガイドライン v1.2（2026-03-31）はエージェントの留意事項と human-in-the-loop を明記した。「従業員の Mac 上で動き、本文はクラウドに残らず、送信は人が専用ボタンで承認する」は日本の購買担当が社内で説明できる準拠の形であり、GENIAC-PRIZE 2026（賞金最大 ¥630M ＋ 計算資源）は非希薄資金の候補になる。国内に専用の記憶 API は無く、リスクは LayerX／PKSHA／NTT Docomo Business のスイートが記憶を同梱すること。これらへの OEM は日本 GTM の第二経路である。</p>
+  </div>
+  <div lang="en">
+    <p>Do every proven supply-side channel, in English, in the first 90 days: MIT/Apache SDK + MCP server + Claude Code plugin → Anthropic directory (<a href="https://code.claude.com/docs/en/plugins/publish.md">Claude Code publish</a>), the official MCP Registry (<code>server.json</code>, about 30k servers), the OpenAI Plugin directory, Composio/Smithery/Glama, and <code>llms.txt</code>. Mem0’s API calls grew 35M → 186M in two quarters on one-line framework integrations, so ship a <code>withShogunAgent()</code> middleware for the Vercel AI SDK, OpenAI Agents SDK and Mastra inside the SDK.</p>
+    <p>In Japan, take customers and non-dilutive money rather than capital. Japanese AI investment concentrates in foundation models (Sakana $2.65B) with thin developer infrastructure, but data-leak anxiety is the highest of any surveyed country at 46.4%. The 2026 APPI amendment mandates no data localization but keeps cross-border consent and disclosure duties, and the AI Business Operator Guidelines v1.2 (2026-03-31) add agent-specific points and human-in-the-loop. “Runs on the employee’s Mac, no bodies stay in the cloud, every send is approved by a person with a dedicated button” is a compliance story a Japanese buyer can explain internally, and GENIAC-PRIZE 2026 (up to ¥630M plus compute) is a non-dilutive candidate. There is no domestic memory API; the risk is LayerX, PKSHA or NTT Docomo Business bundling memory into their suites, and OEM to them is Japan’s second route.</p>
+  </div>
+</section>
+
+<!-- ===================== 7 MONID ===================== -->
+<section id="monid">
+  <h2 lang="ja">7. Monid 型アグリゲータは作らない。載る。ただし「日本向けの狭いカタログ」はゲート付きで残す</h2>
+  <h2 lang="en">7. Don’t build a Monid-style aggregator. Get listed. Keep a gated “narrow Japan catalog” option</h2>
+  <div lang="ja">
+    <p>Monid（SF）は 2026-04 にローンチし、$2.1M プレシードと Long Journey Ventures 主導の $7.7M シードで合計 $9.8M を調達、<code>api.monid.ai</code> の <code>discover</code>／<code>inspect</code>（無料）／<code>run</code>（従量）と一つのプリペイド・ウォレット（または x402 の USDC）、MIT のコネクタ・エンジンを持つ「OpenRouter for agent tools」である（<a href="https://github.com/monid-ai/monid">GitHub</a>）。しかし中身は<strong>データ取得ルーター</strong>：ランキング上位は TinyFish（754K 呼び出し）、TikHub、Context.dev、AnyAPI、Litescrape とすべて Web 検索／スクレイプ／ソーシャルデータで、記憶・知識・状態のカテゴリは存在しない（<a href="https://monid.ai/rankings">rankings</a>）。独立レビューは、1 サプライヤー（TikHub）が端点の 56%、PER_CALL 価格の中央値 $0.0015、<code>discover</code> が 26 倍高い端点を 1 位に出し、<code>/terms</code> と <code>/privacy</code> が 404 と報告した（<a href="https://www.notis.ai/blog/monid-review/">Notis</a>）。「0% markup」と「10% 手数料」という収益モデルの矛盾も未解消。</p>
+    <h3>自分で建てるべきでない五つの理由</h3>
+    <ol>
+      <li><strong>コードはコモディティ</strong>：コネクタ・エンジンは MIT で 780 フォーク。難しい部分（ウォレット、プロバイダ契約、ランキング・テレメトリ、法務、不正対策）は非公開で資本集約的。</li>
+      <li><strong>薄利の規模ゲーム</strong>：OpenRouter は約 5% のテイクで年換算 $140〜160M に達し Stripe に $7B 超で買収されたが、それは約 $2.5B の中継支出の上に成り立つ（<a href="https://sacra.com/c/openrouter/">Sacra</a>）。中央値 $0.0015/call で 10% を取っても、Monid の 400 万トランザクション全部が有料でも粗取りは数千ドル規模（推定）。RapidAPI は $1B 評価から資産売却に至った。</li>
+      <li><strong>統合が進む</strong>：Arcade が Smithery を買収（2026-08-05）、Stripe が OpenRouter を買収。決済・認証の既存勢力がレジストリを吸収する局面で正面衝突する意味は薄い。</li>
+      <li><strong>利益相反</strong>：自分が順位付けするカタログに自社製品を入れれば Monid が Simple FS で受けている批判をそのまま受け、OpenAI の提出規約は他プラグインへの誘導を禁じる。</li>
+      <li><strong>記憶は per-call スポット市場に合わない</strong>：記憶はユーザー／テナントに束縛された状態で、継続とともに価値が複利で増え、乗り換えが価値を壊す。だから Monid に記憶が無く、記憶ベンダーは Composio/Smithery/Glama の中で自社サブスクで売っている。</li>
+    </ol>
+    <div class="callout"><p><strong>答えは「(b) 載る」を核に、「(c) 両方」を再定義して残す。</strong> 載る先は優先順に、公式 MCP Registry、Anthropic directory、Smithery、Glama、Composio toolkit、OpenAI Plugin directory。L1/L2/L3 は MCP アノテーションに直接写像できる（Read → <code>readOnlyHint:true</code>、L1 → <code>destructiveHint:false</code>、L3 → <code>destructiveHint:true</code> かつ <code>openWorldHint:true</code>）ので、これは全ディレクトリの入場券である。Monid には、記憶カテゴリが追加された時点で per-call provider として掲載する。</p></div>
+    <p>(c) の再定義は「汎用ルーター」ではなく<strong>「日本 SaaS 向けの狭いコネクタ・カタログを、ShogunAgent の MCP/REST/CLI と SKILL.md 越しに、L1/L2/L3 を差別化として出す」</strong>である。日本の主要 SaaS 100 のうち公式 MCP は約 20%、「残り 65% は MCP サーバーが存在しない」、法務・電子契約（CloudSign、GMO Sign、LegalOn）は MCP ゼロという調査がある（<a href="https://zenn.dev/kanseilink/articles/a316f473d8d506">Zenn</a>）。<code>shogun-integrations</code> は 4 ファイルで新サービスを足せる設計で、<code>scope.rs</code> の「表に無い操作は拒否、ExternalSend は必ず L3」が、Monid にはワークスペース単位の予算しか無い穴を埋める。ただしこれは「ワールドモデルへの取り込みソース」として始め（freee/kintone/Sansan/Chatwork の読み取り）、課金付きカタログにするかは 12 か月目に判断する。アグリゲータが構造的に持たない「このユーザーでどのツールがどのタスクに効いたか」は per-user 状態であり、ShogunAgent はそれをユーザー所有の状態として持てる。</p>
+  </div>
+  <div lang="en">
+    <p>Monid (SF) launched in April 2026 and has raised $9.8M ($2.1M pre-seed, $7.7M seed led by Long Journey Ventures). It is “OpenRouter for agent tools”: <code>api.monid.ai</code> with <code>discover</code>/<code>inspect</code> (free) and <code>run</code> (metered), one prepaid wallet (or x402 USDC), and an MIT connector engine (<a href="https://github.com/monid-ai/monid">GitHub</a>). Inside, it is a <strong>data-fetch router</strong>: the top-ranked tools are TinyFish (754K calls), TikHub, Context.dev, AnyAPI and Litescrape, all web search/scrape/social data, and there is no memory, knowledge or state category (<a href="https://monid.ai/rankings">rankings</a>). An independent review found one supplier (TikHub) behind 56% of endpoints, a median PER_CALL price of $0.0015, <code>discover</code> ranking a 26× more expensive endpoint first, and <code>/terms</code> and <code>/privacy</code> returning 404 (<a href="https://www.notis.ai/blog/monid-review/">Notis</a>). The “0% markup” vs. “10% fee” contradiction is unresolved.</p>
+    <h3>Five reasons not to build one</h3>
+    <ol>
+      <li><strong>The code is a commodity</strong>: the connector engine is MIT with 780 forks. The hard parts (wallet, provider contracts, ranking telemetry, legal, fraud) are closed and capital-intensive.</li>
+      <li><strong>It is a thin-margin volume game</strong>: OpenRouter reached $140–160M annualized on a ~5% take and sold to Stripe for $7B+, on top of ~$2.5B routed spend (<a href="https://sacra.com/c/openrouter/">Sacra</a>). At a $0.0015 median price, even a 10% take on all 4M of Monid’s claimed transactions is thousands of dollars (estimate). RapidAPI went from a $1B valuation to an asset sale.</li>
+      <li><strong>Consolidation is underway</strong>: Arcade acquired Smithery (2026-08-05), Stripe acquired OpenRouter. Payments and auth incumbents are absorbing registries; a head-on fight is low-value.</li>
+      <li><strong>Conflict of interest</strong>: listing your own product in a catalog you rank invites the criticism Monid gets for its Simple FS, and OpenAI’s submission rules forbid steering to other plugins.</li>
+      <li><strong>Memory does not fit a per-call spot market</strong>: it is user- and tenant-bound state whose value compounds with continuity and breaks on switching. That is why Monid has no memory and memory vendors sell their own subscriptions inside Composio/Smithery/Glama.</li>
+    </ol>
+    <div class="callout"><p><strong>The answer is (b) get listed, with (c) redefined and kept.</strong> Listing targets in priority order: the official MCP Registry, the Anthropic directory, Smithery, Glama, a Composio toolkit, the OpenAI Plugin directory. L1/L2/L3 maps directly to MCP annotations (Read → <code>readOnlyHint:true</code>, L1 → <code>destructiveHint:false</code>, L3 → <code>destructiveHint:true</code> and <code>openWorldHint:true</code>), which is the entry ticket to every directory. List on Monid as a per-call provider once a memory category exists.</p></div>
+    <p>The redefined (c) is not a general router but <strong>a narrow connector catalog for Japanese SaaS, exposed through ShogunAgent’s MCP/REST/CLI and SKILL.md, with L1/L2/L3 as the differentiator</strong>. A survey of Japan’s top 100 SaaS finds about 20% with an official MCP, “65% with no MCP server at all,” and zero MCP in legal/e-signature (CloudSign, GMO Sign, LegalOn) (<a href="https://zenn.dev/kanseilink/articles/a316f473d8d506">Zenn</a>). <code>shogun-integrations</code> adds a service in four files, and <code>scope.rs</code>’s “deny anything not in the table, ExternalSend is always L3” fills the gap where Monid has only workspace-level budgets. Start it as an ingest source for the world model (reads from freee/kintone/Sansan/Chatwork) and decide at month 12 whether to monetize it as a catalog. What an aggregator structurally cannot own, “which tool worked for which task for this user,” is per-user state that ShogunAgent can hold on the user’s behalf.</p>
+  </div>
+</section>
+
+<!-- ===================== 8 DECISION ===================== -->
+<section id="decision">
+  <h2 lang="ja">8. 決定事項：何を建て、何を建てないか</h2>
+  <h2 lang="en">8. Decisions: what to build, what not to build</h2>
+  <div lang="ja">
+    <p><strong>ポジショニング。</strong>「AI エージェントが装着する、仕事の状態（state of work）レイヤー」。競合比較の軸は「記憶 vs 状態」「自由文 vs 型付きテーブル＋confidence」「クラウドファースト vs ローカル既定」「削除ツールを渡さない vs L1/L2/L3 を型で強制」「Recall@20 vs 同一ハーネス公開」。<code>docs/gpt6-astra-implications.md</code> の結論「Astra 級実行エンジンにワールドモデルと承認境界を貸す側に回る」と整合する。</p>
+  </div>
+  <div lang="en">
+    <p><strong>Positioning.</strong> “The state-of-work layer AI agents plug into.” Comparison axes: memory vs. state, free text vs. typed tables with confidence, cloud-first vs. local by default, “don’t hand over the delete tool” vs. L1/L2/L3 enforced by type, Recall@20 vs. published same-harness results. This matches the conclusion of <code>docs/gpt6-astra-implications.md</code>: lend the world model and the approval boundary to Astra-class execution engines.</p>
+  </div>
+  <p class="quote">“Calibrated truth about your work — people, projects, commitments and open loops — inferred locally, with provenance on every fact and a human gate on every send, shared across all your agents over MCP.”</p>
+
+  <div class="two">
+    <div class="panel build">
+      <h4><span lang="ja">建てる（最初の 90 日）</span><span lang="en">Build (first 90 days)</span></h4>
+      <ul lang="ja">
+        <li>Streamable HTTP MCP（2026-07-28、<code>Mcp-Method</code>/<code>Mcp-Name</code>、<code>ttlMs</code>、MRTR）＋ <code>memory.ingest</code>/<code>memory.recall</code> で <strong>core 22 本</strong></li>
+        <li>テナントごとの SQLCipher ファイルを開閉するサイドカー（Linux、<code>SHOGUN_DB_PATH</code> のテナント化）</li>
+        <li>API key（<code>sa_</code> 接頭）＋ OAuth/CIMD のエージェント認証</li>
+        <li><code>/memories/**</code> 仮想ファイルシステム射影（<code>memory_20250818</code> 互換）</li>
+        <li>公開エクスポート形式 v1</li>
+        <li>SKILL.md（Monid の骨格に L2/L3 の意味を追加）、Claude Code プラグイン、<code>server.json</code></li>
+        <li>同一ハーネス・ベンチマーク公開（OmniMemEval ＋ Mem0 ハーネス）と「open-loop tracking」ベンチ v0</li>
+      </ul>
+      <ul lang="en">
+        <li>Streamable HTTP MCP (2026-07-28: <code>Mcp-Method</code>/<code>Mcp-Name</code>, <code>ttlMs</code>, MRTR) plus <code>memory.ingest</code>/<code>memory.recall</code>: a <strong>core of 22 tools</strong></li>
+        <li>A sidecar that opens per-tenant SQLCipher files (Linux, tenant-scoped <code>SHOGUN_DB_PATH</code>)</li>
+        <li>Agent auth: API keys (<code>sa_</code> prefix) plus OAuth/CIMD</li>
+        <li>A <code>/memories/**</code> virtual filesystem projection (<code>memory_20250818</code> compatible)</li>
+        <li>Public export format v1</li>
+        <li>SKILL.md (Monid’s skeleton plus L2/L3 semantics), Claude Code plugin, <code>server.json</code></li>
+        <li>Same-harness benchmark publication (OmniMemEval + Mem0 harness) and an “open-loop tracking” bench v0</li>
+      </ul>
+    </div>
+    <div class="panel skip">
+      <h4><span lang="ja">建てない</span><span lang="en">Do not build</span></h4>
+      <ul lang="ja">
+        <li>汎用ツール・アグリゲータ</li>
+        <li>グラフ DB（Kuzu 死亡、Mem0 撤退。型付き関係行で足りる）</li>
+        <li>Postgres 移植（91 本の書き直しで再利用率 60〜70% → 25%）</li>
+        <li>独自埋め込みモデル研究</li>
+        <li>チャット記憶のパーソナライズ API（ラボが無料で出す領域）</li>
+        <li>LoCoMo のスコア追い</li>
+        <li>Windows/モバイルの取得層（まず取り込み API で受ける）</li>
+        <li>x402 ウォレット決済（402 規約の互換のみ）</li>
+        <li>消費者向けアプリや Chrome 拡張</li>
+        <li><code>all</code> toolset 158 本の公開（デスクトップ固有 約 100 本は ShogunAI に残す）</li>
+      </ul>
+      <ul lang="en">
+        <li>A general tool aggregator</li>
+        <li>A graph DB (Kuzu is dead, Mem0 pulled out; typed relation rows suffice)</li>
+        <li>A Postgres port (rewriting 91 migrations drops reuse from 60–70% to 25%)</li>
+        <li>In-house embedding-model research</li>
+        <li>A chat-personalization memory API (the labs give it away)</li>
+        <li>Chasing LoCoMo scores</li>
+        <li>Windows/mobile capture layers (take non-Mac sources through the ingest API first)</li>
+        <li>x402 wallet payments (402 convention compatibility only)</li>
+        <li>Consumer apps or a Chrome extension</li>
+        <li>Exposing all 158 tools (about 100 desktop-only tools stay in ShogunAI)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3 lang="ja">再利用するクレートと部位</h3>
+  <h3 lang="en">Crates and modules to reuse</h3>
+  <ul lang="ja">
+    <li><code>shogun-memory</code>：<code>state.rs</code>、<code>state_provenance</code>、<code>loops.rs</code>、<code>entity_pages.rs</code>、<code>recompute.rs</code>、<code>search/federated.rs</code>・<code>terms.rs</code>・<code>lexical.rs</code>、<code>sanitize.rs</code>、<code>traceability.rs</code>、<code>memory_import/</code>、<code>period_summaries.rs</code>。V1〜V91 を SQLite のまま使い、<code>tenant_id</code>／<code>uid</code>／<code>actor</code> を加算マイグレーションで足す</li>
+    <li><code>shogun-fusion</code>：<code>confidence.rs</code>、<code>assemble.rs</code>、<code>budget.rs</code>、<code>compress.rs</code></li>
+    <li><code>shogun-agents</code>：<code>permission.rs</code>、<code>approval.rs</code>、<code>engine.rs</code>、<code>entitlement.rs</code></li>
+    <li><code>shogun-redact</code> 全部、<code>shogun-license</code> の verify 部</li>
+    <li><code>shogun-mcp</code>：<code>backend.rs</code> の <code>MemoryBackend</code>、<code>memory_api.rs</code> の <code>ApiLevel</code>/<code>tool_level</code>、<code>scope_allows</code>、<code>toolsets.rs</code>、<code>source_policy.rs</code>、<code>rate_limit.rs</code>、<code>rest_routing.rs</code>/<code>rest_auth.rs</code>、<code>mcp.rs</code>。Keychain 依存の <code>memory_api_settings.rs</code>/<code>live_tokens.rs</code>/<code>launcher_check.rs</code> は環境変数＋<code>apps/api</code> 発行トークンに差し替え</li>
+    <li><code>shogun-core</code> の中立部：<code>dreamcycle/{plan,hourly,session,prefilter,loops,pages,entities}.rs</code>、<code>llm/*</code>、<code>ai_search</code>、<code>context.rs</code>、<code>chat_grounding.rs</code>、<code>src/bin/shogun_api.rs</code>／<code>shogun_mcp.rs</code></li>
+    <li><code>apps/api</code>：<code>auth.ts</code> の Ed25519／<code>meterSubject</code>、<code>usage.ts</code>/<code>spend.ts</code>/<code>pg-store.ts</code> の reserve-then-settle、<code>schemas.ts</code>、<code>/v1/review</code>、ゼロ保持ロガー</li>
+  </ul>
+  <ul lang="en">
+    <li><code>shogun-memory</code>: <code>state.rs</code>, <code>state_provenance</code>, <code>loops.rs</code>, <code>entity_pages.rs</code>, <code>recompute.rs</code>, <code>search/federated.rs</code>, <code>terms.rs</code>, <code>lexical.rs</code>, <code>sanitize.rs</code>, <code>traceability.rs</code>, <code>memory_import/</code>, <code>period_summaries.rs</code>. Keep V1–V91 on SQLite and add <code>tenant_id</code>/<code>uid</code>/<code>actor</code> with additive migrations</li>
+    <li><code>shogun-fusion</code>: <code>confidence.rs</code>, <code>assemble.rs</code>, <code>budget.rs</code>, <code>compress.rs</code></li>
+    <li><code>shogun-agents</code>: <code>permission.rs</code>, <code>approval.rs</code>, <code>engine.rs</code>, <code>entitlement.rs</code></li>
+    <li>All of <code>shogun-redact</code>; the verify half of <code>shogun-license</code></li>
+    <li><code>shogun-mcp</code>: <code>MemoryBackend</code> in <code>backend.rs</code>, <code>ApiLevel</code>/<code>tool_level</code> in <code>memory_api.rs</code>, <code>scope_allows</code>, <code>toolsets.rs</code>, <code>source_policy.rs</code>, <code>rate_limit.rs</code>, <code>rest_routing.rs</code>/<code>rest_auth.rs</code>, <code>mcp.rs</code>. Replace the Keychain-bound <code>memory_api_settings.rs</code>/<code>live_tokens.rs</code>/<code>launcher_check.rs</code> with env vars plus tokens issued by <code>apps/api</code></li>
+    <li>Platform-neutral <code>shogun-core</code>: <code>dreamcycle/{plan,hourly,session,prefilter,loops,pages,entities}.rs</code>, <code>llm/*</code>, <code>ai_search</code>, <code>context.rs</code>, <code>chat_grounding.rs</code>, <code>src/bin/shogun_api.rs</code> and <code>shogun_mcp.rs</code></li>
+    <li><code>apps/api</code>: Ed25519 and <code>meterSubject</code> in <code>auth.ts</code>, reserve-then-settle in <code>usage.ts</code>/<code>spend.ts</code>/<code>pg-store.ts</code>, <code>schemas.ts</code>, <code>/v1/review</code>, the zero-retention logger</li>
+  </ul>
+</section>
+
+<!-- ===================== 9 ROADMAP ===================== -->
+<section id="roadmap">
+  <h2 lang="ja">9. ロードマップ</h2>
+  <h2 lang="en">9. Roadmap</h2>
+  <div class="tbl"><table>
+    <thead><tr>
+      <th><span lang="ja">期間</span><span lang="en">Horizon</span></th>
+      <th><span lang="ja">到達点</span><span lang="en">Deliverables</span></th>
+      <th><span lang="ja">計測指標（推定目標）</span><span lang="en">Targets (estimates)</span></th>
+    </tr></thead>
+    <tbody>
+      <tr><td><span lang="ja">90 日</span><span lang="en">90 days</span></td>
+        <td><span lang="ja"><code>shogunagent-core</code> を Linux で単体起動（テナント別 SQLite）、Streamable HTTP MCP core 22 本、API key 認証、<code>/memories</code> 射影、エクスポート形式 v1、OSS 公開（エンジン MIT/Apache-2.0、hosted sync は非公開）、SKILL.md ＋ Claude Code プラグイン ＋ MCP Registry ＋ Glama 掲載、同一ハーネス結果公開、ShogunAI Mac ユーザーの既存 Memory API を ShogunAgent にブランド統合</span><span lang="en"><code>shogunagent-core</code> running standalone on Linux (per-tenant SQLite), Streamable HTTP MCP with 22 core tools, API-key auth, <code>/memories</code> projection, export format v1, OSS release (engine MIT/Apache-2.0, hosted sync closed), SKILL.md + Claude Code plugin + MCP Registry + Glama listings, same-harness results published, existing ShogunAI Mac Memory API rebranded under ShogunAgent</span></td>
+        <td><span lang="ja">外部エージェントからの <code>tools/call</code> 10 万回/月、design partner 5（日本企業 3・米国エージェント開発者 2）、ベンチマーク公開 1 本</span><span lang="en">100k <code>tools/call</code>/month from external agents, 5 design partners (3 Japanese enterprises, 2 US agent developers), 1 published benchmark</span></td></tr>
+      <tr><td><span lang="ja">6 か月</span><span lang="en">6 months</span></td>
+        <td><span lang="ja">遠隔 L2/L3 承認（Web ＋ Slack、MRTR ＋ URL elicitation、webhook）、A2A Agent Card、TS/Python SDK ＋ <code>withShogunAgent()</code>、agent-scratch 名前空間と ACL・監査、Stripe metered 課金と Pro $19 セルフサーブ、Anthropic directory ＋ OpenAI Plugin directory、ローカル埋め込み再導入、日本 SaaS 読み取りコネクタ（freee/kintone/Sansan/Chatwork）、GENIAC/東京都助成への応募</span><span lang="en">Remote L2/L3 approvals (web + Slack, MRTR + URL elicitation, webhooks), A2A Agent Card, TS/Python SDKs with <code>withShogunAgent()</code>, agent-scratch namespaces with ACL and audit, Stripe metered billing and self-serve Pro $19, Anthropic + OpenAI directories, local embeddings re-enabled, Japanese SaaS read connectors (freee/kintone/Sansan/Chatwork), GENIAC / Tokyo grant applications</span></td>
+        <td><span lang="ja">有料 Pro 200、Team 10 社、月間 ingest 1 億イベント、LLM 原価 ≤ 売上の 15%</span><span lang="en">200 paid Pro, 10 Team accounts, 100M ingested events/month, LLM cost ≤ 15% of revenue</span></td></tr>
+      <tr><td><span lang="ja">12 か月</span><span lang="en">12 months</span></td>
+        <td><span lang="ja">Enterprise ティア（BYOC/オンプレ・サイドカー、国内リージョン、SSO/SCIM、監査エクスポート、ZDR 契約）、W3C memory interop CG 参加とエクスポート形式 v2、「open-loop tracking」ベンチ v1 を外部公開、<strong>日本向けコネクタ・カタログを課金化するかのゲート判断</strong>（読み取りコネクタ経由の ingest が全体の 20% 超、かつ 3 社以上が書き込み系を要望）、Monid に記憶カテゴリができていれば per-call 掲載、シード資金調達（米国側シンジケート）</span><span lang="en">Enterprise tier (BYOC/on-prem sidecar, in-country region, SSO/SCIM, audit export, contractual ZDR), W3C memory-interop CG membership and export format v2, public “open-loop tracking” bench v1, <strong>gate decision on monetizing the Japan connector catalog</strong> (connector ingest &gt; 20% of total and 3+ customers asking for writes), per-call Monid listing if a memory category exists, seed round (US syndicate)</span></td>
+        <td><span lang="ja">ARR $1M 相当、Enterprise 3 社、NRR &gt;110%、同一ハーネスで multi-session／temporal カテゴリ上位 3</span><span lang="en">~$1M ARR, 3 Enterprise accounts, NRR &gt;110%, top-3 in multi-session/temporal categories on a same-harness leaderboard</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ===================== 10 RISKS ===================== -->
+<section id="risks">
+  <h2 lang="ja">10. 主要リスクと緩和策</h2>
+  <h2 lang="en">10. Key risks and mitigations</h2>
+  <div class="tbl"><table>
+    <thead><tr>
+      <th><span lang="ja">リスク</span><span lang="en">Risk</span></th>
+      <th><span lang="ja">根拠</span><span lang="en">Evidence</span></th>
+      <th><span lang="ja">緩和</span><span lang="en">Mitigation</span></th>
+    </tr></thead>
+    <tbody>
+      <tr><td><span lang="ja">プラットフォームによる吸収</span><span lang="en">Platform absorption</span></td><td><span lang="ja">OpenAI Dreaming、Anthropic Managed Agents memory、Microsoft communication memory が「ユーザー記憶」を無料化</span><span lang="en">OpenAI Dreaming, Anthropic Managed Agents memory and Microsoft communication memory make user memory free</span></td><td><span lang="ja">ベンダー横断・観測イベント起点・人の承認を含む「状態」に限定。Anthropic の memory tool はストレージ非依存なので裏側プロバイダとして共存</span><span lang="en">Stay in cross-vendor, event-derived, human-gated state; Anthropic’s memory tool is storage-agnostic, so coexist as its backend</span></td></tr>
+      <tr><td><span lang="ja">Mac 以外のコールドスタート</span><span lang="en">Non-Mac cold start</span></td><td><span lang="ja">ワールドモデルの最良ソースは macOS 取得層（再利用 0%）</span><span lang="en">The best world-model source is the macOS capture layer (0% reuse)</span></td><td><span lang="ja">汎用 <code>memory.ingest</code> ＋ 会話ログ ＋ リモート MCP コネクタで「取得は顧客側、推論は我々」に。Mac は premium ソース</span><span lang="en">Generic <code>memory.ingest</code> + conversation logs + remote MCP connectors: capture on the customer side, inference on ours; Mac becomes the premium source</span></td></tr>
+      <tr><td><span lang="ja">ベンチマーク不信</span><span lang="en">Benchmark distrust</span></td><td><span lang="ja">Mem0/Zep/MemPalace 論争、LoCoMo 上限 93.6%、競合運営のリーダーボード</span><span lang="en">Mem0/Zep/MemPalace disputes, LoCoMo ceiling 93.6%, competitor-run leaderboards</span></td><td><span lang="ja">同一ハーネス・≥10 seed・トークン/コスト/p95 併記。独自ワークロードの定義。temporal recall@1 と abstention を公開前に閉じる</span><span lang="en">Same harness, ≥10 seeds, tokens/cost/p95 alongside; define our own workload; fix temporal recall@1 and abstention before publishing</span></td></tr>
+      <tr><td><span lang="ja">マルチテナント境界の欠陥</span><span lang="en">Multi-tenant boundary bugs</span></td><td><span lang="ja">MemClaw のサブテナント迂回、同期 dedup が矛盾検出に先行</span><span lang="en">MemClaw’s sub-tenant bypass; sync dedup preempting contradiction detection</span></td><td><span lang="ja">テナント＝ファイル分離、GET-by-id のスコープテストを <code>tests/invariant*.rs</code> に追加、<code>sensitive_sources</code> を名前空間 ACL へ一般化</span><span lang="en">Tenant = file isolation, GET-by-id scope tests in <code>tests/invariant*.rs</code>, generalize <code>sensitive_sources</code> into namespace ACLs</span></td></tr>
+      <tr><td><span lang="ja">抽出原価</span><span lang="en">Extraction COGS</span></td><td><span lang="ja">書き込み経路は RAG の約 50×。Starter ティアは loss-leader になりがち</span><span lang="en">Write path is ~50× RAG; starter tiers tend to be loss leaders</span></td><td><span lang="ja">セッション化 ＋ prefilter ＋ Haiku 級 ＋ ローカル規則の二段抽出、D9 上限、読み取り無料で ingest で回収</span><span lang="en">Two-stage extraction (sessionization + prefilter + Haiku-class + local rules), D9 caps, free reads recovered through ingest</span></td></tr>
+      <tr><td><span lang="ja">メモリ汚染（ASI06）</span><span lang="en">Memory poisoning (ASI06)</span></td><td><span lang="ja">MINJA、<code>memory_20250818</code> の「常に書け」プロトコル</span><span lang="en">MINJA; the “always write” protocol of <code>memory_20250818</code></span></td><td><span lang="ja"><code>instruction_shaped</code> ゲート、quote 必須、actor provenance、agent-scratch 分離、高リスク書き込みは L2</span><span lang="en"><code>instruction_shaped</code> gate, mandatory quotes, actor provenance, agent-scratch separation, L2 on high-risk writes</span></td></tr>
+      <tr><td><span lang="ja">小チームの表面積</span><span lang="en">Small-team surface area</span></td><td><span lang="ja">supermemory は約 9 名で 7 プラグイン・5 SDK・MCP・SMFS を抱え自己ホストが崩れた</span><span lang="en">supermemory’s ~9 people carry 7 plugins, 5 SDKs, MCP and SMFS, and self-host broke</span></td><td><span lang="ja">core 22 本に凍結、SDK は TS/Python のみ、wire name 凍結 ＋ 12 か月非推奨ポリシー</span><span lang="en">Freeze at 22 core tools, TS/Python SDKs only, frozen wire names plus a 12-month deprecation policy</span></td></tr>
+      <tr><td><span lang="ja">日本／グローバルの分裂</span><span lang="en">Japan/global split</span></td><td><span lang="ja">開発者向け配布は英語・米国中心、日本資本は基盤モデル偏重</span><span lang="en">Developer distribution is English/US-centric; Japanese capital favors foundation models</span></td><td><span lang="ja">配布は英語で全経路、顧客と非希薄資金は日本、投資は米国側シンジケート</span><span lang="en">Distribute in English everywhere; customers and non-dilutive money from Japan; investors from a US syndicate</span></td></tr>
+      <tr><td><span lang="ja">第三者個人データ</span><span lang="en">Third-party personal data</span></td><td><span lang="ja">画面・メールの取り込みは同僚の氏名・メールを含む</span><span lang="en">Screen and mail ingest include colleagues’ names and addresses</span></td><td><span lang="ja">ソース別の同意・保持ポリシー、統合前の redaction、<code>excludes</code> ルール API、APPI 越境同意に備えた国内リージョン</span><span lang="en">Per-source consent and retention, redaction before consolidation, an <code>excludes</code> rule API, an in-country region for APPI cross-border consent</span></td></tr>
+      <tr><td><span lang="ja">可搬性標準の未決</span><span lang="en">Unsettled portability standards</span></td><td><span lang="ja">W3C CG と 4 形式が競合</span><span lang="en">W3C CG and four competing formats</span></td><td><span lang="ja">公開エクスポートを先に出し CG に参加。<code>shogun-memory-import/v1</code> を双方向化</span><span lang="en">Ship the public export first and join the CG; make <code>shogun-memory-import/v1</code> bidirectional</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3 lang="ja">結論</h3>
+  <h3 lang="en">Conclusion</h3>
+  <div lang="ja">
+    <p>この調査が変えた理解は二つある。第一に、「エージェント向けメモリ」はもう市場カテゴリではなく、四つの別製品（型付きビジネス知識、証明付き学習、セッション状態、ユーザー個人化）の総称であり、ラボが無料で出すのは最後の一つだけだという点。ShogunAI が 2 年かけて作った「provenance と confidence を一箇所で強制し、送信を型で L3 に閉じ込める」仕組みは、個人化記憶の世界では過剰設計に見えたが、仕事の状態を複数のエージェントに貸す世界では最低要件になる。第二に、Monid と OpenRouter の分析が示すのは、エージェント経済で「集める」側（ルーター、レジストリ、ウォレット）は決済・認証の既存勢力に吸収されつつあり、独立して残るのは「状態を持ち、継続で価値が増え、乗り換えが痛い」層だという点。ShogunAgent はまさにその層にいる。</p>
+    <p>実行上の含意は、ShogunAgent を「新製品」ではなく「<code>shogun_api</code> バイナリの多重化と Memory API のブランド化」として始め、最初の 90 日はコードより配布（SKILL.md、プラグイン、レジストリ、同一ハーネス公開）に重心を置くこと。残る問いは「日本の購買担当がこの準拠の形を評価するか」と「Mac を持たない開発者が取り込み API だけで十分な状態を得られるか」の二つで、どちらも design partner 5 社で 90 日以内に答えが出る。</p>
+  </div>
+  <div lang="en">
+    <p>This research changed two understandings. First, “agent memory” is no longer a market category but an umbrella over four products (typed business knowledge, verified learning, session state, user personalization), and the labs give away only the last. The machinery ShogunAI spent two years building, enforcing provenance and confidence in one place and locking sends into L3 by type, looked over-engineered for personalization memory, but becomes the minimum requirement when state of work is lent to many agents. Second, the Monid and OpenRouter analysis shows that the “aggregating” side of the agent economy (routers, registries, wallets) is being absorbed by payments and auth incumbents, and what stays independent is the layer that holds state, compounds with continuity, and hurts to leave. ShogunAgent sits exactly there.</p>
+    <p>The execution implication: start ShogunAgent not as a new product but as “multiplexing the <code>shogun_api</code> binary and branding the Memory API,” and spend the first 90 days on distribution (SKILL.md, plugins, registries, same-harness publication) more than code. Two questions remain: whether Japanese buyers value this form of compliance, and whether developers without a Mac get enough state from the ingest API alone. Five design partners answer both within 90 days.</p>
+  </div>
+</section>
+
+<footer>
+  <p lang="ja">出典 URL は本文中に埋め込み。推定値は「推定」と明記。元レポートと 7 本の調査ノートは <code>Shogunagent</code> リポジトリの <code>reports/</code> と <code>research_notes/</code> にあります。</p>
+  <p lang="en">Source URLs are inline. Figures marked “estimate” are estimates. The full report and seven research notes live in the <code>Shogunagent</code> repository under <code>reports/</code> and <code>research_notes/</code>.</p>
+</footer>
+</main>
+
+<script>
+(function () {
+  var body = document.body;
+  var buttons = document.querySelectorAll('[data-set-lang]');
+  function apply(lang) {
+    body.classList.remove('lang-ja', 'lang-en');
+    body.classList.add('lang-' + lang);
+    document.documentElement.setAttribute('lang', lang);
+    buttons.forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-set-lang') === lang ? 'true' : 'false'); });
+    try { localStorage.setItem('shogunagent-lang', lang); } catch (e) {}
+  }
+  var initial = 'ja';
+  try { var saved = localStorage.getItem('shogunagent-lang'); if (saved === 'en' || saved === 'ja') initial = saved; } catch (e) {}
+  if (location.hash === '#en') initial = 'en';
+  if (location.hash === '#ja') initial = 'ja';
+  apply(initial);
+  buttons.forEach(function (b) { b.addEventListener('click', function () { apply(b.getAttribute('data-set-lang')); }); });
+})();
+</script>
