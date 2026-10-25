@@ -2471,6 +2471,14 @@ impl MemoryBackend for DbBackend {
         self.db.memory_fs(command)
     }
 
+    /// `state.export` in export format v1 (E7).
+    fn export_v1(
+        &self,
+        request: &shogun_mcp::export_api::ExportRequest,
+    ) -> Result<shogun_mcp::export_api::ExportOutput, String> {
+        self.db.export_v1(request)
+    }
+
     fn memory_import(&self, operation: MemoryImportOperation) -> Result<String, String> {
         use shogun_memory::memory_import::Via;
         let value = match operation {

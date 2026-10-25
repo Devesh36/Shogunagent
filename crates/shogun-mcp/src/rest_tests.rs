@@ -2791,3 +2791,20 @@ fn memory_fs_routes_as_an_l1_post_and_shares_the_mcp_parser() {
         respond_with(&with_body(r#"{"command":"view","path":"/memories"}"#), &reg(), &ent(), &crate::backend::StubBackend);
     assert_eq!((status, body.contains("memory_fs_unavailable")), (503, true), "{body}");
 }
+
+/// E7: `POST /v1/export` is the export-v1 read (format defaults to export-v1); `GET
+/// /v1/state/export` stays the Markdown export.
+#[test]
+fn export_v1_is_a_post_read_beside_the_markdown_export() {
+    let routed = route(&req(Method::Post, "/v1/export", Some("t")), &reg(), &ent());
+    assert_eq!(routed, Routed::Read { tool: Tool::StateExport, id: None });
+    assert_eq!(
+        route(&req(Method::Get, "/v1/state/export", Some("t")), &reg(), &ent()),
+        Routed::Read { tool: Tool::StateExport, id: None }
+    );
+    let with_body = |body: &str| RestRequest { body: Some(body.to_string()), ..req(Method::Post, "/v1/export", Some("t")) };
+    let (status, body) = respond_with(&with_body("{}"), &reg(), &ent(), &crate::backend::StubBackend);
+    assert_eq!((status, body.contains("export_unavailable")), (503, true), "{body}");
+    let (status, body) = respond_with(&with_body(r#"{"differential":true,"since_cursor":3}"#), &reg(), &ent(), &crate::backend::StubBackend);
+    assert_eq!(status, 400, "{body}");
+}

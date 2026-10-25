@@ -895,6 +895,15 @@ pub(super) fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
                 level: Level::L1,
             },
         ),
+        // Export format v1 (E7, plan §7.5): the `state.export` arguments as a JSON body.
+        ["v1", "export"] => method_is(
+            method,
+            Method::Post,
+            Routed::Read {
+                tool: Tool::StateExport,
+                id: None,
+            },
+        ),
         // World model correction + export (issue #290). Also matched before `state/<noun>`.
         ["v1", "state", "export"] => method_is(
             method,

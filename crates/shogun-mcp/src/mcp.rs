@@ -915,6 +915,16 @@ impl<B: MemoryBackend> McpServer<B> {
             };
         }
 
+        // state.export in export format v1 (E7): an additive `format` argument; without it the
+        // tool answers the Markdown export below, as before.
+        if tool == Tool::StateExport && crate::export_api::wants_v1(&args) {
+            return match crate::export_api::serve(&args, &self.backend) {
+                Ok(text) => result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": false })),
+                Err(crate::ingest_api::Refusal::BadArguments(message)) => error(id, -32602, &message),
+                Err(crate::ingest_api::Refusal::Unavailable(code)) => error(id, -32000, code),
+            };
+        }
+
         // memory.fs (E6-T2): the memory tool's file operations; one parser, one backend call and
         // one envelope for every face (`memfs_tool`).
         if tool == Tool::MemoryFs {
@@ -2357,8 +2367,16 @@ same old events will not re-create it. Irreversible — only delete what the use
         Tool::StateExport => (
             "Export the world model: people, projects, commitments and open loops as Markdown \
 (one section per table, each row with confidence and source event ids) plus the same rows as \
-JSON. Rows below the fact band are marked possibly; low-confidence rows need include_low=true.",
-            json!({ "include_low": { "type": "boolean" } }),
+JSON. Rows below the fact band are marked possibly; low-confidence rows need include_low=true. \
+With format=export-v1 it returns the portable JSON Lines export instead (docs/api/export-v1.md): \
+entities, facts with validity, confidence and quotes, and tombstones; differential=true exports what \
+changed since the last differential export, since_cursor (unix ms) what changed after that time.",
+            json!({
+                "include_low": { "type": "boolean" },
+                "format": { "type": "string", "enum": ["markdown", "export-v1"], "default": "markdown" },
+                "differential": { "type": "boolean", "default": false },
+                "since_cursor": { "type": "integer", "minimum": 0 }
+            }),
         ),
         Tool::StateSplit => (
             "Split a wrong merge (L1): the record fused two different people (or projects). Moves \

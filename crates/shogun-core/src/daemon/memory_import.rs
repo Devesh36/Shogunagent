@@ -31,6 +31,10 @@ impl Db {
             Ok(r) => r,
             Err(e) => return refusal(e).map_err(|_| "memory import failed".to_string()),
         };
+        // An export v1 (E7-T2) is accepted in the `package` slot, as its JSON Lines text.
+        if shogun_memory::export::is_export_v1(&request.package_json) {
+            return Ok(Self::export_v1_import_preview(&request.package_json));
+        }
         let package = match memory_import::parse_package(&request.package_json) {
             Ok(p) => p,
             Err(errors) => return Ok(json!({ "error": "invalid_package", "errors": errors.0 })),
@@ -58,6 +62,10 @@ impl Db {
             Ok(r) => r,
             Err(e) => return refusal(e).map_err(|_| "memory import failed".to_string()),
         };
+        // An export v1 (E7-T2) restores rows and quotes; no selection applies.
+        if shogun_memory::export::is_export_v1(&request.package_json) {
+            return self.export_v1_import_commit(&request.package_json, ctx);
+        }
         let now = self.now_ms();
         self.with_conn_mut("memory_import.commit", |c| {
             match memory_import::store::commit_as(c, &request, via, now, ctx) {

@@ -37,6 +37,7 @@ pub mod entity_dedupe;
 pub mod entity_names;
 pub mod entity_pages;
 pub mod event_log;
+pub mod export;
 pub mod extract;
 pub mod fts_compact;
 pub mod fusion_supply;

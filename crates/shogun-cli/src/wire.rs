@@ -305,6 +305,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
             StateCommand::Delete { body } => post("/v1/state/delete".into(), body.clone()),
             StateCommand::Create { body } => post("/v1/state/create".into(), body.clone()),
             StateCommand::Export => get(low("/v1/state/export".to_string())),
+            StateCommand::ExportV1 { body } => post("/v1/export".into(), body.clone()),
             StateCommand::Split { body } => post("/v1/state/split".into(), body.clone()),
             // The table is a validated literal (`people` | `projects`), the id an integer.
             StateCommand::Evidence { table, id } => get(format!("/v1/state/{table}/{id}/evidence")),
