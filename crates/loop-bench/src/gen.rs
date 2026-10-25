@@ -43,16 +43,25 @@ pub enum Tier {
     Easy,
     Medium,
     Hard,
+    /// The held-out tier (plan E49): the hard tier's shape with phrasing families of its own,
+    /// written without looking at the engine's rules (`held_out_*` below), and updates that
+    /// sometimes land on another thread than the item. Not in [`Tier::ALL`]: run it with
+    /// `--tiers heldout`.
+    HeldOut,
 }
 
 impl Tier {
+    /// The tiers a default run covers (v1.0, unchanged).
     pub const ALL: [Tier; 3] = [Tier::Easy, Tier::Medium, Tier::Hard];
+    /// Every tier, the held-out one last (summaries).
+    pub const EVERY: [Tier; 4] = [Tier::Easy, Tier::Medium, Tier::Hard, Tier::HeldOut];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Tier::Easy => "easy",
             Tier::Medium => "medium",
             Tier::Hard => "hard",
+            Tier::HeldOut => "heldout",
         }
     }
 
@@ -61,15 +70,17 @@ impl Tier {
             "easy" => Some(Tier::Easy),
             "medium" => Some(Tier::Medium),
             "hard" => Some(Tier::Hard),
+            "heldout" | "held-out" | "held_out" => Some(Tier::HeldOut),
             _ => None,
         }
     }
 
     fn spec(self) -> Spec {
         match self {
-            Tier::Easy => Spec { days: 5, commitments: 4, loops: 4, resolve: 0.3, cancel: 0.0, supersede: 0, twice: 0, distractors: 4, filler_per_item: 3, wrapped: false, paraphrase: false, mixed_channels: false, bundled: false },
-            Tier::Medium => Spec { days: 10, commitments: 8, loops: 8, resolve: 0.35, cancel: 0.1, supersede: 3, twice: 0, distractors: 8, filler_per_item: 6, wrapped: true, paraphrase: false, mixed_channels: true, bundled: false },
-            Tier::Hard => Spec { days: 15, commitments: 12, loops: 12, resolve: 0.4, cancel: 0.1, supersede: 6, twice: 2, distractors: 16, filler_per_item: 10, wrapped: true, paraphrase: true, mixed_channels: true, bundled: true },
+            Tier::Easy => Spec { days: 5, commitments: 4, loops: 4, resolve: 0.3, cancel: 0.0, supersede: 0, twice: 0, distractors: 4, filler_per_item: 3, wrapped: false, paraphrase: false, mixed_channels: false, bundled: false, held_out: false, cross_thread: 0.0 },
+            Tier::Medium => Spec { days: 10, commitments: 8, loops: 8, resolve: 0.35, cancel: 0.1, supersede: 3, twice: 0, distractors: 8, filler_per_item: 6, wrapped: true, paraphrase: false, mixed_channels: true, bundled: false, held_out: false, cross_thread: 0.0 },
+            Tier::Hard => Spec { days: 15, commitments: 12, loops: 12, resolve: 0.4, cancel: 0.1, supersede: 6, twice: 2, distractors: 16, filler_per_item: 10, wrapped: true, paraphrase: true, mixed_channels: true, bundled: true, held_out: false, cross_thread: 0.0 },
+            Tier::HeldOut => Spec { days: 15, commitments: 12, loops: 12, resolve: 0.4, cancel: 0.1, supersede: 6, twice: 2, distractors: 16, filler_per_item: 10, wrapped: true, paraphrase: false, mixed_channels: true, bundled: true, held_out: true, cross_thread: 0.3 },
         }
     }
 }
@@ -97,6 +108,10 @@ struct Spec {
     mixed_channels: bool,
     /// Meeting notes carry several items in one event.
     bundled: bool,
+    /// Every planted sentence comes from the held-out families (`held_out_*`).
+    held_out: bool,
+    /// Share of updates and closings posted on a thread of their own instead of the item's.
+    cross_thread: f64,
 }
 
 /// Where an event came from.
@@ -430,6 +445,165 @@ fn filler(rng: &mut Rng, channel: Channel, project: &str, person: &str) -> Strin
     pick(rng, templates).replace("{j}", project).replace("{p}", person)
 }
 
+// The held-out families (plan E49). Written as a person would write them, without looking at the
+// engine's rules: other verbs, the passive voice, non-native English, and Japanese or mixed
+// Japanese / English sentences. Each family has one of each where it fits. The canonical text and
+// the gold are the same as for the v1.0 families; only the wording changes.
+
+fn held_out_opening(rng: &mut Rng, kind: ItemKind, subtype: &str, cast: &Cast<'_>, due: &str) -> (String, String, String) {
+    let Cast { person, artifact, project, principal } = *cast;
+    let fill = |t: &str| t.replace("{a}", artifact).replace("{p}", person).replace("{d}", due).replace("{j}", project);
+    match (kind, subtype) {
+        (ItemKind::Commitment, "mine") => {
+            let templates: &[&str] = &[
+                "Let me take care of {a}; {p} will have it no later than {d}.",
+                "I'm putting together {a} for {p}, expect it {d}.",
+                "{a} will be shared with {p} by me on {d}.",
+                "OK I make {a} for {p} until {d}, no problem.",
+                "{a}は{d}までに{p}さんへお送りします。",
+            ];
+            (fill(pick(rng, templates)), format!("send {artifact} to {person} by {due}"), principal.to_string())
+        }
+        (ItemKind::Commitment, _) => {
+            let templates: &[&str] = &[
+                "{p}: I'm on {a}, it should be in your inbox {d}.",
+                "{p}: {a} will be sent to you by {d}.",
+                "{p}: I am going to finish {a} for you until {d}.",
+                "{p}: {a}、{d}までにお送りしますね。",
+            ];
+            (fill(pick(rng, templates)), format!("{person} sends {artifact} by {due}"), person.to_string())
+        }
+        (ItemKind::OpenLoop, "waiting_on_them") => {
+            let templates: &[&str] = &[
+                "Haven't received {a} from {p} so far.",
+                "Pinged {p} again about {a}, nothing back.",
+                "{a} is still expected from {p}.",
+                "{p} not yet give me {a}.",
+                "{p}さんからの{a}、まだ届いていません。",
+            ];
+            (fill(pick(rng, templates)), format!("waiting on {person} for {artifact}"), principal.to_string())
+        }
+        (ItemKind::OpenLoop, "reply_needed") => {
+            let templates: &[&str] = &[
+                "{p}: when you get a minute, can you sanity-check {a} for me?",
+                "{p}: I need your answer on {a} before I can move on.",
+                "{p}: please you look {a} and tell me ok or not.",
+                "{p}: {a}の数字、確認してもらえますか？",
+            ];
+            (fill(pick(rng, templates)), format!("reply to {person} about {artifact}"), person.to_string())
+        }
+        (ItemKind::OpenLoop, "review_pending") => {
+            let templates: &[&str] = &[
+                "{p} is hoping you can go over {a} this week.",
+                "{p} sent {a} your way for sign-off.",
+                "{a} has been assigned to you for review by {p}.",
+                "{p} want you to review {a} please.",
+                "{p}さんから{a}のレビュー依頼が来ています。",
+            ];
+            (fill(pick(rng, templates)), format!("review {artifact} for {person}"), principal.to_string())
+        }
+        _ => {
+            let templates: &[&str] = &[
+                "Nobody has made the call yet on {a} for {j}, in or out.",
+                "Whether {a} is included in {j} has not been decided.",
+                "{j} with {a} or without, we did not choose yet.",
+                "{j}に{a}を含めるか、まだ決まっていません。",
+            ];
+            (fill(pick(rng, templates)), format!("decide whether {project} ships with {artifact}"), principal.to_string())
+        }
+    }
+}
+
+fn held_out_closing(rng: &mut Rng, kind: ItemKind, subtype: &str, person: &str, artifact: &str, project: &str, cancelled: bool) -> String {
+    let templates: &[&str] = if cancelled {
+        &[
+            "{p} doesn't want {a} anymore, so I'm stopping work on it.",
+            "{a} for {p} has been shelved.",
+            "No more need of {a} for {p}, we stop it.",
+            "{a}は{p}さんの方で不要になりました。",
+        ]
+    } else {
+        match (kind, subtype) {
+            (ItemKind::Commitment, "mine") => &[
+                "{a} went out to {p} this morning.",
+                "{p} has {a} in hand now.",
+                "{a} was handed to {p} today.",
+                "I already give {a} to {p}, it is finish.",
+                "{a}、{p}さんに送付済みです。",
+            ],
+            (ItemKind::Commitment, _) | (ItemKind::OpenLoop, "waiting_on_them") => &[
+                "{a} from {p} is in my inbox now.",
+                "{p} handed over {a} this morning.",
+                "{a} was received from {p}.",
+                "{p} give me {a} today, good.",
+                "{p}さんから{a}を受け取りました。",
+            ],
+            (ItemKind::OpenLoop, "reply_needed") => &[
+                "Got back to {p} on {a}.",
+                "{p} has my answer on {a}.",
+                "{p}'s question on {a} was answered.",
+                "I answer {p} about {a} already.",
+                "{a}の件、{p}さんに返信しました。",
+            ],
+            (ItemKind::OpenLoop, "review_pending") => &[
+                "Signed off on {a} for {p}.",
+                "Went through {a} and returned my comments to {p}.",
+                "{a} was reviewed and returned to {p}.",
+                "Review of {a} for {p} is finish.",
+                "{p}さんの{a}、レビュー完了しました。",
+            ],
+            _ => &[
+                "We're going ahead: {j} includes {a}.",
+                "It was agreed that {j} ships with {a}.",
+                "{j} go with {a}, we decide it.",
+                "{j}は{a}込みで行くことに決定しました。",
+            ],
+        }
+    };
+    pick(rng, templates).replace("{a}", artifact).replace("{p}", person).replace("{j}", project)
+}
+
+fn held_out_update(rng: &mut Rng, artifact: &str, person: &str, new_due: &str) -> String {
+    let templates: &[&str] = &[
+        "{p} asked for more time, so {a} is now expected {d}.",
+        "We agreed with {p} to give {a} until {d}.",
+        "{a} for {p} has been rescheduled, new date {d}.",
+        "Please note deadline of {a} for {p} change to {d}.",
+        "{a}の締切は{d}に変更になりました（{p}さん了承済み）。",
+    ];
+    pick(rng, templates).replace("{a}", artifact).replace("{p}", person).replace("{d}", new_due)
+}
+
+fn held_out_distractor(rng: &mut Rng, kind: DistractorKind, person: &str, other: &str, artifact: &str, due: &str) -> String {
+    let templates: &[&str] = match kind {
+        DistractorKind::Hypothetical => &[
+            "Assuming the numbers hold, I'd send {a} to {p} around {d}.",
+            "{a} could be shared with {p} by {d} if finance agrees.",
+            "If budget is ok, maybe I prepare {a} for {p}.",
+            "予算が通れば、{a}を{d}までに{p}さんに送るかもしれません。",
+        ],
+        DistractorKind::ThirdParty => &[
+            "{p} assured {o} that {a} would be ready by {d}.",
+            "{a} is to be sent to {o} by {p} on {d}.",
+            "{p} say to {o} she send {a} until {d}.",
+            "{p}さんが{o}さんに{a}を{d}までに送ると約束していました。",
+        ],
+        DistractorKind::Retracted => &[
+            "Forget what I said about {a} for {p}, {o} is covering it.",
+            "I offered to draft {a} for {p}, but I'm withdrawing that.",
+            "Before I say I do {a} for {p}, now I cannot.",
+            "{a}は{p}さんに送ると言いましたが、取り消します。",
+        ],
+        DistractorKind::AlreadyDone => &[
+            "{a} reached {p} weeks ago, nothing outstanding.",
+            "That promise to {p} about {a} was kept back in July.",
+            "Long time before I already send {a} to {p}.",
+            "{a}は先月{p}さんに送付済みです。",
+        ],
+    };
+    pick(rng, templates).replace("{a}", artifact).replace("{p}", person).replace("{o}", other).replace("{d}", due)
+}
+
 /// Generate the dataset of `(tier, seed)`.
 pub fn generate(tier: Tier, seed: u64) -> Dataset {
     let spec = tier.spec();
@@ -467,7 +641,11 @@ pub fn generate(tier: Tier, seed: u64) -> Dataset {
         };
         let paraphrase = spec.paraphrase && rng.chance(0.6);
         let cast = Cast { person: &person, artifact: &artifact, project: &project, principal: &principal };
-        let (sentence, canonical, author) = opening(&mut rng, kind, subtype, &cast, due_text.as_deref(), paraphrase);
+        let (sentence, canonical, author) = if spec.held_out {
+            held_out_opening(&mut rng, kind, subtype, &cast, due_text.as_deref().unwrap_or(""))
+        } else {
+            opening(&mut rng, kind, subtype, &cast, due_text.as_deref(), paraphrase)
+        };
         let thread = format!("{}-{}", channel.as_str(), i);
         let content = wrap(&mut rng, channel, &person, &sentence, spec.wrapped);
         drafts.push(Draft { ts_ms: open_ts, channel, thread: thread.clone(), author, content, role: Role::Open { item: i, sentence: sentence.clone() }, extra_opens: Vec::new() });
@@ -489,11 +667,20 @@ pub fn generate(tier: Tier, seed: u64) -> Dataset {
         };
         let mut cursor = open_ts;
         let other_channel = |rng: &mut Rng| if spec.mixed_channels { *rng.pick(&Channel::ALL).unwrap_or(&channel) } else { channel };
+        // Held-out: some updates and closings arrive on a thread of their own (a new email, another
+        // chat channel), not in the item's thread. No draw at all on the v1.0 tiers.
+        let update_thread = |rng: &mut Rng, ch: Channel, n: usize| {
+            if spec.cross_thread > 0.0 && rng.chance(spec.cross_thread) {
+                format!("{}-x{i}-{n}", ch.as_str())
+            } else {
+                thread.clone()
+            }
+        };
         // Supersession: move the due date later, once or twice.
         if kind == ItemKind::Commitment && superseded < spec.supersede {
             superseded += 1;
             let moves = if twice < spec.twice { twice += 1; 2 } else { 1 };
-            for _ in 0..moves {
+            for n in 0..moves {
                 let day = (cursor - EPOCH_MS) / DAY_MS + 1;
                 if day >= spec.days {
                     break;
@@ -502,9 +689,10 @@ pub fn generate(tier: Tier, seed: u64) -> Dataset {
                 let new_due = item.due_ms.unwrap_or(ts) + (1 + rng.below(4) as i64) * DAY_MS;
                 let phrase = due_phrase(&mut rng, ts, new_due);
                 let ch = other_channel(&mut rng);
-                let sentence = update(&mut rng, &artifact, &person, &phrase);
+                let sentence = if spec.held_out { held_out_update(&mut rng, &artifact, &person, &phrase) } else { update(&mut rng, &artifact, &person, &phrase) };
                 let content = wrap(&mut rng, ch, &person, &sentence, spec.wrapped);
-                drafts.push(Draft { ts_ms: ts, channel: ch, thread: thread.clone(), author: principal.clone(), content, role: Role::Update { item: i }, extra_opens: Vec::new() });
+                let thread = update_thread(&mut rng, ch, n);
+                drafts.push(Draft { ts_ms: ts, channel: ch, thread, author: principal.clone(), content, role: Role::Update { item: i }, extra_opens: Vec::new() });
                 item.due_ms = Some(new_due);
                 cursor = ts;
             }
@@ -517,9 +705,14 @@ pub fn generate(tier: Tier, seed: u64) -> Dataset {
             if day < spec.days {
                 let ts = work_time(&mut rng, day);
                 let ch = other_channel(&mut rng);
-                let sentence = closing(&mut rng, kind, subtype, &person, &artifact, &project, cancelled);
+                let sentence = if spec.held_out {
+                    held_out_closing(&mut rng, kind, subtype, &person, &artifact, &project, cancelled)
+                } else {
+                    closing(&mut rng, kind, subtype, &person, &artifact, &project, cancelled)
+                };
                 let content = wrap(&mut rng, ch, &person, &sentence, spec.wrapped);
-                drafts.push(Draft { ts_ms: ts, channel: ch, thread: thread.clone(), author: principal.clone(), content, role: Role::Close { item: i }, extra_opens: Vec::new() });
+                let thread = update_thread(&mut rng, ch, 9);
+                drafts.push(Draft { ts_ms: ts, channel: ch, thread, author: principal.clone(), content, role: Role::Close { item: i }, extra_opens: Vec::new() });
                 item.status = if cancelled { FinalStatus::Cancelled } else { FinalStatus::Resolved };
             }
         }
@@ -538,7 +731,11 @@ pub fn generate(tier: Tier, seed: u64) -> Dataset {
         let ts = work_time(&mut rng, day);
         let due = start_of_day(ts) + (2 + rng.below(4) as i64) * DAY_MS;
         let phrase = due_phrase(&mut rng, ts, due);
-        let sentence = distractor(&mut rng, kind, &person, &other, artifact, &phrase);
+        let sentence = if spec.held_out {
+            held_out_distractor(&mut rng, kind, &person, &other, artifact, &phrase)
+        } else {
+            distractor(&mut rng, kind, &person, &other, artifact, &phrase)
+        };
         let channel = *rng.pick(&Channel::ALL).unwrap_or(&Channel::Chat);
         let content = wrap(&mut rng, channel, &person, &sentence, spec.wrapped);
         distractors.push(Distractor { id: format!("d{:02}", d + 1), kind, event: String::new(), span: sentence.clone() });
@@ -665,7 +862,7 @@ mod tests {
 
     #[test]
     fn every_gold_quote_is_an_exact_span_of_its_event_and_ids_resolve() {
-        for tier in Tier::ALL {
+        for tier in Tier::EVERY {
             for seed in 42..47 {
                 let data = generate(tier, seed);
                 let event = |id: &str| data.events.iter().find(|e| e.id == id).unwrap_or_else(|| panic!("{tier:?}/{seed}: no event {id}"));
@@ -699,5 +896,33 @@ mod tests {
         assert!(hard.gold.items.iter().filter(|i| !i.superseded_by_events.is_empty()).count() >= 4);
         assert!(easy.gold.items.iter().all(|i| i.superseded_by_events.is_empty()));
         assert_eq!(hard.gold.distractors.len(), 16);
+    }
+
+    /// The held-out tier has the hard tier's shape, none of the v1.0 sentences, some Japanese, and
+    /// updates or closings on a thread that is not the item's.
+    #[test]
+    fn the_held_out_tier_uses_its_own_families_and_other_threads() {
+        let (mut cross, mut japanese) = (0, 0);
+        for seed in 42..47 {
+            let held = generate(Tier::HeldOut, seed);
+            let hard = generate(Tier::Hard, seed);
+            assert_eq!(held.gold.items.len(), hard.gold.items.len());
+            assert_eq!(held.gold.distractors.len(), 16);
+            assert_eq!(generate(Tier::HeldOut, seed), held, "deterministic");
+            let v1: std::collections::HashSet<&str> = hard.gold.items.iter().map(|i| i.quote.as_str()).collect();
+            for item in &held.gold.items {
+                assert!(!v1.contains(item.quote.as_str()), "{}", item.quote);
+                japanese += usize::from(shogun_memory::state_collapse::has_cjk(&item.quote));
+                let opened = held.events.iter().find(|e| e.id == item.opened_event).unwrap();
+                for e in item.superseded_by_events.iter().chain(item.closed_event.iter()) {
+                    let ev = held.events.iter().find(|x| &x.id == e).unwrap();
+                    cross += usize::from(ev.thread != opened.thread);
+                }
+            }
+        }
+        assert!(cross > 0, "some updates land on another thread");
+        assert!(japanese > 0, "some sentences are Japanese");
+        assert_eq!(Tier::parse("heldout"), Some(Tier::HeldOut));
+        assert!(!Tier::ALL.contains(&Tier::HeldOut), "the default run is v1.0 unchanged");
     }
 }

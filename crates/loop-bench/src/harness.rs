@@ -145,7 +145,7 @@ fn summary_of(values: &[f64]) -> Value {
 /// Mean and 95% interval over seeds, per tier, operating point and metric; plus latency.
 pub fn aggregate(runs: &[Run]) -> Value {
     let mut tiers = serde_json::Map::new();
-    for tier in Tier::ALL {
+    for tier in Tier::EVERY {
         let of_tier: Vec<&Run> = runs.iter().filter(|r| r.tier == tier).collect();
         if of_tier.is_empty() {
             continue;
