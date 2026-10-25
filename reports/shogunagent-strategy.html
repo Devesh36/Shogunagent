@@ -160,13 +160,13 @@ footer p { max-width: none; }
   <div class="eyebrow"><span lang="ja">方針レポート · 2026年10月25日時点</span><span lang="en">Strategy report · as of 25 Oct 2026</span></div>
   <h1 lang="ja">ShogunAgent は「記憶」ではなく「仕事の状態」を売れ</h1>
   <h1 lang="en">ShogunAgent should sell “state of work,” not “memory”</h1>
-  <p class="lede" lang="ja">AI エージェント向けメモリ API は飽和した。空いているのは、人・プロジェクト・コミットメント・オープンループを provenance と confidence 付きで推定し、L1/L2/L3 の承認階層ごしに複数エージェントへ貸し出す層である。ShogunAI の「難しい部分」の 70% 以上はそこへそのまま持ち越せる。</p>
-  <p class="lede" lang="en">The agent-memory API market is saturated. The open space is a layer that infers people, projects, commitments and open loops with provenance and confidence on every fact, and lends that state to many agents through L1/L2/L3 approval tiers. More than 70% of ShogunAI’s hard parts carry over directly.</p>
+  <p class="lede" lang="ja">AI エージェント向けメモリ API は飽和した。空いているのは、人・プロジェクト・コミットメント・オープンループを provenance と confidence 付きで推定し、L1/L2/L3 の承認階層ごしに複数エージェントへ貸し出す層である。入口として「OpenRouter for Agents」も建て、課金は使われた分だけにする。ShogunAI の「難しい部分」の 70% 以上はそこへそのまま持ち越せる。</p>
+  <p class="lede" lang="en">The agent-memory API market is saturated. The open space is a layer that infers people, projects, commitments and open loops with provenance and confidence on every fact, and lends that state to many agents through L1/L2/L3 approval tiers. We also build an “OpenRouter for Agents” as the front door, and charge only for what is used. More than 70% of ShogunAI’s hard parts carry over directly.</p>
   <div class="verdicts">
     <div class="verdict yes"><div class="k"><span lang="ja">ポジショニング</span><span lang="en">Positioning</span></div><div class="v"><span lang="ja">仕事の状態（state of work）レイヤー</span><span lang="en">The state-of-work layer for agents</span></div></div>
     <div class="verdict yes"><div class="k"><span lang="ja">最初に建てる</span><span lang="en">Build first</span></div><div class="v"><span lang="ja"><code>shogun_api</code> をテナント別に多重化 + Streamable HTTP MCP</span><span lang="en">Multiplex <code>shogun_api</code> per tenant + Streamable HTTP MCP</span></div></div>
-    <div class="verdict no"><div class="k"><span lang="ja">Monid 型アグリゲータ</span><span lang="en">Monid-style aggregator</span></div><div class="v"><span lang="ja">作らない。載る。</span><span lang="en">Don’t build it. Get listed on them.</span></div></div>
-    <div class="verdict"><div class="k"><span lang="ja">価格（推定）</span><span lang="en">Pricing (estimate)</span></div><div class="v">$0 / $19 / $99 / $399+</div></div>
+    <div class="verdict yes"><div class="k"><span lang="ja">OpenRouter for Agents</span><span lang="en">OpenRouter for Agents</span></div><div class="v"><span lang="ja">建てる。ルーターは入口、状態層が堀</span><span lang="en">Build it. Router as front door, state layer as moat</span></div></div>
+    <div class="verdict"><div class="k"><span lang="ja">価格</span><span lang="en">Pricing</span></div><div class="v"><span lang="ja">完全従量。プリペイド・クレジット、読み取り無料</span><span lang="en">Pure usage-based. Prepaid credits, reads free</span></div></div>
     <div class="verdict"><div class="k"><span lang="ja">再利用率</span><span lang="en">Reuse ratio</span></div><div class="v"><span lang="ja">行数 30〜40%、難所 70%+</span><span lang="en">30–40% by LOC, 70%+ of hard parts</span></div></div>
   </div>
 </header>
@@ -178,7 +178,7 @@ footer p { max-width: none; }
   <a href="#api"><span lang="ja">4 API と設計</span><span lang="en">4 API &amp; architecture</span></a>
   <a href="#pricing"><span lang="ja">5 価格</span><span lang="en">5 Pricing</span></a>
   <a href="#gtm"><span lang="ja">6 GTM</span><span lang="en">6 Go-to-market</span></a>
-  <a href="#monid"><span lang="ja">7 Monid</span><span lang="en">7 Monid</span></a>
+  <a href="#monid"><span lang="ja">7 ルーター</span><span lang="en">7 Router</span></a>
   <a href="#decision"><span lang="ja">8 決定事項</span><span lang="en">8 Decisions</span></a>
   <a href="#roadmap"><span lang="ja">9 ロードマップ</span><span lang="en">9 Roadmap</span></a>
   <a href="#risks"><span lang="ja">10 リスク</span><span lang="en">10 Risks</span></a>
@@ -240,7 +240,7 @@ footer p { max-width: none; }
       <li><code>dryRun</code> 必須の一括 forget、<code>who_am_i</code>/<code>list_spaces</code> の発見ツール、破壊的／追加的のアノテーション分離</li>
       <li><code>&lt;supermemory context="user-memories" readonly&gt;</code> という置換可能・エスケープ済みのシステムプロンプト注入ブロック</li>
       <li>SKILL.md ＋ <code>npx supermemory help --json</code> ＋ docs MCP という「エージェントが自分で導入する」三点セット</li>
-      <li>逆に避けること：12 か月で 3 世代の API を回し 11 本の移行ページを抱える churn。ShogunAgent は v1 の wire name を凍結し 12 か月の非推奨ポリシーを最初から宣言する</li>
+      <li>逆に避けること：12 か月で 3 世代の API を回し 11 本の移行ページを抱える churn。ShogunAgent は v1 の wire name を凍結し非推奨ポリシーを最初から宣言する</li>
     </ul>
   </div>
   <div lang="en">
@@ -254,7 +254,7 @@ footer p { max-width: none; }
       <li>Mandatory <code>dryRun</code> on bulk forget, <code>who_am_i</code>/<code>list_spaces</code> discovery tools, separate destructive vs. additive annotations</li>
       <li>A replaceable, escaped system-prompt block: <code>&lt;supermemory context="user-memories" readonly&gt;</code></li>
       <li>The self-onboarding trio: SKILL.md + <code>npx supermemory help --json</code> + a docs MCP</li>
-      <li>And one thing to avoid: three API generations in 12 months with 11 migration pages. ShogunAgent freezes v1 wire names and declares a 12-month deprecation policy on day one</li>
+      <li>And one thing to avoid: three API generations in 12 months with 11 migration pages. ShogunAgent freezes v1 wire names and declares a deprecation policy on day one</li>
     </ul>
   </div>
 </section>
@@ -366,38 +366,36 @@ footer p { max-width: none; }
 
 <!-- ===================== 5 PRICING ===================== -->
 <section id="pricing">
-  <h2 lang="ja">5. 価格は $19 の階段に乗せ、計量は「取り込み」に置き、読み取りは無料にする</h2>
-  <h2 lang="en">5. Pricing: ride the $19 ladder, meter ingest, make reads free</h2>
+  <h2 lang="ja">5. 価格は完全従量：固定サブスクは置かず、原価のある「取り込み」と「実行」で課金し、読み取りは無料にする</h2>
+  <h2 lang="en">5. Pricing: pure usage-based. No fixed subscription; charge where cost lives (ingest and runs), reads free</h2>
   <div lang="ja">
-    <p>原則は三つ。第一に <strong>$19〜20 の開発者ティアは信用の前提</strong>（supermemory、Mem0、Letta、Pinecone、Browserbase が並ぶ）。実収益は $100〜400 と企業最低額（Pinecone $500/月、E2B $3,000/月）にある。第二に<strong>コンプライアンスが収益化レバー</strong>：SOC 2、HIPAA、BYOC、ZDR は全社が $399+ か Enterprise に閉じ、Composio は ZDR を +$0.0001/call のアドオンで売る。ローカルファーストの ShogunAgent は既定でデータが端末を出ないので、この姿勢を低ティアで提供し、同期・多端末・チーム共有・遠隔承認に課金できる。第三に <strong>COGS は抽出（LLM）が支配</strong>：GraphMem の試算で抽出 $2,000/百万文書 vs 埋め込み $130、MemDelta で Mem0 の書き込み経路はプレーン RAG の約 50×。原価のある場所（ingest）で取り、無い場所（lookup）で与える。</p>
+    <p>オーナー判断により、固定ティアではなく<strong>使われた分だけ</strong>の課金にする。業界の裏付けは十分にある：Zep は取り込みだけに課金し検索は無料（<a href="https://www.getzep.com/pricing">Zep</a>）、Exa は純粋な PAYG（$4〜15/1k リクエスト、<a href="https://exa.ai/pricing">Exa</a>）、Composio は 2026-08 に $0.0003/call の従量へ移行（<a href="https://composio.dev/pricing">Composio</a>）、Monid は per-call のプリペイド・ウォレット。COGS は LLM 抽出（書き込み経路、プレーン RAG の約 50×）に集中し、保存と読み取りはほぼゼロなので、従量は原価構造と一致する。</p>
+    <p>仕組みは「プリペイド・クレジット ＋ 402」：ウォレットに入金（カード、将来 x402）、残高 0 で <code>402</code> を返す。初回 $5 の無料クレジット。キーごと・エージェントごとの<strong>ハード上限</strong>（日次・月次）を初日から持つ（Monid に無く、独立レビューが自作した機能）。<code>apps/api</code> の reserve-then-settle 台帳と D9 の予算上限はそのまま使える。</p>
   </div>
   <div lang="en">
-    <p>Three principles. First, <strong>a $19–20 developer tier is table stakes</strong> (supermemory, Mem0, Letta, Pinecone, Browserbase all sit there). Real revenue is in the $100–400 tiers and enterprise minimums (Pinecone $500/mo, E2B $3,000/mo). Second, <strong>compliance is the monetization lever</strong>: SOC 2, HIPAA, BYOC and ZDR are gated to $399+ or Enterprise everywhere; Composio sells ZDR as a +$0.0001/call add-on. Because ShogunAgent is local-first, data never leaves the device by default, so it can offer that posture low in the ladder and charge for sync, multi-device, team sharing and remote approvals instead. Third, <strong>COGS is dominated by LLM extraction</strong>: GraphMem estimates $2,000 per million documents for extraction vs. $130 for embeddings, and MemDelta puts Mem0’s write path at about 50× plain RAG. Charge where cost lives (ingest) and give where it doesn’t (lookup).</p>
+    <p>By the owner’s decision, pricing is <strong>pay for what you use</strong>, not fixed tiers. The industry supports it: Zep charges only ingest and makes retrieval free (<a href="https://www.getzep.com/pricing">Zep</a>), Exa is pure PAYG ($4–15 per 1k requests, <a href="https://exa.ai/pricing">Exa</a>), Composio moved to $0.0003 per call in Aug 2026 (<a href="https://composio.dev/pricing">Composio</a>), and Monid runs a per-call prepaid wallet. COGS concentrates in LLM extraction (the write path, about 50× plain RAG) while storage and reads are near zero, so usage pricing matches the cost structure.</p>
+    <p>Mechanism: <strong>prepaid credits + 402</strong>. Top up a wallet (card now, x402 later); a zero balance returns <code>402</code>. $5 free starter credit. Per-key and per-agent <strong>hard caps</strong> (daily, monthly) from day one, a feature Monid lacks and an independent reviewer had to build themselves. The reserve-then-settle ledger and D9 budget caps in <code>apps/api</code> carry over as is.</p>
   </div>
   <div class="tbl"><table>
     <thead><tr>
-      <th><span lang="ja">ティア（提案・推定）</span><span lang="en">Tier (proposal, estimate)</span></th>
-      <th><span lang="ja">価格</span><span lang="en">Price</span></th>
-      <th><span lang="ja">含むもの</span><span lang="en">Includes</span></th>
-      <th><span lang="ja">計量</span><span lang="en">Metering</span></th>
+      <th><span lang="ja">計量項目</span><span lang="en">Metered item</span></th>
+      <th><span lang="ja">単価（推定）</span><span lang="en">Unit price (estimate)</span></th>
+      <th><span lang="ja">備考</span><span lang="en">Notes</span></th>
     </tr></thead>
     <tbody>
-      <tr><td>Local (OSS)</td><td>$0</td>
-        <td><span lang="ja">Rust エンジン（MIT/Apache-2.0）、ローカル MCP/REST/CLI、1 principal、抽出は BYOK か ShogunAI Mac アプリの relay</span><span lang="en">Rust engine (MIT/Apache-2.0), local MCP/REST/CLI, 1 principal, extraction via BYOK or the ShogunAI Mac relay</span></td>
-        <td><span lang="ja">無し</span><span lang="en">None</span></td></tr>
-      <tr><td>Pro</td><td><span lang="ja">$19/月（$20 クレジット込み）</span><span lang="en">$19/mo (incl. $20 credits)</span></td>
-        <td><span lang="ja">hosted sync、遠隔 L2/L3 承認（Web/Slack）、エージェント数無制限、hosted Batch 抽出、SDK、エクスポート</span><span lang="en">Hosted sync, remote L2/L3 approvals (web/Slack), unlimited agents, hosted batch extraction, SDKs, export</span></td>
-        <td><span lang="ja">ingest $0.50/1K イベント、モデル起動 op $0.10/1K、<strong>読み取りは無料</strong></span><span lang="en">Ingest $0.50/1K events, model-invoking ops $0.10/1K, <strong>reads free</strong></span></td></tr>
-      <tr><td>Team</td><td>$99/principal/mo</td>
-        <td><span lang="ja">共有ワールドモデル、エージェント間 ACL と監査、A2A Agent Card、DPA セルフサーブ、ShogunAI Pro 1 席含む</span><span lang="en">Shared world model, cross-agent ACL and audit, A2A Agent Card, self-serve DPA, one ShogunAI Pro seat</span></td>
-        <td><span lang="ja">同上、クレジット $120 相当</span><span lang="en">Same, $120 credits</span></td></tr>
-      <tr><td>Enterprise</td><td>$399/mo+</td>
-        <td><span lang="ja">BYOC/オンプレ・サイドカー、国内リージョン、SSO/SCIM、監査エクスポート、ZDR 契約、SLA、ガイドライン v1.2 準拠文書</span><span lang="en">BYOC/on-prem sidecar, in-country region, SSO/SCIM, audit export, contractual ZDR, SLA, Japan AI-guideline v1.2 documentation</span></td>
-        <td><span lang="ja">年間コミット</span><span lang="en">Annual commit</span></td></tr>
+      <tr><td><span lang="ja">ツール実行（他社プロバイダ）</span><span lang="en">Tool run (third-party provider)</span></td><td><span lang="ja">プロバイダ価格 ＋ 5%</span><span lang="en">Provider price + 5%</span></td><td><span lang="ja">失敗・0 件は $0。Monid パススルーは Monid 価格 ＋ 5%</span><span lang="en">Failures and empty results $0. Monid passthrough at Monid price + 5%</span></td></tr>
+      <tr><td><span lang="ja">ツール実行（自社コネクタ：日本 SaaS 等）</span><span lang="en">Tool run (first-party connectors, e.g. Japanese SaaS)</span></td><td>$0.002/call</td><td><span lang="ja">読み取り。書き込み系は L2/L3 を経て同額</span><span lang="en">Reads. Writes pass L2/L3 at the same price</span></td></tr>
+      <tr><td><span lang="ja">取り込み（ingest）</span><span lang="en">Ingest</span></td><td><span lang="ja">$0.50/1K イベント</span><span lang="en">$0.50 per 1K events</span></td><td><span lang="ja">会話ターン・メール・連携イベント。抽出 LLM 原価を含む</span><span lang="en">Conversation turns, mail, connector events. Includes extraction LLM cost</span></td></tr>
+      <tr><td><span lang="ja">モデル起動 op</span><span lang="en">Model-invoking op</span></td><td>$0.10/1K</td><td><span lang="ja">consolidation、AI 検索、entity page 生成</span><span lang="en">Consolidation, AI search, entity-page generation</span></td></tr>
+      <tr><td><span lang="ja">状態の読み取り</span><span lang="en">State reads</span></td><td>$0</td><td><span lang="ja"><code>state.*</code>、<code>get_context_pack</code>、<code>recall</code>、<code>search</code>。<code>Mcp-Method</code> で計量はするが課金しない</span><span lang="en"><code>state.*</code>, <code>get_context_pack</code>, <code>recall</code>, <code>search</code>. Metered via <code>Mcp-Method</code>, never billed</span></td></tr>
+      <tr><td><span lang="ja">遠隔 L2/L3 承認</span><span lang="en">Remote L2/L3 approvals</span></td><td>$0</td><td>Web / Slack / webhook</td></tr>
+      <tr><td><span lang="ja">ホスト保存</span><span lang="en">Hosted storage</span></td><td><span lang="ja">$0.10/GB-月</span><span lang="en">$0.10 per GB-month</span></td><td><span lang="ja">実質ゼロ。削除・エクスポートは常時無料</span><span lang="en">Effectively zero. Delete and export always free</span></td></tr>
+      <tr><td>Local (OSS)</td><td>$0</td><td><span lang="ja">エンジン、ローカル MCP/REST/CLI。抽出は BYOK か ShogunAI relay</span><span lang="en">Engine, local MCP/REST/CLI. Extraction via BYOK or the ShogunAI relay</span></td></tr>
+      <tr><td>Enterprise</td><td><span lang="ja">同じ従量 ＋ 年間コミットで 10〜25% 割引</span><span lang="en">Same rates, 10–25% off with annual commit</span></td><td><span lang="ja">BYOC/ZDR/SSO/SCIM/監査はコミット契約に含む。座席課金はしない</span><span lang="en">BYOC/ZDR/SSO/SCIM/audit included in the commit. No seat fees</span></td></tr>
     </tbody>
   </table></div>
-  <p class="est" lang="ja">すべて推定値。design partner 5 社の実測で 6 か月目に改定する。402 を「クレジット枯渇」として返す規約を初日から採用し、x402/MPP 決済自体は 2027 年の賭けとして後回し（実商取引は 1 日約 $28K で約半分がテストトラフィック）。ShogunAI Pro（$99）に ShogunAgent Pro 相当を同梱し、Mac を持つ人は最良のワールドモデル・ソースを、持たない開発者はホスト版を使う二面構成にする。</p>
-  <p class="est" lang="en">All figures are estimates, to be revised at month 6 from five design partners’ real usage. Adopt the 402 = “credits exhausted” convention from day one; defer x402/MPP payments as a 2027 bet (real commerce is about $28K/day, roughly half test traffic). Bundle ShogunAgent Pro into ShogunAI Pro ($99): Mac users get the best world-model source, developers without a Mac use the hosted edition.</p>
+  <p class="est" lang="ja">すべて推定値。ShogunAI Pro（$99/月）の加入者には月 $20 相当のクレジットを付与する。従量の弱点（売上予測性、企業の予算承認）はコミット割引とハード上限で受ける。粗利の目標：ingest は原価の 3〜5 倍、run は 5% テイクで損益ゼロ近傍（ルーターは配布装置と割り切る）。design partner の実測で単価を改定する。</p>
+  <p class="est" lang="en">All figures are estimates. ShogunAI Pro subscribers ($99/mo) receive $20 of credits a month. Usage pricing’s weaknesses (revenue predictability, enterprise budget approval) are handled with commit discounts and hard caps. Margin targets: ingest at 3–5× cost, runs near break-even at a 5% take (the router is a distribution device). Revise unit prices from design partners’ real usage.</p>
 </section>
 
 <!-- ===================== 6 GTM ===================== -->
@@ -405,44 +403,48 @@ footer p { max-width: none; }
   <h2 lang="ja">6. GTM：グローバルファーストの配布、日本ファーストの企業ウェッジ</h2>
   <h2 lang="en">6. Go-to-market: global-first distribution, Japan-first enterprise wedge</h2>
   <div lang="ja">
-    <p>配布は供給側の実績が証明済みの経路を、英語で、最初の 90 日に全部やる：MIT/Apache SDK ＋ MCP サーバー ＋ Claude Code プラグイン → Anthropic directory（<a href="https://code.claude.com/docs/en/plugins/publish.md">Claude Code publish</a>）、公式 MCP Registry（<code>server.json</code>、約 3 万サーバー）、OpenAI Plugin directory、Composio/Smithery/Glama、<code>llms.txt</code>。Mem0 の API 呼び出しが 2 四半期で 35M → 186M に伸びた動力はフレームワーク内の 1 行統合であり、Vercel AI SDK／OpenAI Agents SDK／Mastra 向けの <code>withShogunAgent()</code> ミドルウェアを SDK に含める。</p>
+    <p>配布は供給側の実績が証明済みの経路を、英語で、最初に全部やる：MIT/Apache SDK ＋ MCP サーバー ＋ Claude Code プラグイン → Anthropic directory（<a href="https://code.claude.com/docs/en/plugins/publish.md">Claude Code publish</a>）、公式 MCP Registry（<code>server.json</code>、約 3 万サーバー）、OpenAI Plugin directory、Composio/Smithery/Glama、<code>llms.txt</code>。Mem0 の API 呼び出しが 2 四半期で 35M → 186M に伸びた動力はフレームワーク内の 1 行統合であり、Vercel AI SDK／OpenAI Agents SDK／Mastra 向けの <code>withShogunAgent()</code> ミドルウェアを SDK に含める。</p>
     <p>日本側は資本ではなく顧客と非希薄資金を取る。日本の AI 投資は基盤モデル（Sakana $2.65B）に集中し開発者向けインフラは薄いが、情報漏えい不安は調査国中最高の 46.4%。2026 年 APPI 改正はデータ国内保持を義務づけないが越境移転の同意・開示義務は残り、AI 事業者ガイドライン v1.2（2026-03-31）はエージェントの留意事項と human-in-the-loop を明記した。「従業員の Mac 上で動き、本文はクラウドに残らず、送信は人が専用ボタンで承認する」は日本の購買担当が社内で説明できる準拠の形であり、GENIAC-PRIZE 2026（賞金最大 ¥630M ＋ 計算資源）は非希薄資金の候補になる。国内に専用の記憶 API は無く、リスクは LayerX／PKSHA／NTT Docomo Business のスイートが記憶を同梱すること。これらへの OEM は日本 GTM の第二経路である。</p>
   </div>
   <div lang="en">
-    <p>Do every proven supply-side channel, in English, in the first 90 days: MIT/Apache SDK + MCP server + Claude Code plugin → Anthropic directory (<a href="https://code.claude.com/docs/en/plugins/publish.md">Claude Code publish</a>), the official MCP Registry (<code>server.json</code>, about 30k servers), the OpenAI Plugin directory, Composio/Smithery/Glama, and <code>llms.txt</code>. Mem0’s API calls grew 35M → 186M in two quarters on one-line framework integrations, so ship a <code>withShogunAgent()</code> middleware for the Vercel AI SDK, OpenAI Agents SDK and Mastra inside the SDK.</p>
+    <p>Do every proven supply-side channel, in English, from the start: MIT/Apache SDK + MCP server + Claude Code plugin → Anthropic directory (<a href="https://code.claude.com/docs/en/plugins/publish.md">Claude Code publish</a>), the official MCP Registry (<code>server.json</code>, about 30k servers), the OpenAI Plugin directory, Composio/Smithery/Glama, and <code>llms.txt</code>. Mem0’s API calls grew 35M → 186M in two quarters on one-line framework integrations, so ship a <code>withShogunAgent()</code> middleware for the Vercel AI SDK, OpenAI Agents SDK and Mastra inside the SDK.</p>
     <p>In Japan, take customers and non-dilutive money rather than capital. Japanese AI investment concentrates in foundation models (Sakana $2.65B) with thin developer infrastructure, but data-leak anxiety is the highest of any surveyed country at 46.4%. The 2026 APPI amendment mandates no data localization but keeps cross-border consent and disclosure duties, and the AI Business Operator Guidelines v1.2 (2026-03-31) add agent-specific points and human-in-the-loop. “Runs on the employee’s Mac, no bodies stay in the cloud, every send is approved by a person with a dedicated button” is a compliance story a Japanese buyer can explain internally, and GENIAC-PRIZE 2026 (up to ¥630M plus compute) is a non-dilutive candidate. There is no domestic memory API; the risk is LayerX, PKSHA or NTT Docomo Business bundling memory into their suites, and OEM to them is Japan’s second route.</p>
   </div>
 </section>
 
 <!-- ===================== 7 MONID ===================== -->
 <section id="monid">
-  <h2 lang="ja">7. Monid 型アグリゲータは作らない。載る。ただし「日本向けの狭いカタログ」はゲート付きで残す</h2>
-  <h2 lang="en">7. Don’t build a Monid-style aggregator. Get listed. Keep a gated “narrow Japan catalog” option</h2>
+  <h2 lang="ja">7. 「OpenRouter for Agents」も建てる。ただしルーターは入口、状態層が堀</h2>
+  <h2 lang="en">7. Build the “OpenRouter for Agents” too. The router is the front door; the state layer is the moat</h2>
   <div lang="ja">
-    <p>Monid（SF）は 2026-04 にローンチし、$2.1M プレシードと Long Journey Ventures 主導の $7.7M シードで合計 $9.8M を調達、<code>api.monid.ai</code> の <code>discover</code>／<code>inspect</code>（無料）／<code>run</code>（従量）と一つのプリペイド・ウォレット（または x402 の USDC）、MIT のコネクタ・エンジンを持つ「OpenRouter for agent tools」である（<a href="https://github.com/monid-ai/monid">GitHub</a>）。しかし中身は<strong>データ取得ルーター</strong>：ランキング上位は TinyFish（754K 呼び出し）、TikHub、Context.dev、AnyAPI、Litescrape とすべて Web 検索／スクレイプ／ソーシャルデータで、記憶・知識・状態のカテゴリは存在しない（<a href="https://monid.ai/rankings">rankings</a>）。独立レビューは、1 サプライヤー（TikHub）が端点の 56%、PER_CALL 価格の中央値 $0.0015、<code>discover</code> が 26 倍高い端点を 1 位に出し、<code>/terms</code> と <code>/privacy</code> が 404 と報告した（<a href="https://www.notis.ai/blog/monid-review/">Notis</a>）。「0% markup」と「10% 手数料」という収益モデルの矛盾も未解消。</p>
-    <h3>自分で建てるべきでない五つの理由</h3>
+    <p>オーナー判断により、Monid 型の汎用ツール・アグリゲータも建てる。技術的には難しくない：Monid のコネクタ・エンジンは MIT で、<code>discover</code>／<code>inspect</code>／<code>run</code> の 3 動詞と宣言的なコネクタ定義（provider / endpoint / zod スキーマ / 記録済み fixture）は再現でき、計量・認証・ゼロ保持プロキシは <code>apps/api</code> に既にある。調査が示した五つの警告（コネクタ・コードはコモディティ、中央値 $0.0015/call の薄利、Arcade と Stripe による統合、自社製品を自分で順位付けする利益相反、記憶は per-call スポット市場に合わない）は消えないので、<strong>それらを設計条件として取り込む</strong>。</p>
+    <p>Monid（SF）は 2026-04 ローンチ、$9.8M 調達、ランキング上位は TinyFish（754K 呼び出し）、TikHub、Context.dev と全て Web 検索／スクレイプ／ソーシャルデータで、記憶・知識・状態のカテゴリは無い（<a href="https://monid.ai/rankings">rankings</a>、<a href="https://github.com/monid-ai/monid">GitHub</a>）。独立レビューは、1 サプライヤーが端点の 56%、<code>discover</code> が 26 倍高い端点を 1 位に出す、per-key 予算が無い、<code>/terms</code> が 404 と報告した（<a href="https://www.notis.ai/blog/monid-review/">Notis</a>）。これらが、後発が埋めるべき穴の一覧になる。</p>
+    <h3>設計条件</h3>
     <ol>
-      <li><strong>コードはコモディティ</strong>：コネクタ・エンジンは MIT で 780 フォーク。難しい部分（ウォレット、プロバイダ契約、ランキング・テレメトリ、法務、不正対策）は非公開で資本集約的。</li>
-      <li><strong>薄利の規模ゲーム</strong>：OpenRouter は約 5% のテイクで年換算 $140〜160M に達し Stripe に $7B 超で買収されたが、それは約 $2.5B の中継支出の上に成り立つ（<a href="https://sacra.com/c/openrouter/">Sacra</a>）。中央値 $0.0015/call で 10% を取っても、Monid の 400 万トランザクション全部が有料でも粗取りは数千ドル規模（推定）。RapidAPI は $1B 評価から資産売却に至った。</li>
-      <li><strong>統合が進む</strong>：Arcade が Smithery を買収（2026-08-05）、Stripe が OpenRouter を買収。決済・認証の既存勢力がレジストリを吸収する局面で正面衝突する意味は薄い。</li>
-      <li><strong>利益相反</strong>：自分が順位付けするカタログに自社製品を入れれば Monid が Simple FS で受けている批判をそのまま受け、OpenAI の提出規約は他プラグインへの誘導を禁じる。</li>
-      <li><strong>記憶は per-call スポット市場に合わない</strong>：記憶はユーザー／テナントに束縛された状態で、継続とともに価値が複利で増え、乗り換えが価値を壊す。だから Monid に記憶が無く、記憶ベンダーは Composio/Smithery/Glama の中で自社サブスクで売っている。</li>
+      <li><strong>二層構造。</strong> Router（discover/inspect/run、従量、ゼロ保持プロキシ）と State（ShogunAgent）。ルーターの粗利はほぼゼロで良い。目的は配布と「どのツールがどのタスクに効いたか」のデータであり、収益は ingest と状態側で測る。ルーターの KPI は売上ではなく<strong>ルーター経由のエージェントのうち状態層を使い始めた割合</strong>。</li>
+      <li><strong>コールドスタートは借りる。</strong> コネクタ定義を Monid の形式と互換にして既存約 1,600 端点の定義を取り込める形にし、Monid の hosted カタログを Proxy/Direct-use でパススルーする（再販業者 Notis が +20% で使った経路）。自前コネクタは差別化領域だけに集中する：日本 SaaS（freee／kintone／Sansan／Chatwork／CloudSign／LegalOn。主要 100 のうち 65% に MCP が無い、<a href="https://zenn.dev/kanseilink/articles/a316f473d8d506">Zenn</a>）、記憶・状態、承認を要する書き込み系。</li>
+      <li><strong>全 run に L1/L2/L3。</strong> Monid にはワークスペース単位の予算しか無い。読み取りは L1、ユーザーデータに触る書き込みは L2（MRTR <code>input_required</code>）、外部送信・決済は L3（URL elicitation）。<code>shogun-integrations/scope.rs</code> の「表に無い操作は拒否、ExternalSend は必ず L3」をそのまま載せる。これが「エージェントが安全に金を使えるルーター」という売り文句になる。</li>
+      <li><strong>ルーターがユーザー所有の状態で学ぶ。</strong> tool × task × outcome を ShogunAgent の state に記録し、<code>discover</code> のランキングを per-user／per-tenant に個別化する。Monid はこのデータをルーター側に中央集権化しているが、ここでは持ち出し可能なユーザーの状態として持つ。これが乗り換えコストになり、ルーター単体では成立しない堀を状態層が作る。</li>
+      <li><strong>利益相反の処理。</strong> スコア内訳に価格を含めて公開し、自社ツールは first-party ラベルで分離表示、自己優遇しないポリシーを文書化する。OpenAI ディレクトリの「他プラグインへの誘導禁止」に抵触しないよう、ディレクトリ提出物とルーターの SKILL.md は分ける。</li>
     </ol>
-    <div class="callout"><p><strong>答えは「(b) 載る」を核に、「(c) 両方」を再定義して残す。</strong> 載る先は優先順に、公式 MCP Registry、Anthropic directory、Smithery、Glama、Composio toolkit、OpenAI Plugin directory。L1/L2/L3 は MCP アノテーションに直接写像できる（Read → <code>readOnlyHint:true</code>、L1 → <code>destructiveHint:false</code>、L3 → <code>destructiveHint:true</code> かつ <code>openWorldHint:true</code>）ので、これは全ディレクトリの入場券である。Monid には、記憶カテゴリが追加された時点で per-call provider として掲載する。</p></div>
-    <p>(c) の再定義は「汎用ルーター」ではなく<strong>「日本 SaaS 向けの狭いコネクタ・カタログを、ShogunAgent の MCP/REST/CLI と SKILL.md 越しに、L1/L2/L3 を差別化として出す」</strong>である。日本の主要 SaaS 100 のうち公式 MCP は約 20%、「残り 65% は MCP サーバーが存在しない」、法務・電子契約（CloudSign、GMO Sign、LegalOn）は MCP ゼロという調査がある（<a href="https://zenn.dev/kanseilink/articles/a316f473d8d506">Zenn</a>）。<code>shogun-integrations</code> は 4 ファイルで新サービスを足せる設計で、<code>scope.rs</code> の「表に無い操作は拒否、ExternalSend は必ず L3」が、Monid にはワークスペース単位の予算しか無い穴を埋める。ただしこれは「ワールドモデルへの取り込みソース」として始め（freee/kintone/Sansan/Chatwork の読み取り）、課金付きカタログにするかは 12 か月目に判断する。アグリゲータが構造的に持たない「このユーザーでどのツールがどのタスクに効いたか」は per-user 状態であり、ShogunAgent はそれをユーザー所有の状態として持てる。</p>
+    <h3>技術メモ</h3>
+    <p>MCP 2026-07-28 の Streamable HTTP 単一エンドポイントで、<code>discover</code>／<code>inspect</code>／<code>run</code> を MCP ツールと REST の両面に出す。<code>Mcp-Method</code>／<code>Mcp-Name</code> ヘッダでボディを解析せずに計量し、<code>apps/api</code> の Ed25519 認証と reserve-then-settle 台帳をそのまま使う。プロバイダ鍵は transport 層で注入し、エンジン・プロセスには入れない（Monid と同じ）。本文はログ・DB・メトリクスに残さない。x402 の受け入れは後段で判断し、それまではカード入金のウォレットと 402 規約で動かす。</p>
+    <div class="callout"><p><strong>載ることも続ける。</strong> 自前ルーターを持つことと他所に載ることは両立する。優先順に、公式 MCP Registry、Anthropic directory、Smithery、Glama、Composio toolkit、OpenAI Plugin directory。Monid には記憶カテゴリができた時点で per-call provider として掲載する。L1/L2/L3 は MCP アノテーション（<code>readOnlyHint</code>／<code>destructiveHint</code>／<code>openWorldHint</code>）に直接写像でき、全ディレクトリの入場券になる。</p></div>
   </div>
   <div lang="en">
-    <p>Monid (SF) launched in April 2026 and has raised $9.8M ($2.1M pre-seed, $7.7M seed led by Long Journey Ventures). It is “OpenRouter for agent tools”: <code>api.monid.ai</code> with <code>discover</code>/<code>inspect</code> (free) and <code>run</code> (metered), one prepaid wallet (or x402 USDC), and an MIT connector engine (<a href="https://github.com/monid-ai/monid">GitHub</a>). Inside, it is a <strong>data-fetch router</strong>: the top-ranked tools are TinyFish (754K calls), TikHub, Context.dev, AnyAPI and Litescrape, all web search/scrape/social data, and there is no memory, knowledge or state category (<a href="https://monid.ai/rankings">rankings</a>). An independent review found one supplier (TikHub) behind 56% of endpoints, a median PER_CALL price of $0.0015, <code>discover</code> ranking a 26× more expensive endpoint first, and <code>/terms</code> and <code>/privacy</code> returning 404 (<a href="https://www.notis.ai/blog/monid-review/">Notis</a>). The “0% markup” vs. “10% fee” contradiction is unresolved.</p>
-    <h3>Five reasons not to build one</h3>
+    <p>By the owner’s decision, we also build a Monid-style general tool aggregator. It is not technically hard: Monid’s connector engine is MIT, the three verbs <code>discover</code>/<code>inspect</code>/<code>run</code> and declarative connector definitions (provider, endpoint, zod schemas, recorded fixtures) can be reproduced, and metering, auth and a zero-retention proxy already exist in <code>apps/api</code>. The five warnings from the research (commodity connector code, thin margins at a $0.0015 median call, consolidation by Arcade and Stripe, the conflict of ranking your own product, memory not fitting a per-call spot market) do not go away, so <strong>they become design constraints</strong>.</p>
+    <p>Monid (SF) launched April 2026 with $9.8M raised; its top-ranked tools are TinyFish (754K calls), TikHub and Context.dev, all web search/scrape/social data, with no memory, knowledge or state category (<a href="https://monid.ai/rankings">rankings</a>, <a href="https://github.com/monid-ai/monid">GitHub</a>). An independent review found one supplier behind 56% of endpoints, <code>discover</code> ranking a 26× more expensive endpoint first, no per-key budgets, and <code>/terms</code> returning 404 (<a href="https://www.notis.ai/blog/monid-review/">Notis</a>). That list is the set of holes a second mover should fill.</p>
+    <h3>Design constraints</h3>
     <ol>
-      <li><strong>The code is a commodity</strong>: the connector engine is MIT with 780 forks. The hard parts (wallet, provider contracts, ranking telemetry, legal, fraud) are closed and capital-intensive.</li>
-      <li><strong>It is a thin-margin volume game</strong>: OpenRouter reached $140–160M annualized on a ~5% take and sold to Stripe for $7B+, on top of ~$2.5B routed spend (<a href="https://sacra.com/c/openrouter/">Sacra</a>). At a $0.0015 median price, even a 10% take on all 4M of Monid’s claimed transactions is thousands of dollars (estimate). RapidAPI went from a $1B valuation to an asset sale.</li>
-      <li><strong>Consolidation is underway</strong>: Arcade acquired Smithery (2026-08-05), Stripe acquired OpenRouter. Payments and auth incumbents are absorbing registries; a head-on fight is low-value.</li>
-      <li><strong>Conflict of interest</strong>: listing your own product in a catalog you rank invites the criticism Monid gets for its Simple FS, and OpenAI’s submission rules forbid steering to other plugins.</li>
-      <li><strong>Memory does not fit a per-call spot market</strong>: it is user- and tenant-bound state whose value compounds with continuity and breaks on switching. That is why Monid has no memory and memory vendors sell their own subscriptions inside Composio/Smithery/Glama.</li>
+      <li><strong>Two layers.</strong> Router (discover/inspect/run, metered, zero-retention proxy) and State (ShogunAgent). The router can run at near-zero margin; its purpose is distribution and the “which tool worked for which task” data, and revenue is measured on ingest and state. The router’s KPI is not revenue but <strong>the share of router agents that start using the state layer</strong>.</li>
+      <li><strong>Borrow the cold start.</strong> Make connector definitions compatible with Monid’s format so the existing ~1,600 endpoint definitions can be imported, and pass through Monid’s hosted catalog via its Proxy/Direct-use path (the route reseller Notis used at +20%). Build first-party connectors only where they differentiate: Japanese SaaS (freee, kintone, Sansan, Chatwork, CloudSign, LegalOn; 65% of the top 100 have no MCP, <a href="https://zenn.dev/kanseilink/articles/a316f473d8d506">Zenn</a>), memory and state, and writes that need approval.</li>
+      <li><strong>L1/L2/L3 on every run.</strong> Monid has only workspace-level budgets. Reads are L1, writes touching user data are L2 (MRTR <code>input_required</code>), external sends and payments are L3 (URL elicitation). Lift <code>shogun-integrations/scope.rs</code>’s “deny anything not in the table, ExternalSend is always L3” as is. This is the pitch: a router agents can safely spend money through.</li>
+      <li><strong>The router learns in user-owned state.</strong> Record tool × task × outcome in ShogunAgent state and personalize <code>discover</code> ranking per user and tenant. Monid centralizes that data on the router side; here it is portable user state. That becomes the switching cost, and the moat a router alone cannot have.</li>
+      <li><strong>Handle the conflict of interest.</strong> Publish the score breakdown with price included, label first-party tools separately, and document a no-self-preferencing policy. Keep directory submissions separate from the router’s SKILL.md to stay clear of OpenAI’s rule against steering to other plugins.</li>
     </ol>
-    <div class="callout"><p><strong>The answer is (b) get listed, with (c) redefined and kept.</strong> Listing targets in priority order: the official MCP Registry, the Anthropic directory, Smithery, Glama, a Composio toolkit, the OpenAI Plugin directory. L1/L2/L3 maps directly to MCP annotations (Read → <code>readOnlyHint:true</code>, L1 → <code>destructiveHint:false</code>, L3 → <code>destructiveHint:true</code> and <code>openWorldHint:true</code>), which is the entry ticket to every directory. List on Monid as a per-call provider once a memory category exists.</p></div>
-    <p>The redefined (c) is not a general router but <strong>a narrow connector catalog for Japanese SaaS, exposed through ShogunAgent’s MCP/REST/CLI and SKILL.md, with L1/L2/L3 as the differentiator</strong>. A survey of Japan’s top 100 SaaS finds about 20% with an official MCP, “65% with no MCP server at all,” and zero MCP in legal/e-signature (CloudSign, GMO Sign, LegalOn) (<a href="https://zenn.dev/kanseilink/articles/a316f473d8d506">Zenn</a>). <code>shogun-integrations</code> adds a service in four files, and <code>scope.rs</code>’s “deny anything not in the table, ExternalSend is always L3” fills the gap where Monid has only workspace-level budgets. Start it as an ingest source for the world model (reads from freee/kintone/Sansan/Chatwork) and decide at month 12 whether to monetize it as a catalog. What an aggregator structurally cannot own, “which tool worked for which task for this user,” is per-user state that ShogunAgent can hold on the user’s behalf.</p>
+    <h3>Technical notes</h3>
+    <p>One Streamable HTTP endpoint per MCP 2026-07-28, exposing <code>discover</code>/<code>inspect</code>/<code>run</code> both as MCP tools and REST. Meter via <code>Mcp-Method</code>/<code>Mcp-Name</code> headers without parsing bodies, reusing <code>apps/api</code>’s Ed25519 auth and reserve-then-settle ledger. Inject provider keys at the transport layer, never into the engine process (as Monid does). Keep bodies out of logs, DB and metrics. Decide on x402 acceptance later; until then run a card-funded wallet with the 402 convention.</p>
+    <div class="callout"><p><strong>Keep getting listed as well.</strong> Owning a router and appearing on others are compatible. In priority order: the official MCP Registry, the Anthropic directory, Smithery, Glama, a Composio toolkit, the OpenAI Plugin directory. List on Monid as a per-call provider once a memory category exists. L1/L2/L3 maps directly onto MCP annotations (<code>readOnlyHint</code>/<code>destructiveHint</code>/<code>openWorldHint</code>), the entry ticket to every directory.</p></div>
   </div>
 </section>
 
@@ -451,17 +453,20 @@ footer p { max-width: none; }
   <h2 lang="ja">8. 決定事項：何を建て、何を建てないか</h2>
   <h2 lang="en">8. Decisions: what to build, what not to build</h2>
   <div lang="ja">
+    <p><strong>価格。</strong>完全従量。固定サブスク無し、プリペイド・クレジット ＋ 402、キー別ハード上限。取り込み（$0.50/1K イベント）とモデル起動 op（$0.10/1K）とツール実行（プロバイダ価格 ＋ 5%）で課金し、状態の読み取りと承認は無料。Enterprise は同じ従量に年間コミット割引。単価はすべて推定で、design partner の実測で改定する。</p>
     <p><strong>ポジショニング。</strong>「AI エージェントが装着する、仕事の状態（state of work）レイヤー」。競合比較の軸は「記憶 vs 状態」「自由文 vs 型付きテーブル＋confidence」「クラウドファースト vs ローカル既定」「削除ツールを渡さない vs L1/L2/L3 を型で強制」「Recall@20 vs 同一ハーネス公開」。<code>docs/gpt6-astra-implications.md</code> の結論「Astra 級実行エンジンにワールドモデルと承認境界を貸す側に回る」と整合する。</p>
   </div>
   <div lang="en">
+    <p><strong>Pricing.</strong> Pure usage-based. No fixed subscription; prepaid credits plus 402, per-key hard caps. Charge for ingest ($0.50 per 1K events), model-invoking ops ($0.10 per 1K) and tool runs (provider price + 5%); state reads and approvals are free. Enterprise pays the same rates with annual-commit discounts. All unit prices are estimates, revised from design partners’ real usage.</p>
     <p><strong>Positioning.</strong> “The state-of-work layer AI agents plug into.” Comparison axes: memory vs. state, free text vs. typed tables with confidence, cloud-first vs. local by default, “don’t hand over the delete tool” vs. L1/L2/L3 enforced by type, Recall@20 vs. published same-harness results. This matches the conclusion of <code>docs/gpt6-astra-implications.md</code>: lend the world model and the approval boundary to Astra-class execution engines.</p>
   </div>
   <p class="quote">“Calibrated truth about your work — people, projects, commitments and open loops — inferred locally, with provenance on every fact and a human gate on every send, shared across all your agents over MCP.”</p>
 
   <div class="two">
     <div class="panel build">
-      <h4><span lang="ja">建てる（最初の 90 日）</span><span lang="en">Build (first 90 days)</span></h4>
+      <h4><span lang="ja">まず建てる</span><span lang="en">Build first</span></h4>
       <ul lang="ja">
+        <li><strong>ルーター骨格</strong>：<code>discover</code>/<code>inspect</code>/<code>run</code>、Monid 互換のコネクタ定義、Monid hosted カタログのパススルー、日本 SaaS 読み取りコネクタ（freee/kintone/Sansan/Chatwork）、記憶・状態カテゴリ、キー別ハード上限、全 run に L1/L2/L3</li>
         <li>Streamable HTTP MCP（2026-07-28、<code>Mcp-Method</code>/<code>Mcp-Name</code>、<code>ttlMs</code>、MRTR）＋ <code>memory.ingest</code>/<code>memory.recall</code> で <strong>core 22 本</strong></li>
         <li>テナントごとの SQLCipher ファイルを開閉するサイドカー（Linux、<code>SHOGUN_DB_PATH</code> のテナント化）</li>
         <li>API key（<code>sa_</code> 接頭）＋ OAuth/CIMD のエージェント認証</li>
@@ -471,6 +476,7 @@ footer p { max-width: none; }
         <li>同一ハーネス・ベンチマーク公開（OmniMemEval ＋ Mem0 ハーネス）と「open-loop tracking」ベンチ v0</li>
       </ul>
       <ul lang="en">
+        <li><strong>Router skeleton</strong>: <code>discover</code>/<code>inspect</code>/<code>run</code>, Monid-compatible connector definitions, passthrough of Monid’s hosted catalog, Japanese SaaS read connectors (freee/kintone/Sansan/Chatwork), a memory/state category, per-key hard caps, L1/L2/L3 on every run</li>
         <li>Streamable HTTP MCP (2026-07-28: <code>Mcp-Method</code>/<code>Mcp-Name</code>, <code>ttlMs</code>, MRTR) plus <code>memory.ingest</code>/<code>memory.recall</code>: a <strong>core of 22 tools</strong></li>
         <li>A sidecar that opens per-tenant SQLCipher files (Linux, tenant-scoped <code>SHOGUN_DB_PATH</code>)</li>
         <li>Agent auth: API keys (<code>sa_</code> prefix) plus OAuth/CIMD</li>
@@ -483,26 +489,26 @@ footer p { max-width: none; }
     <div class="panel skip">
       <h4><span lang="ja">建てない</span><span lang="en">Do not build</span></h4>
       <ul lang="ja">
-        <li>汎用ツール・アグリゲータ</li>
+        <li>Monid と価格だけで競う汎用ルーター（テイク率を下げる競争はしない。差別化は L1/L2/L3・個別化・日本 SaaS・ゼロ保持）</li>
+        <li>独自の決済基盤・x402 ウォレット（Stripe ＋ 402 規約で足りる。x402 受け入れは後段で判断）</li>
         <li>グラフ DB（Kuzu 死亡、Mem0 撤退。型付き関係行で足りる）</li>
         <li>Postgres 移植（91 本の書き直しで再利用率 60〜70% → 25%）</li>
         <li>独自埋め込みモデル研究</li>
         <li>チャット記憶のパーソナライズ API（ラボが無料で出す領域）</li>
         <li>LoCoMo のスコア追い</li>
         <li>Windows/モバイルの取得層（まず取り込み API で受ける）</li>
-        <li>x402 ウォレット決済（402 規約の互換のみ）</li>
         <li>消費者向けアプリや Chrome 拡張</li>
         <li><code>all</code> toolset 158 本の公開（デスクトップ固有 約 100 本は ShogunAI に残す）</li>
       </ul>
       <ul lang="en">
-        <li>A general tool aggregator</li>
+        <li>A general router that competes with Monid on price alone (no race to a lower take; differentiate on L1/L2/L3, personalization, Japanese SaaS, zero retention)</li>
+        <li>Our own payment rails or an x402 wallet (Stripe plus the 402 convention suffice; decide on x402 acceptance later)</li>
         <li>A graph DB (Kuzu is dead, Mem0 pulled out; typed relation rows suffice)</li>
         <li>A Postgres port (rewriting 91 migrations drops reuse from 60–70% to 25%)</li>
         <li>In-house embedding-model research</li>
         <li>A chat-personalization memory API (the labs give it away)</li>
         <li>Chasing LoCoMo scores</li>
         <li>Windows/mobile capture layers (take non-Mac sources through the ingest API first)</li>
-        <li>x402 wallet payments (402 convention compatibility only)</li>
         <li>Consumer apps or a Chrome extension</li>
         <li>Exposing all 158 tools (about 100 desktop-only tools stay in ShogunAI)</li>
       </ul>
@@ -533,24 +539,26 @@ footer p { max-width: none; }
 
 <!-- ===================== 9 ROADMAP ===================== -->
 <section id="roadmap">
-  <h2 lang="ja">9. ロードマップ</h2>
-  <h2 lang="en">9. Roadmap</h2>
+  <h2 lang="ja">9. ロードマップ（順序のみ。期間は置かない）</h2>
+  <h2 lang="en">9. Roadmap (sequence only, no durations)</h2>
+  <p lang="ja">AI 前提の開発速度で進めるため、フェーズは順序と出口条件だけで定義し、日数は書かない。次のフェーズに進む条件は前フェーズの出口条件の充足。</p>
+  <p lang="en">Development runs AI-first, so phases are defined by order and exit criteria only, with no durations. A phase starts when the previous one’s exit criteria are met.</p>
   <div class="tbl"><table>
     <thead><tr>
-      <th><span lang="ja">期間</span><span lang="en">Horizon</span></th>
+      <th><span lang="ja">フェーズ</span><span lang="en">Phase</span></th>
       <th><span lang="ja">到達点</span><span lang="en">Deliverables</span></th>
-      <th><span lang="ja">計測指標（推定目標）</span><span lang="en">Targets (estimates)</span></th>
+      <th><span lang="ja">出口条件（推定目標）</span><span lang="en">Exit criteria (estimates)</span></th>
     </tr></thead>
     <tbody>
-      <tr><td><span lang="ja">90 日</span><span lang="en">90 days</span></td>
-        <td><span lang="ja"><code>shogunagent-core</code> を Linux で単体起動（テナント別 SQLite）、Streamable HTTP MCP core 22 本、API key 認証、<code>/memories</code> 射影、エクスポート形式 v1、OSS 公開（エンジン MIT/Apache-2.0、hosted sync は非公開）、SKILL.md ＋ Claude Code プラグイン ＋ MCP Registry ＋ Glama 掲載、同一ハーネス結果公開、ShogunAI Mac ユーザーの既存 Memory API を ShogunAgent にブランド統合</span><span lang="en"><code>shogunagent-core</code> running standalone on Linux (per-tenant SQLite), Streamable HTTP MCP with 22 core tools, API-key auth, <code>/memories</code> projection, export format v1, OSS release (engine MIT/Apache-2.0, hosted sync closed), SKILL.md + Claude Code plugin + MCP Registry + Glama listings, same-harness results published, existing ShogunAI Mac Memory API rebranded under ShogunAgent</span></td>
-        <td><span lang="ja">外部エージェントからの <code>tools/call</code> 10 万回/月、design partner 5（日本企業 3・米国エージェント開発者 2）、ベンチマーク公開 1 本</span><span lang="en">100k <code>tools/call</code>/month from external agents, 5 design partners (3 Japanese enterprises, 2 US agent developers), 1 published benchmark</span></td></tr>
-      <tr><td><span lang="ja">6 か月</span><span lang="en">6 months</span></td>
-        <td><span lang="ja">遠隔 L2/L3 承認（Web ＋ Slack、MRTR ＋ URL elicitation、webhook）、A2A Agent Card、TS/Python SDK ＋ <code>withShogunAgent()</code>、agent-scratch 名前空間と ACL・監査、Stripe metered 課金と Pro $19 セルフサーブ、Anthropic directory ＋ OpenAI Plugin directory、ローカル埋め込み再導入、日本 SaaS 読み取りコネクタ（freee/kintone/Sansan/Chatwork）、GENIAC/東京都助成への応募</span><span lang="en">Remote L2/L3 approvals (web + Slack, MRTR + URL elicitation, webhooks), A2A Agent Card, TS/Python SDKs with <code>withShogunAgent()</code>, agent-scratch namespaces with ACL and audit, Stripe metered billing and self-serve Pro $19, Anthropic + OpenAI directories, local embeddings re-enabled, Japanese SaaS read connectors (freee/kintone/Sansan/Chatwork), GENIAC / Tokyo grant applications</span></td>
-        <td><span lang="ja">有料 Pro 200、Team 10 社、月間 ingest 1 億イベント、LLM 原価 ≤ 売上の 15%</span><span lang="en">200 paid Pro, 10 Team accounts, 100M ingested events/month, LLM cost ≤ 15% of revenue</span></td></tr>
-      <tr><td><span lang="ja">12 か月</span><span lang="en">12 months</span></td>
-        <td><span lang="ja">Enterprise ティア（BYOC/オンプレ・サイドカー、国内リージョン、SSO/SCIM、監査エクスポート、ZDR 契約）、W3C memory interop CG 参加とエクスポート形式 v2、「open-loop tracking」ベンチ v1 を外部公開、<strong>日本向けコネクタ・カタログを課金化するかのゲート判断</strong>（読み取りコネクタ経由の ingest が全体の 20% 超、かつ 3 社以上が書き込み系を要望）、Monid に記憶カテゴリができていれば per-call 掲載、シード資金調達（米国側シンジケート）</span><span lang="en">Enterprise tier (BYOC/on-prem sidecar, in-country region, SSO/SCIM, audit export, contractual ZDR), W3C memory-interop CG membership and export format v2, public “open-loop tracking” bench v1, <strong>gate decision on monetizing the Japan connector catalog</strong> (connector ingest &gt; 20% of total and 3+ customers asking for writes), per-call Monid listing if a memory category exists, seed round (US syndicate)</span></td>
-        <td><span lang="ja">ARR $1M 相当、Enterprise 3 社、NRR &gt;110%、同一ハーネスで multi-session／temporal カテゴリ上位 3</span><span lang="en">~$1M ARR, 3 Enterprise accounts, NRR &gt;110%, top-3 in multi-session/temporal categories on a same-harness leaderboard</span></td></tr>
+      <tr><td><span lang="ja">Phase 1：コアとルーター骨格</span><span lang="en">Phase 1: Core and router skeleton</span></td>
+        <td><span lang="ja"><code>shogunagent-core</code> を Linux で単体起動（テナント別 SQLite）、Streamable HTTP MCP core 22 本、API key 認証、<code>/memories</code> 射影、エクスポート形式 v1、OSS 公開（エンジン MIT/Apache-2.0、hosted sync は非公開）。ルーター骨格：<code>discover</code>/<code>inspect</code>/<code>run</code>、Monid 互換コネクタ定義、Monid hosted パススルー、日本 SaaS 読み取りコネクタ 4 本、記憶・状態カテゴリ、キー別ハード上限、全 run に L1/L2/L3。プリペイド・クレジットと 402。SKILL.md ＋ Claude Code プラグイン ＋ MCP Registry ＋ Glama 掲載、同一ハーネス結果公開、ShogunAI Mac ユーザーの既存 Memory API を ShogunAgent にブランド統合</span><span lang="en"><code>shogunagent-core</code> running standalone on Linux (per-tenant SQLite), Streamable HTTP MCP with 22 core tools, API-key auth, <code>/memories</code> projection, export format v1, OSS release (engine MIT/Apache-2.0, hosted sync closed). Router skeleton: <code>discover</code>/<code>inspect</code>/<code>run</code>, Monid-compatible connector definitions, Monid hosted passthrough, four Japanese SaaS read connectors, memory/state category, per-key hard caps, L1/L2/L3 on every run. Prepaid credits and 402. SKILL.md + Claude Code plugin + MCP Registry + Glama listings, same-harness results published, existing ShogunAI Mac Memory API rebranded under ShogunAgent</span></td>
+        <td><span lang="ja">外部エージェントからの <code>tools/call</code> が継続的に流れている、design partner 5（日本企業 3・米国エージェント開発者 2）、ベンチマーク公開 1 本、ルーター経由エージェントの状態層利用率を計測できている</span><span lang="en">Sustained <code>tools/call</code> traffic from external agents, 5 design partners (3 Japanese enterprises, 2 US agent developers), 1 published benchmark, router-to-state conversion being measured</span></td></tr>
+      <tr><td><span lang="ja">Phase 2：承認・SDK・課金・カタログ拡大</span><span lang="en">Phase 2: Approvals, SDKs, billing, catalog growth</span></td>
+        <td><span lang="ja">遠隔 L2/L3 承認（Web ＋ Slack、MRTR ＋ URL elicitation、webhook）、A2A Agent Card、TS/Python SDK ＋ <code>withShogunAgent()</code>、agent-scratch 名前空間と ACL・監査、Stripe 従量課金とウォレット、per-user 個別化 <code>discover</code>、プロバイダのセルフサーブ掲載、自前コネクタ拡大（日本 SaaS 書き込み系を L2/L3 で）、Anthropic directory ＋ OpenAI Plugin directory、ローカル埋め込み再導入、GENIAC/東京都助成への応募</span><span lang="en">Remote L2/L3 approvals (web + Slack, MRTR + URL elicitation, webhooks), A2A Agent Card, TS/Python SDKs with <code>withShogunAgent()</code>, agent-scratch namespaces with ACL and audit, Stripe usage billing and wallet, per-user personalized <code>discover</code>, self-serve provider listing, more first-party connectors (Japanese SaaS writes under L2/L3), Anthropic + OpenAI directories, local embeddings re-enabled, GENIAC / Tokyo grant applications</span></td>
+        <td><span lang="ja">有料ウォレット利用者が増え続けている、ingest の粗利が原価の 3 倍以上、LLM 原価 ≤ 売上の 15%、ルーター経由の状態層転換率が改善している</span><span lang="en">Growing paid wallet users, ingest gross margin ≥ 3× cost, LLM cost ≤ 15% of revenue, improving router-to-state conversion</span></td></tr>
+      <tr><td><span lang="ja">Phase 3：Enterprise・標準化・決済</span><span lang="en">Phase 3: Enterprise, standards, payments</span></td>
+        <td><span lang="ja">Enterprise コミット契約（BYOC/オンプレ・サイドカー、国内リージョン、SSO/SCIM、監査エクスポート、ZDR）、W3C memory interop CG 参加とエクスポート形式 v2、「open-loop tracking」ベンチ v1 を外部公開、プロバイダ支払いとカタログの一般公開、x402 受け入れの判断、Monid に記憶カテゴリができていれば per-call 掲載、資金調達（米国側シンジケート）</span><span lang="en">Enterprise commit contracts (BYOC/on-prem sidecar, in-country region, SSO/SCIM, audit export, ZDR), W3C memory-interop CG membership and export format v2, public “open-loop tracking” bench v1, provider payouts and an open catalog, x402 acceptance decision, per-call Monid listing if a memory category exists, fundraising (US syndicate)</span></td>
+        <td><span lang="ja">Enterprise 契約 3 社、NRR &gt;110%、同一ハーネスで multi-session／temporal カテゴリ上位 3、カタログの自前コネクタ比率が上がっている</span><span lang="en">3 Enterprise contracts, NRR &gt;110%, top-3 in multi-session/temporal categories on a same-harness leaderboard, rising share of first-party connectors</span></td></tr>
     </tbody>
   </table></div>
 </section>
@@ -572,7 +580,10 @@ footer p { max-width: none; }
       <tr><td><span lang="ja">マルチテナント境界の欠陥</span><span lang="en">Multi-tenant boundary bugs</span></td><td><span lang="ja">MemClaw のサブテナント迂回、同期 dedup が矛盾検出に先行</span><span lang="en">MemClaw’s sub-tenant bypass; sync dedup preempting contradiction detection</span></td><td><span lang="ja">テナント＝ファイル分離、GET-by-id のスコープテストを <code>tests/invariant*.rs</code> に追加、<code>sensitive_sources</code> を名前空間 ACL へ一般化</span><span lang="en">Tenant = file isolation, GET-by-id scope tests in <code>tests/invariant*.rs</code>, generalize <code>sensitive_sources</code> into namespace ACLs</span></td></tr>
       <tr><td><span lang="ja">抽出原価</span><span lang="en">Extraction COGS</span></td><td><span lang="ja">書き込み経路は RAG の約 50×。Starter ティアは loss-leader になりがち</span><span lang="en">Write path is ~50× RAG; starter tiers tend to be loss leaders</span></td><td><span lang="ja">セッション化 ＋ prefilter ＋ Haiku 級 ＋ ローカル規則の二段抽出、D9 上限、読み取り無料で ingest で回収</span><span lang="en">Two-stage extraction (sessionization + prefilter + Haiku-class + local rules), D9 caps, free reads recovered through ingest</span></td></tr>
       <tr><td><span lang="ja">メモリ汚染（ASI06）</span><span lang="en">Memory poisoning (ASI06)</span></td><td><span lang="ja">MINJA、<code>memory_20250818</code> の「常に書け」プロトコル</span><span lang="en">MINJA; the “always write” protocol of <code>memory_20250818</code></span></td><td><span lang="ja"><code>instruction_shaped</code> ゲート、quote 必須、actor provenance、agent-scratch 分離、高リスク書き込みは L2</span><span lang="en"><code>instruction_shaped</code> gate, mandatory quotes, actor provenance, agent-scratch separation, L2 on high-risk writes</span></td></tr>
-      <tr><td><span lang="ja">小チームの表面積</span><span lang="en">Small-team surface area</span></td><td><span lang="ja">supermemory は約 9 名で 7 プラグイン・5 SDK・MCP・SMFS を抱え自己ホストが崩れた</span><span lang="en">supermemory’s ~9 people carry 7 plugins, 5 SDKs, MCP and SMFS, and self-host broke</span></td><td><span lang="ja">core 22 本に凍結、SDK は TS/Python のみ、wire name 凍結 ＋ 12 か月非推奨ポリシー</span><span lang="en">Freeze at 22 core tools, TS/Python SDKs only, frozen wire names plus a 12-month deprecation policy</span></td></tr>
+      <tr><td><span lang="ja">ルーターの薄利</span><span lang="en">Thin router margins</span></td><td><span lang="ja">中央値 $0.0015/call、OpenRouter も 5% テイクの規模ゲーム、Monid は $9.8M の先行者</span><span lang="en">$0.0015 median call price; OpenRouter is a 5%-take volume game; Monid is a $9.8M incumbent</span></td><td><span lang="ja">ルーターは配布装置と割り切り、収益は ingest と状態側で測る。KPI はルーター経由の状態層転換率。テイク率の値下げ競争はしない</span><span lang="en">Treat the router as distribution; measure revenue on ingest and state. KPI is router-to-state conversion. No race to a lower take</span></td></tr>
+      <tr><td><span lang="ja">ランキングの利益相反</span><span lang="en">Ranking conflict of interest</span></td><td><span lang="ja">Monid は自社 Simple FS と価格を含まないスコアで批判された。OpenAI は他プラグインへの誘導を禁止</span><span lang="en">Monid was criticized for its own Simple FS and a score without price; OpenAI forbids steering to other plugins</span></td><td><span lang="ja">スコア内訳に価格を含めて公開、first-party ラベル、自己優遇しないポリシー文書、ディレクトリ提出物とルーター SKILL.md の分離</span><span lang="en">Publish score breakdown with price, first-party labels, a written no-self-preferencing policy, separate directory submissions from the router SKILL.md</span></td></tr>
+      <tr><td><span lang="ja">従量課金の売上予測性</span><span lang="en">Usage-pricing revenue predictability</span></td><td><span lang="ja">企業の予算承認は固定額を好む。純従量は月次売上が揺れる</span><span lang="en">Enterprise budgets prefer fixed amounts; pure usage makes monthly revenue swing</span></td><td><span lang="ja">年間コミットで 10〜25% 割引、キー別ハード上限、ShogunAI Pro へのクレジット同梱で床を作る</span><span lang="en">Annual commits at 10–25% off, per-key hard caps, bundled credits in ShogunAI Pro as a floor</span></td></tr>
+      <tr><td><span lang="ja">小チームの表面積</span><span lang="en">Small-team surface area</span></td><td><span lang="ja">supermemory は約 9 名で 7 プラグイン・5 SDK・MCP・SMFS を抱え自己ホストが崩れた</span><span lang="en">supermemory’s ~9 people carry 7 plugins, 5 SDKs, MCP and SMFS, and self-host broke</span></td><td><span lang="ja">core 22 本に凍結、SDK は TS/Python のみ、wire name 凍結 ＋ 非推奨ポリシー。ルーターのコネクタは Monid 互換形式で外部貢献を受ける</span><span lang="en">Freeze at 22 core tools, TS/Python SDKs only, frozen wire names plus a deprecation policy. Router connectors accept outside contributions in the Monid-compatible format</span></td></tr>
       <tr><td><span lang="ja">日本／グローバルの分裂</span><span lang="en">Japan/global split</span></td><td><span lang="ja">開発者向け配布は英語・米国中心、日本資本は基盤モデル偏重</span><span lang="en">Developer distribution is English/US-centric; Japanese capital favors foundation models</span></td><td><span lang="ja">配布は英語で全経路、顧客と非希薄資金は日本、投資は米国側シンジケート</span><span lang="en">Distribute in English everywhere; customers and non-dilutive money from Japan; investors from a US syndicate</span></td></tr>
       <tr><td><span lang="ja">第三者個人データ</span><span lang="en">Third-party personal data</span></td><td><span lang="ja">画面・メールの取り込みは同僚の氏名・メールを含む</span><span lang="en">Screen and mail ingest include colleagues’ names and addresses</span></td><td><span lang="ja">ソース別の同意・保持ポリシー、統合前の redaction、<code>excludes</code> ルール API、APPI 越境同意に備えた国内リージョン</span><span lang="en">Per-source consent and retention, redaction before consolidation, an <code>excludes</code> rule API, an in-country region for APPI cross-border consent</span></td></tr>
       <tr><td><span lang="ja">可搬性標準の未決</span><span lang="en">Unsettled portability standards</span></td><td><span lang="ja">W3C CG と 4 形式が競合</span><span lang="en">W3C CG and four competing formats</span></td><td><span lang="ja">公開エクスポートを先に出し CG に参加。<code>shogun-memory-import/v1</code> を双方向化</span><span lang="en">Ship the public export first and join the CG; make <code>shogun-memory-import/v1</code> bidirectional</span></td></tr>
@@ -582,12 +593,12 @@ footer p { max-width: none; }
   <h3 lang="ja">結論</h3>
   <h3 lang="en">Conclusion</h3>
   <div lang="ja">
-    <p>この調査が変えた理解は二つある。第一に、「エージェント向けメモリ」はもう市場カテゴリではなく、四つの別製品（型付きビジネス知識、証明付き学習、セッション状態、ユーザー個人化）の総称であり、ラボが無料で出すのは最後の一つだけだという点。ShogunAI が 2 年かけて作った「provenance と confidence を一箇所で強制し、送信を型で L3 に閉じ込める」仕組みは、個人化記憶の世界では過剰設計に見えたが、仕事の状態を複数のエージェントに貸す世界では最低要件になる。第二に、Monid と OpenRouter の分析が示すのは、エージェント経済で「集める」側（ルーター、レジストリ、ウォレット）は決済・認証の既存勢力に吸収されつつあり、独立して残るのは「状態を持ち、継続で価値が増え、乗り換えが痛い」層だという点。ShogunAgent はまさにその層にいる。</p>
-    <p>実行上の含意は、ShogunAgent を「新製品」ではなく「<code>shogun_api</code> バイナリの多重化と Memory API のブランド化」として始め、最初の 90 日はコードより配布（SKILL.md、プラグイン、レジストリ、同一ハーネス公開）に重心を置くこと。残る問いは「日本の購買担当がこの準拠の形を評価するか」と「Mac を持たない開発者が取り込み API だけで十分な状態を得られるか」の二つで、どちらも design partner 5 社で 90 日以内に答えが出る。</p>
+    <p>この調査が変えた理解は二つある。第一に、「エージェント向けメモリ」はもう市場カテゴリではなく、四つの別製品（型付きビジネス知識、証明付き学習、セッション状態、ユーザー個人化）の総称であり、ラボが無料で出すのは最後の一つだけだという点。ShogunAI が 2 年かけて作った「provenance と confidence を一箇所で強制し、送信を型で L3 に閉じ込める」仕組みは、個人化記憶の世界では過剰設計に見えたが、仕事の状態を複数のエージェントに貸す世界では最低要件になる。第二に、Monid と OpenRouter の分析が示すのは、エージェント経済で「集める」側（ルーター、レジストリ、ウォレット）は決済・認証の既存勢力に吸収されつつあり、独立して残るのは「状態を持ち、継続で価値が増え、乗り換えが痛い」層だという点。だからルーターは建てるが入口として建て、堀は状態層に置く。</p>
+    <p>実行上の含意は、ShogunAgent を「新製品」ではなく「<code>shogun_api</code> バイナリの多重化と Memory API のブランド化」として始め、ルーター骨格を同じフェーズで並走させ、コードより配布（SKILL.md、プラグイン、レジストリ、同一ハーネス公開）に重心を置くこと。残る問いは「日本の購買担当がこの準拠の形を評価するか」「Mac を持たない開発者が取り込み API だけで十分な状態を得られるか」「ルーター経由のエージェントが状態層に転換するか」の三つで、いずれも design partner の実測で答えが出る。</p>
   </div>
   <div lang="en">
-    <p>This research changed two understandings. First, “agent memory” is no longer a market category but an umbrella over four products (typed business knowledge, verified learning, session state, user personalization), and the labs give away only the last. The machinery ShogunAI spent two years building, enforcing provenance and confidence in one place and locking sends into L3 by type, looked over-engineered for personalization memory, but becomes the minimum requirement when state of work is lent to many agents. Second, the Monid and OpenRouter analysis shows that the “aggregating” side of the agent economy (routers, registries, wallets) is being absorbed by payments and auth incumbents, and what stays independent is the layer that holds state, compounds with continuity, and hurts to leave. ShogunAgent sits exactly there.</p>
-    <p>The execution implication: start ShogunAgent not as a new product but as “multiplexing the <code>shogun_api</code> binary and branding the Memory API,” and spend the first 90 days on distribution (SKILL.md, plugins, registries, same-harness publication) more than code. Two questions remain: whether Japanese buyers value this form of compliance, and whether developers without a Mac get enough state from the ingest API alone. Five design partners answer both within 90 days.</p>
+    <p>This research changed two understandings. First, “agent memory” is no longer a market category but an umbrella over four products (typed business knowledge, verified learning, session state, user personalization), and the labs give away only the last. The machinery ShogunAI spent two years building, enforcing provenance and confidence in one place and locking sends into L3 by type, looked over-engineered for personalization memory, but becomes the minimum requirement when state of work is lent to many agents. Second, the Monid and OpenRouter analysis shows that the “aggregating” side of the agent economy (routers, registries, wallets) is being absorbed by payments and auth incumbents, and what stays independent is the layer that holds state, compounds with continuity, and hurts to leave. So we build the router, but as a front door, and put the moat in the state layer.</p>
+    <p>The execution implication: start ShogunAgent not as a new product but as “multiplexing the <code>shogun_api</code> binary and branding the Memory API,” run the router skeleton in the same phase, and weight distribution (SKILL.md, plugins, registries, same-harness publication) over code. Three questions remain: whether Japanese buyers value this form of compliance, whether developers without a Mac get enough state from the ingest API alone, and whether router agents convert to the state layer. Design partners’ real usage answers all three.</p>
   </div>
 </section>
 
