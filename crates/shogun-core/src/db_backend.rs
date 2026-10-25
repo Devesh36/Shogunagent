@@ -2496,6 +2496,33 @@ impl MemoryBackend for DbBackend {
         self.db.principal_may_read(grantee_principal)
     }
 
+    /// `payments.*` (E46): the principal's payment ledger, and the payment rail this process is
+    /// configured with (`SHOGUN_PAYMENT_RAIL`; none → every payment is refused before anything is
+    /// recorded). A build without `exec` has no send path, so it has no rail either.
+    fn payments(
+        &self,
+        op: shogun_mcp::payments_api::PaymentsOp<'_>,
+    ) -> Result<shogun_mcp::payments_api::PaymentsReply, String> {
+        #[cfg(feature = "exec")]
+        use shogun_mcp::payments_api::{PaymentsOp, PaymentsReply};
+        match op {
+            #[cfg(feature = "exec")]
+            PaymentsOp::PayeeClass(payee) => {
+                let rail = crate::payment_rail::configured().ok_or("payment_rail_unavailable")?;
+                Ok(PaymentsReply::Class(rail.payee_class(payee)))
+            }
+            #[cfg(feature = "exec")]
+            PaymentsOp::PayReserved { confirmed } => {
+                let rail = crate::payment_rail::configured().ok_or("payment_rail_unavailable")?;
+                Ok(PaymentsReply::Done(matches!(
+                    crate::payment_rail::pay_reserved(&self.db, rail, confirmed),
+                    crate::payment_rail::Paid::Settled { .. }
+                )))
+            }
+            other => self.db.payments_store(other),
+        }
+    }
+
     /// `memory.fs` (E6-T2): the memory tool's commands over `/memories`, as the call's writer.
     fn memory_fs(
         &self,
@@ -2789,6 +2816,11 @@ impl MemoryBackend for DbBackend {
             // Served by `handoff_api` over `recall` / `ingest` (E35).
             | Tool::HandoffCreate
             | Tool::HandoffAccept
+            // Served by `payments_api` over `payments` (E46).
+            | Tool::PaymentsMandatesList
+            | Tool::PaymentsMandatesRequest
+            | Tool::PaymentsMandatesRevoke
+            | Tool::PaymentsSpend
             // Served by the approval queue (E15) and by `audit_list` / `acl` (E18).
             | Tool::ApprovalsList
             | Tool::ApprovalsGet

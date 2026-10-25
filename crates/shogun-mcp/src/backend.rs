@@ -745,6 +745,13 @@ pub trait MemoryBackend: Send + Sync {
     fn principal_may_read(&self, _grantee_principal: &str) -> bool {
         false
     }
+
+    /// The principal's payment mandates and spends (E46, V105) and the payment rail: one store
+    /// primitive per call ([`crate::payments_api::PaymentsOp`]). A backend without a store has no
+    /// ledger to record a spend in, so it answers `Err` and nothing is paid.
+    fn payments(&self, _op: crate::payments_api::PaymentsOp<'_>) -> Result<crate::payments_api::PaymentsReply, String> {
+        Err("payments_unavailable".to_string())
+    }
 }
 
 /// A shared backend is a backend (E4-T1): the HTTP transport's `McpServer` and the REST state
@@ -828,6 +835,9 @@ impl<T: MemoryBackend + ?Sized> MemoryBackend for std::sync::Arc<T> {
     }
     fn approval_ledger(&self, op: crate::remote_approvals::LedgerOp<'_>) -> Result<crate::remote_approvals::LedgerReply, String> {
         (**self).approval_ledger(op)
+    }
+    fn payments(&self, op: crate::payments_api::PaymentsOp<'_>) -> Result<crate::payments_api::PaymentsReply, String> {
+        (**self).payments(op)
     }
     fn audit_page(
         &self,

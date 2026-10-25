@@ -512,6 +512,8 @@ pub fn recipient_class(action: &SendAction) -> &'static str {
         SendAction::CreateCalendarEvent { .. } | SendAction::UpdateCalendarEvent { .. } => "calendar_attendees",
         SendAction::PostComment { .. } | SendAction::ChangeIssueStatus { .. } => "issue_tracker",
         SendAction::CreateDocument { .. } | SendAction::UpdateDocument { .. } => "document_service",
+        SendAction::Pay { .. } => "payee",
+        SendAction::GrantPaymentMandate { .. } => "payment_mandate",
         _ => "local_setting",
     }
 }

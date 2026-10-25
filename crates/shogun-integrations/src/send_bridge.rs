@@ -70,7 +70,11 @@ fn service_op(action: &SendAction) -> Option<(Service, &'static str)> {
         | SendAction::UseSubscriptionAgent { .. }
         | SendAction::WidenVisualRecall { .. }
         | SendAction::ArchiveMailThread { .. }
-        | SendAction::UnpauseCapture { .. } => return None,
+        | SendAction::UnpauseCapture { .. }
+        // A payment goes to the payment rail, never to a connector (E46); a mandate grant is
+        // applied in the principal's store. No first-layer transport accepts either.
+        | SendAction::Pay { .. }
+        | SendAction::GrantPaymentMandate { .. } => return None,
     })
 }
 
@@ -110,7 +114,9 @@ pub fn args_for_send(action: &SendAction, body: &str) -> Value {
         | SendAction::UseSubscriptionAgent { .. }
         | SendAction::WidenVisualRecall { .. }
         | SendAction::ArchiveMailThread { .. }
-        | SendAction::UnpauseCapture { .. } => json!({}),
+        | SendAction::UnpauseCapture { .. }
+        | SendAction::Pay { .. }
+        | SendAction::GrantPaymentMandate { .. } => json!({}),
     }
 }
 

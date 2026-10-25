@@ -963,6 +963,31 @@ impl<B: MemoryBackend> McpServer<B> {
             };
         }
 
+        // payments.* (E46): one flow for every face (`payments_api`). A new or wider mandate and a
+        // payment outside every mandate go through the one approval queue as L3 requests.
+        if crate::payments_api::is_payments_tool(tool) {
+            let actor = shogun_memory::actor::current_write().actor;
+            let now = (self.clock)();
+            let (status, text) = crate::payments_api::serve(tool, &args, &self.backend, actor.as_str(), now, |send, preview| {
+                let mut status = 503;
+                let body = self.with_approvals(|queue, surface| {
+                    let (code, body) = rest::enqueue(send, preview, now, queue, ApprovalOrigin::Mcp, surface);
+                    status = code;
+                    body
+                });
+                (status, body)
+            });
+            if status == 400 {
+                let message = serde_json::from_str::<Value>(&text)
+                    .ok()
+                    .map(|v| format!("{}: {}", v["error"].as_str().unwrap_or("invalid_arguments"), v["message"].as_str().unwrap_or("")))
+                    .unwrap_or_else(|| "invalid_arguments".to_string());
+                return error(id, -32602, &message);
+            }
+            let failed = is_error_payload(&text);
+            return result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": failed }));
+        }
+
         // state.export in export format v1 / v2 (E7, E27): an additive `format` argument; without it the
         // tool answers the Markdown export below, as before.
         if tool == Tool::StateExport && crate::export_api::wants_jsonl(&args) {
@@ -2195,6 +2220,10 @@ fn tool_title(tool: Tool) -> &'static str {
         Tool::MemoryFs => "Memory as files",
         Tool::HandoffCreate => "Hand off the state of work",
         Tool::HandoffAccept => "Accept a handoff",
+        Tool::PaymentsMandatesList => "List payment mandates",
+        Tool::PaymentsMandatesRequest => "Request a payment mandate",
+        Tool::PaymentsMandatesRevoke => "Revoke a payment mandate",
+        Tool::PaymentsSpend => "Make a payment",
         Tool::ApprovalsList => "List approvals",
         Tool::ApprovalsGet => "Get an approval",
         Tool::AuditList => "Read the audit log",
@@ -2372,6 +2401,10 @@ pub fn tool_descriptor(tool: Tool) -> Value {
         Tool::MemoryFs => (crate::memfs_tool::DESCRIPTION, crate::memfs_tool::schema()),
         Tool::HandoffCreate => (crate::handoff_api::CREATE_DESCRIPTION, crate::handoff_api::create_schema()),
         Tool::HandoffAccept => (crate::handoff_api::ACCEPT_DESCRIPTION, crate::handoff_api::accept_schema()),
+        Tool::PaymentsMandatesList => (crate::payments_api::LIST_DESCRIPTION, crate::payments_api::list_schema()),
+        Tool::PaymentsMandatesRequest => (crate::payments_api::REQUEST_DESCRIPTION, crate::payments_api::request_schema()),
+        Tool::PaymentsMandatesRevoke => (crate::payments_api::REVOKE_DESCRIPTION, crate::payments_api::revoke_schema()),
+        Tool::PaymentsSpend => (crate::payments_api::SPEND_DESCRIPTION, crate::payments_api::spend_schema()),
         Tool::ApprovalsList => ("The L2/L3 approvals queued for this principal, newest first, each as a redacted summary: kind, tier, recipient class (never the recipient), a masked one-line preview, created/expires times, status and who decided. Use it to see what is waiting on a human; poll one with actions.status. Never approves: a human decides on the approval page, in Slack or with the operator's CLI. Free read.", json!({})),
         Tool::ApprovalsGet => ("One approval's redacted summary by approval_id (kind, tier, recipient class, masked preview, times, status, decision). Not the full body, and never a way to approve. Free read.", json!({"approval_id":{"type":"integer","minimum":1}})),
         Tool::AuditList => ("The principal's audit log, oldest first: one record per write and per approval decision with actor, principal, tool or route, tier, outcome, time and request id. Never bodies. Filter with since_ms and limit (1-500). Free read.", json!({"since_ms":{"type":"integer"},"limit":{"type":"integer","minimum":1,"maximum":500}})),
@@ -3114,6 +3147,13 @@ Records an item was linked to are not touched. Only delete what the user asked t
     }
     if tool == Tool::HandoffAccept {
         descriptor["inputSchema"]["required"] = json!(["handoff", "actor"]);
+        descriptor["inputSchema"]["additionalProperties"] = json!(false);
+    }
+    if crate::payments_api::is_payments_tool(tool) {
+        let required = crate::payments_api::required(tool);
+        if !required.is_empty() {
+            descriptor["inputSchema"]["required"] = json!(required);
+        }
         descriptor["inputSchema"]["additionalProperties"] = json!(false);
     }
     // The core set's descriptions are one agent-facing table (E4-T4, `core_tools::CORE`).

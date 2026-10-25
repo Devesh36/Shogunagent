@@ -775,6 +775,21 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                 Routed::Read { tool: tool @ (crate::memory_api::Tool::ApprovalsList | crate::memory_api::Tool::ApprovalsGet), id } => {
                     governance::approvals_read(&state, backend.as_ref(), tool, id, principal.as_deref())
                 }
+                // E46: payments.* — a new or wider mandate and a payment outside every mandate are
+                // L3 requests in the one approval queue; the rest is the principal's store.
+                Routed::Read { tool, .. } | Routed::Write { tool, .. } if crate::payments_api::is_payments_tool(tool) => {
+                    match crate::rest::payments_args(rreq.body.as_deref()) {
+                        Ok(args) => {
+                            let now = (state.clock)();
+                            crate::payments_api::serve(tool, &args, backend.as_ref(), &actor, now, |send, preview| {
+                                with_approvals(&state, |queue, surface| {
+                                    rest::enqueue(send, preview, now, queue, shogun_agents::approval::ApprovalOrigin::Api, surface)
+                                })
+                            })
+                        }
+                        Err(answer) => answer,
+                    }
+                }
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
                 // A local action is answered here, before the queue (issue #779): a search runs,
                 // the screen-side kinds are refused. Sends take the approval queue.

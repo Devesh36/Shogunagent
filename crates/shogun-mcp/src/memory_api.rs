@@ -129,6 +129,18 @@ pub enum Tool {
     /// `memory.ingest` path, under an idempotency key derived from the handoff id (E35). Local,
     /// never the principal's world: L1 like `memory.ingest`.
     HandoffAccept,
+    /// Payment mandates (E46): the mandates a human granted this principal's agents, with their
+    /// bounds, what has been spent against each and their status. A read; free (invariant 10).
+    PaymentsMandatesList,
+    /// Ask a human for a payment mandate, or to widen / extend one: queued as an L3 approval
+    /// (approval URL). Terms that only narrow an existing mandate apply directly.
+    PaymentsMandatesRequest,
+    /// Revoke a mandate: only narrows what an agent may pay, so direct from any face (L1).
+    PaymentsMandatesRevoke,
+    /// Make a payment (E46). L3 by type: inside a mandate the human's grant is the L3
+    /// confirmation and it executes through the payment rail; outside every mandate it is queued
+    /// for a per-payment human approval.
+    PaymentsSpend,
     /// Remote approvals (E15): the approvals this principal's agents queued, each as its redacted
     /// summary (kind, tier, recipient class, a masked preview, times, status). A read. Deciding is
     /// never a tool: a human decides on the approval page, in Slack, or with the operator's CLI.
@@ -483,6 +495,10 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryFs,
     Tool::HandoffCreate,
     Tool::HandoffAccept,
+    Tool::PaymentsMandatesList,
+    Tool::PaymentsMandatesRequest,
+    Tool::PaymentsMandatesRevoke,
+    Tool::PaymentsSpend,
     Tool::ApprovalsList,
     Tool::ApprovalsGet,
     Tool::AuditList,
@@ -650,6 +666,10 @@ impl Tool {
             Tool::MemoryFs => "memory.fs",
             Tool::HandoffCreate => "handoff.create",
             Tool::HandoffAccept => "handoff.accept",
+            Tool::PaymentsMandatesList => "payments.mandates.list",
+            Tool::PaymentsMandatesRequest => "payments.mandates.request",
+            Tool::PaymentsMandatesRevoke => "payments.mandates.revoke",
+            Tool::PaymentsSpend => "payments.spend",
             Tool::ApprovalsList => "approvals.list",
             Tool::ApprovalsGet => "approvals.get",
             Tool::AuditList => "audit.list",
@@ -904,6 +924,15 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         // E35: accepting writes only the caller's own scratch, through the ingest path — L1 like
         // `memory.ingest` and a scratch edit through `memory.fs`.
         Tool::HandoffAccept => ApiLevel::Write(Level::L1),
+        // E46 payment mandates. Listing is a free read. A payment and a mandate grant are L3 by
+        // type (`SendAction::Pay` / `GrantPaymentMandate`): `payments.spend` executes only under a
+        // mandate a human granted or after a per-payment human approval, and a request that
+        // widens or extends a mandate is queued for a human. A request that only narrows applies
+        // directly; that is the lower half of an L3 ceiling, like `visual_recall.set_retention`.
+        // Revoking only narrows: L1, from any face.
+        Tool::PaymentsMandatesList => ApiLevel::Read,
+        Tool::PaymentsMandatesRequest | Tool::PaymentsSpend => ApiLevel::Write(Level::L3),
+        Tool::PaymentsMandatesRevoke => ApiLevel::Write(Level::L1),
         // Governance reads (E15 / E18): summaries, the audit trail, the grant list. Free reads.
         Tool::ApprovalsList | Tool::ApprovalsGet | Tool::AuditList | Tool::AclList => ApiLevel::Read,
         // Pausing narrows what SHOGUN reads and runs directly (L1). Ending the user's pause
@@ -1054,6 +1083,9 @@ pub enum ToolGroup {
     /// The A2A state-of-work handoff between agents (E35): `handoff.create` / `handoff.accept`.
     /// Served by every build and listed by default (`all`).
     Handoff,
+    /// Agent payment mandates and payments (E46): `payments.*`. Served by every build and listed
+    /// by default (`all`).
+    Payments,
     /// Governance (E15 / E18): remote approvals, the audit log and the access grants. Reads
     /// only; served by every build and listed by default (`all`).
     Governance,
@@ -1078,6 +1110,7 @@ pub const ALL_GROUPS: &[ToolGroup] = &[
     ToolGroup::Core,
     ToolGroup::Files,
     ToolGroup::Handoff,
+    ToolGroup::Payments,
     ToolGroup::Governance,
     ToolGroup::Import,
     ToolGroup::State,
@@ -1091,6 +1124,7 @@ pub const EVERY_GROUP: &[ToolGroup] = &[
     ToolGroup::Core,
     ToolGroup::Files,
     ToolGroup::Handoff,
+    ToolGroup::Payments,
     ToolGroup::Governance,
     ToolGroup::Import,
     ToolGroup::State,
@@ -1153,6 +1187,7 @@ impl ToolGroup {
             ToolGroup::Translate => "translate",
             ToolGroup::Files => "files",
             ToolGroup::Handoff => "handoff",
+            ToolGroup::Payments => "payments",
             ToolGroup::Governance => "governance",
             ToolGroup::Settings => "settings",
         }
@@ -1198,6 +1233,9 @@ pub fn tool_group(tool: Tool) -> ToolGroup {
         | Tool::ActionsStatus => ToolGroup::Core,
         Tool::MemoryFs => ToolGroup::Files,
         Tool::HandoffCreate | Tool::HandoffAccept => ToolGroup::Handoff,
+        Tool::PaymentsMandatesList | Tool::PaymentsMandatesRequest | Tool::PaymentsMandatesRevoke | Tool::PaymentsSpend => {
+            ToolGroup::Payments
+        }
         Tool::ApprovalsList | Tool::ApprovalsGet | Tool::AuditList | Tool::AclList => ToolGroup::Governance,
         // Imports are user-reviewed flows (preview, then commit what the user chose) that write
         // to memory and carry the largest input schema; not an everyday mid-task tool.
@@ -2679,6 +2717,7 @@ mod tests {
                         | Tool::MemoryReadSession
                         | Tool::MemoryRecall
                         | Tool::HandoffCreate
+                        | Tool::PaymentsMandatesList
                         | Tool::MemoryGetWrap
                         | Tool::CalendarUpcoming
                         | Tool::MemoryGetPeriods
@@ -2775,6 +2814,9 @@ mod tests {
                             | Tool::MemoryIngest
                             | Tool::MemoryFs
                             | Tool::HandoffAccept
+                            | Tool::PaymentsMandatesRequest
+                            | Tool::PaymentsMandatesRevoke
+                            | Tool::PaymentsSpend
                             | Tool::CaptureSetPaused
                             | Tool::LessonsSetActive
                             | Tool::StateDisputesResolve

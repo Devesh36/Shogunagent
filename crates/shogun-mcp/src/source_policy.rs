@@ -189,6 +189,12 @@ pub fn tool_handling(tool: Tool) -> ToolHandling {
         | Tool::MemoryFs
         // Accepting a handoff appends to the caller's scratch; it reads nothing (E35).
         | Tool::HandoffAccept
+        // Payment mandates and spends (E46): labels, ids and amounts from the payment ledger —
+        // no meeting or screen text.
+        | Tool::PaymentsMandatesList
+        | Tool::PaymentsMandatesRequest
+        | Tool::PaymentsMandatesRevoke
+        | Tool::PaymentsSpend
         // Governance reads (E15 / E18): redacted approval summaries, audit labels and grants —
         // no meeting or screen text.
         | Tool::ApprovalsList

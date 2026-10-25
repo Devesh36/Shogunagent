@@ -150,6 +150,9 @@ pub mod send_exec;
 /// `send_exec` once a human decided it.
 #[cfg(feature = "exec")]
 pub mod approval_exec;
+/// The payment rail seam and the payment paths (E46): every payment goes through `send_exec`.
+#[cfg(feature = "exec")]
+pub mod payment_rail;
 #[cfg(feature = "exec")]
 pub mod tool_runner;
 #[cfg(feature = "desktop")]

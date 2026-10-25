@@ -393,7 +393,102 @@ fn action_kind(action: &SendAction) -> &'static str {
         SendAction::WidenVisualRecall { .. } => "widen_visual_recall",
         SendAction::ArchiveMailThread { .. } => "archive_mail_thread",
         SendAction::UnpauseCapture { .. } => "unpause_capture",
+        SendAction::Pay { .. } => "pay",
+        SendAction::GrantPaymentMandate { .. } => "grant_payment_mandate",
     }
+}
+
+/// The wire form of a queued payment (E46): the whole order, which the preview's destination line
+/// cannot rebuild. Loading re-validates it, so a tampered row never loads.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WirePay {
+    spend_ref: String,
+    payee: String,
+    currency: String,
+    amount_minor: u64,
+    mandate_id: Option<String>,
+}
+
+/// The wire form of a queued mandate grant (E46).
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireGrant {
+    mandate_id: String,
+    agent: String,
+    payee_kind: String,
+    payee: String,
+    currency: String,
+    max_per_payment_minor: u64,
+    total_cap_minor: u64,
+    expires_at_ms: i64,
+    purpose: String,
+    single_use: bool,
+    amends: bool,
+}
+
+fn pay_to_wire(order: &shogun_agents::payment::PaymentOrder) -> String {
+    serde_json::to_string(&WirePay {
+        spend_ref: order.spend_ref.clone(),
+        payee: order.payee.clone(),
+        currency: order.currency.clone(),
+        amount_minor: order.amount_minor,
+        mandate_id: order.mandate_id.clone(),
+    })
+    .unwrap_or_default()
+}
+
+fn pay_from_wire(destination: &str) -> Result<SendAction, String> {
+    let wire: WirePay = serde_json::from_str(destination).map_err(|_| "invalid payment request".to_string())?;
+    let order = shogun_agents::payment::PaymentOrder {
+        spend_ref: wire.spend_ref,
+        payee: wire.payee,
+        currency: wire.currency,
+        amount_minor: wire.amount_minor,
+        mandate_id: wire.mandate_id,
+    };
+    order.validate().map_err(|_| "invalid payment request".to_string())?;
+    Ok(SendAction::Pay { order: Box::new(order) })
+}
+
+fn grant_to_wire(grant: &shogun_agents::payment::MandateGrant) -> String {
+    let t = &grant.terms;
+    serde_json::to_string(&WireGrant {
+        mandate_id: grant.mandate_id.clone(),
+        agent: grant.agent.clone(),
+        payee_kind: t.payee.kind().into(),
+        payee: t.payee.value().into(),
+        currency: t.currency.clone(),
+        max_per_payment_minor: t.max_per_payment_minor,
+        total_cap_minor: t.total_cap_minor,
+        expires_at_ms: t.expires_at_ms,
+        purpose: t.purpose.clone(),
+        single_use: t.single_use,
+        amends: grant.amends,
+    })
+    .unwrap_or_default()
+}
+
+fn grant_from_wire(destination: &str) -> Result<SendAction, String> {
+    let w: WireGrant = serde_json::from_str(destination).map_err(|_| "invalid mandate request".to_string())?;
+    let payee = shogun_agents::payment::PayeeScope::parse(&w.payee_kind, &w.payee).ok_or("invalid mandate request")?;
+    if !shogun_agents::payment::plausible_ref(&w.mandate_id) || w.agent.is_empty() || w.agent.len() > 128 {
+        return Err("invalid mandate request".into());
+    }
+    let terms = shogun_agents::payment::MandateTerms {
+        payee,
+        currency: w.currency,
+        max_per_payment_minor: w.max_per_payment_minor,
+        total_cap_minor: w.total_cap_minor,
+        expires_at_ms: w.expires_at_ms,
+        purpose: w.purpose,
+        single_use: w.single_use,
+    };
+    // Every bound but the clock: an expired grant still loads so the human can see and reject it.
+    terms.validate(terms.expires_at_ms.saturating_sub(1)).map_err(|_| "invalid mandate request".to_string())?;
+    Ok(SendAction::GrantPaymentMandate {
+        grant: Box::new(shogun_agents::payment::MandateGrant { mandate_id: w.mandate_id, agent: w.agent, terms, amends: w.amends }),
+    })
 }
 
 /// A delegate id as the store may carry it (issue #110): short, lower-case, dash-separated. The
@@ -564,6 +659,8 @@ fn wire_destination(action: &SendAction, preview: &Preview) -> String {
         SendAction::WidenVisualRecall { change } => visual_recall_to_wire(change),
         SendAction::ArchiveMailThread { thread_key, unarchive } => mail_archive_to_wire(thread_key, *unarchive),
         SendAction::UnpauseCapture { pause } => paused_capture_to_wire(*pause),
+        SendAction::Pay { order } => pay_to_wire(order),
+        SendAction::GrantPaymentMandate { grant } => grant_to_wire(grant),
         _ => preview.destination.clone(),
     }
 }
@@ -577,6 +674,12 @@ fn action_from_wire(kind: &str, destination: String) -> Result<SendAction, Strin
     }
     if kind == "archive_mail_thread" {
         return mail_archive_from_wire(&destination);
+    }
+    if kind == "pay" || kind == "grant_payment_mandate" {
+        if destination.len() > MAX_DESTINATION_BYTES {
+            return Err("invalid approval destination".into());
+        }
+        return if kind == "pay" { pay_from_wire(&destination) } else { grant_from_wire(&destination) };
     }
     if kind == "unpause_capture" {
         return paused_capture_from_wire(&destination).map(|pause| SendAction::UnpauseCapture { pause });
@@ -1170,6 +1273,10 @@ pub fn validate_action(action: &SendAction) -> Result<(), EnqueueRefusal> {
             if !shogun_agents::permission::plausible_mail_thread_key(thread_key) =>
         {
             Err(EnqueueRefusal::Invalid("invalid mail thread key"))
+        }
+        SendAction::Pay { order } if order.validate().is_err() => Err(EnqueueRefusal::Invalid("invalid payment")),
+        SendAction::GrantPaymentMandate { grant } if grant_to_wire(grant).len() > MAX_DESTINATION_BYTES => {
+            Err(EnqueueRefusal::Invalid("mandate terms too large to review"))
         }
         // The same refusal `try_request` makes, surfaced as a 400 with its reason.
         _ => shogun_agents::permission::send_target_refusal(action)

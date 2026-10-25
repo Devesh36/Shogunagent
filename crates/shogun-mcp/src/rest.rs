@@ -112,6 +112,7 @@ pub(crate) use rest_actions::{enqueue, enqueue_at};
 #[cfg(feature = "server")]
 pub(crate) use rest_routing::mail_write_body;
 pub use rest_auth::{bearer, route};
+pub use rest_render::payments_args;
 pub use rest_render::{
     body_for, escape, plan_locked_body, poll_approval, render_reads, respond, respond_with,
     status_body,

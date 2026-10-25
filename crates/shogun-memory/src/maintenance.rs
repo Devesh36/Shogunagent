@@ -566,6 +566,10 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // nonces are kept: they hold no content, expire with their token, and wiping them would let
     // an unexpired approval link decide a second time.
     tx.execute("DELETE FROM approval_decisions", [])?;
+    // Payment mandates and their spends (V105): this person's grants and payment activity. Spends
+    // first (they reference mandates). Deleting a mandate only removes what an agent may pay.
+    tx.execute("DELETE FROM payment_spends", [])?;
+    tx.execute("DELETE FROM payment_mandates", [])?;
     // children first (FK order): provenance → commitments/open_loops → threads → people/projects.
     // `threads` holds titles, summaries and participants, so it is user data and must go too —
     // and it references projects, so it goes before them.

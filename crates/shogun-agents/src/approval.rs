@@ -49,6 +49,9 @@ pub enum KeyKind {
     /// The user's own AI credentials (their plan or their key) for the model provider — the
     /// credential a shared writing example travels under (issue #654).
     AiProvider,
+    /// The payment rail's credential (E46): the principal's account with the rail that moves the
+    /// money, injected at the transport, never held by an agent.
+    PaymentRail,
     /// No credential at all: confirming changes a setting on this Mac and nothing leaves it
     /// (issue #657, resuming capture of excluded apps or websites).
     Local,
@@ -144,9 +147,11 @@ impl Preview {
                     SendAction::ResumeCapture { .. }
                     | SendAction::UnpauseCapture { .. }
                     | SendAction::EnableDictionaryAutoAdd
-                    | SendAction::WidenVisualRecall { .. },
+                    | SendAction::WidenVisualRecall { .. }
+                    | SendAction::GrantPaymentMandate { .. },
                     _,
                 ) => KeyKind::Local,
+                (SendAction::Pay { .. }, _) => KeyKind::PaymentRail,
                 (_, Route::DirectMcp) => KeyKind::OauthUser,
                 (_, Route::ViaComposio) => KeyKind::Composio,
             },
@@ -180,6 +185,11 @@ fn describe(action: &SendAction) -> (&'static str, String) {
         SendAction::ArchiveMailThread { thread_key, unarchive } => (
             if *unarchive { MAIL_UNARCHIVE_OP } else { MAIL_ARCHIVE_OP },
             thread_key.clone(),
+        ),
+        SendAction::Pay { order } => ("Make a payment", order.destination()),
+        SendAction::GrantPaymentMandate { grant } => (
+            if grant.amends { "Widen a payment mandate" } else { "Grant a payment mandate" },
+            format!("{} {}", grant.terms.payee.kind(), grant.terms.payee.value()),
         ),
     }
 }

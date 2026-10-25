@@ -324,6 +324,9 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
     if let Some(response) = handoff_response(&routed, req, backend) {
         return response;
     }
+    if let Some(response) = payments_response(&routed, req, backend) {
+        return response;
+    }
     if let Some(response) = governance_response(&routed, req, backend) {
         return response;
     }
@@ -1014,6 +1017,45 @@ fn handoff_response<B: MemoryBackend + ?Sized>(
             (503, serde_json::json!({ "error": code, "next_action": "retry_after" }).to_string())
         }
     })
+}
+
+/// The JSON arguments of a `payments.*` REST call: the body (an empty body is `{}`), or the 400.
+pub fn payments_args(body: Option<&str>) -> Result<serde_json::Value, (u16, String)> {
+    match body.map(str::trim).filter(|b| !b.is_empty()) {
+        None => Ok(serde_json::json!({})),
+        Some(raw) => serde_json::from_str::<serde_json::Value>(raw).ok().filter(serde_json::Value::is_object).ok_or_else(|| {
+            (
+                400,
+                serde_json::json!({ "error": "invalid_json", "message": "The body must be one JSON object: the tool's arguments.", "next_action": "fix_arguments" })
+                    .to_string(),
+            )
+        }),
+    }
+}
+
+/// `payments.*` on REST without an approval queue (E46): the server answers these routes with
+/// its queue before this renderer; reaching here, an L3 request is refused as having no approval
+/// surface, exactly like an `actions.execute` send on a headless face. `None` for other routes.
+fn payments_response<B: MemoryBackend + ?Sized>(routed: &Routed, req: &RestRequest, backend: &B) -> Option<(u16, String)> {
+    let tool = match routed {
+        Routed::Read { tool, .. } | Routed::Write { tool, .. } if crate::payments_api::is_payments_tool(*tool) => *tool,
+        _ => return None,
+    };
+    let args = match payments_args(req.body.as_deref()) {
+        Ok(args) => args,
+        Err(answer) => return Some(answer),
+    };
+    let actor = shogun_memory::actor::current_write().actor;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+    Some(crate::payments_api::serve(tool, &args, backend, actor.as_str(), now_ms, |_, _| {
+        (
+            501,
+            r#"{"error":"no_approval_surface","detail":"payments outside a mandate and mandate grants need a human approval surface"}"#.to_string(),
+        )
+    }))
 }
 
 /// E18 on REST: `GET /v1/audit?since_ms=&limit=` and `GET /v1/acl`. The approval reads need the

@@ -46,6 +46,10 @@ pub fn cost_class(tool: Tool) -> CostClass {
     match tool_level(tool) {
         ApiLevel::Read => CostClass::Free,
         ApiLevel::PerAction => CostClass::Run,
+        // E46: a payment is a run of the payment rail (priced at the rail's fee; free while the
+        // rail is the stub), and asking for or revoking a mandate is free at the call like
+        // `actions.execute` queuing an L3 (the gateway's `FREE_RUN_TOOLS`).
+        ApiLevel::Write(_) if crate::payments_api::is_payments_tool(tool) => CostClass::Run,
         ApiLevel::Write(_) if matches!(tool, Tool::MemoryAppendNote | Tool::MemoryIngest | Tool::MemoryFs | Tool::HandoffAccept) => CostClass::Ingest,
         ApiLevel::Write(_) => CostClass::ModelOp,
     }

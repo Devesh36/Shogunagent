@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_CAPS } from "../src/caps.js";
-import { FREE_ALLOWANCE_MICROS, RATE_MICROS, RUN_MARKUP_BPS, classifyCall, pricingDocument, quoteCost } from "../src/pricing.js";
+import { FREE_ALLOWANCE_MICROS, RATE_MICROS, RUN_MARKUP_BPS, classifyCall, fixedRunPriceMicros, pricingDocument, quoteCost } from "../src/pricing.js";
 import { makeAgentRig } from "./agent-helpers.js";
 
 describe("classifyCall", () => {
@@ -20,6 +20,15 @@ describe("classifyCall", () => {
     for (const method of ["initialize", "tools/list", "ping", "resources/list", "notifications/initialized", undefined]) {
       expect(classifyCall(method, "memory.ingest")).toBe("protocol");
     }
+  });
+
+  it("E46: mandate reads are free; a mandate request, a revoke and a spend are runs, free while the rail is the stub", () => {
+    expect(classifyCall("tools/call", "payments.mandates.list")).toBe("read");
+    for (const name of ["payments.mandates.request", "payments.mandates.revoke", "payments.spend"]) {
+      expect(classifyCall("tools/call", name)).toBe("run");
+      expect(fixedRunPriceMicros(name)).toBe(0);
+    }
+    expect(fixedRunPriceMicros("router.run")).toBeUndefined();
   });
 
   it("prices flat units per quantity and runs at provider price + 5%, rounded up", () => {

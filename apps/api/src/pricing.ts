@@ -59,6 +59,8 @@ export const FREE_TOOLS: ReadonlySet<string> = new Set([
   "router.discover", "router.inspect",
   // E35: the A2A handoff object is one recall, reshaped by the core.
   "handoff.create",
+  // E46: the payment mandates and what was spent against them.
+  "payments.mandates.list",
 ]);
 const FREE_PREFIXES = ["state.", "approvals."] as const;
 
@@ -66,7 +68,12 @@ const FREE_PREFIXES = ["state.", "approvals."] as const;
  * settled per event the core stored (its `Mcp-Quantity`). */
 export const INGEST_TOOLS: ReadonlySet<string> = new Set(["memory.ingest", "memory.append_note", "handoff.accept"]);
 
-export const RUN_TOOLS: ReadonlySet<string> = new Set(["router.run", "actions.execute"]);
+/** E46: `payments.spend` is a run of the payment rail; asking for or revoking a mandate needs the
+ * same `run` scope (an agent that may spend), free at the call. */
+export const RUN_TOOLS: ReadonlySet<string> = new Set([
+  "router.run", "actions.execute",
+  "payments.mandates.request", "payments.mandates.revoke", "payments.spend",
+]);
 
 /** Run tools whose call is free (E34, invariant 10): `actions.execute` runs `local_search` (a
  * read), refuses the desktop-only kinds, and only QUEUES a send / post / comment for a human's
@@ -74,7 +81,14 @@ export const RUN_TOOLS: ReadonlySet<string> = new Set(["router.run", "actions.ex
  * it, is carried out by the principal's core with the principal's own connector credentials, and
  * is billed where it executes (a router run, when it goes through the router, E32). Classified as a
  * `run` still, so it needs the `run` scope; priced at $0 instead of asking the router. */
-export const FREE_RUN_TOOLS: ReadonlySet<string> = new Set(["actions.execute"]);
+export const FREE_RUN_TOOLS: ReadonlySet<string> = new Set([
+  "actions.execute",
+  // E46 (docs/api/payments.md): a mandate request queues an L3 for a human and a revoke only
+  // narrows; neither runs anything billable. `payments.spend` is priced at the rail's fee, which
+  // is 0 while the only rail is the stub (no money moves). A real rail removes it from this set
+  // and its fee is the run's provider price. The gateway never reads or stores a payment body.
+  "payments.mandates.request", "payments.mandates.revoke", "payments.spend",
+]);
 
 /** The provider price (µ$) a `run` call has without asking the router: 0 for a free run tool. */
 export function fixedRunPriceMicros(name: string | undefined): number | undefined {
@@ -132,7 +146,7 @@ export function pricingDocument(ctx: PricingContext): Record<string, unknown> {
     units: {
       ingest: { per: "event", micro_usd: RATE_MICROS.ingest, usd_per_1000: RATE_MICROS.ingest * 1000 / MICRO_USD_PER_USD, tools: [...INGEST_TOOLS] },
       model_op: { per: "operation", micro_usd: RATE_MICROS.model_op, usd_per_1000: RATE_MICROS.model_op * 1000 / MICRO_USD_PER_USD, tools: "any tools/call not listed under read, ingest or run" },
-      run: { per: "run", micro_usd: null, formula: `ceil(provider_price_micro_usd * (1 + ${RUN_MARKUP_BPS / 10_000}))`, markup_bps: RUN_MARKUP_BPS, first_party_markup_bps: 0, charged: "once, by the wallet, on the provider's measured price; failures and empty results 0", tools: [...RUN_TOOLS], free_at_call: { tools: [...FREE_RUN_TOOLS], why: "actions.execute queues an L3 action for a human's approval (free, invariant 10) or runs a read; the approved send is billed where it executes" } },
+      run: { per: "run", micro_usd: null, formula: `ceil(provider_price_micro_usd * (1 + ${RUN_MARKUP_BPS / 10_000}))`, markup_bps: RUN_MARKUP_BPS, first_party_markup_bps: 0, charged: "once, by the wallet, on the provider's measured price; failures and empty results 0", tools: [...RUN_TOOLS], free_at_call: { tools: [...FREE_RUN_TOOLS], why: "actions.execute and payments.mandates.request queue an L3 action for a human's approval (free, invariant 10) or run a read; payments.mandates.revoke only narrows; payments.spend is priced at the payment rail's fee, 0 while the rail is the stub" } },
       storage: { per: "gb_month", micro_usd: RATE_MICROS.storage, billed: "by the storage sweep, not per call" },
       read: { per: "call", micro_usd: 0, tools: [...FREE_TOOLS, ...FREE_PREFIXES.map((p) => `${p}*`)] },
       protocol: { per: "request", micro_usd: 0, methods: "every MCP method other than tools/call" },
