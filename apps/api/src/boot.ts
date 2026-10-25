@@ -89,10 +89,31 @@ import { FetchDeepgramGateway } from "./deepgram.js";
  *                              is valid until its `exp`, 26h after issue). Remove an entry once
  *                              26h have passed since the licence was revoked at the licence API.
  *
+ * The agent API (docs/implementation-plan.md E3 / E9; apps/api/README-agent-api.md). Off unless
+ * AGENT_API_ENABLED=1; then the first two below are required and the rest optional:
+ * - AGENT_API_ENABLED        — `1` serves the agent routes (`sa_` keys, wallet, 402, `/mcp`).
+ * - AGENT_POW_SECRET         — secret: HMAC key of the registration proof-of-work challenges.
+ * - PUBLIC_BASE_URL          — this gateway's public origin (`https://api.shogunaios.com`), for
+ *                              the top-up link a 402 carries.
+ * - AGENT_POW_BITS           — leading zero bits a registration must present (default 18, 0–32).
+ * - AGENT_REGISTER_PER_HOUR  — registrations per client IP per hour (default 5).
+ * - AGENT_KEY_PBKDF2_ITERATIONS — PBKDF2 rounds for new keys (default 20000, at most 100000).
+ * - AGENT_KEY_CAP_DAY_USD / AGENT_KEY_CAP_MONTH_USD /
+ *   AGENT_PRINCIPAL_CAP_DAY_USD / AGENT_PRINCIPAL_CAP_MONTH_USD
+ *                            — the hard caps (defaults 1 / 20 / 5 / 100; src/caps.ts).
+ * - STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET — secrets, both or neither: card top-ups. Without
+ *                              them `POST /v1/wallet/topup` answers 503 and a 402 still names it.
+ *
  * Node-only settings (PORT, RELAY_DATABASE_URL, METRICS_LOG_INTERVAL_SEC) are documented and
  * parsed in `index.ts`; the Worker's store comes from its `HYPERDRIVE` binding.
  */
+import { REGISTER_PER_HOUR, REGISTER_WINDOW_MS } from "./agent-app.js";
+import { DEFAULT_PBKDF2_ITERATIONS, MAX_PBKDF2_ITERATIONS } from "./agent-keys.js";
+import { SqlAgentStore } from "./agent-pg-store.js";
+import type { AgentStore } from "./agent-store.js";
 import { createApp, parseResultLine, planSpendCapMicros, type RelayDeps, DEFAULT_TRIAL_SPEND_SHARE } from "./app.js";
+import { DEFAULT_CAPS, type CapSet } from "./caps.js";
+import { DEFAULT_POW_BITS, MAX_POW_BITS } from "./pow.js";
 import { releaseTrustedKeysFromEnv, type TrustedKeys } from "./auth.js";
 import { FetchAnthropicGateway, UpstreamError, type AnthropicGateway } from "./gateway.js";
 import { operational, type LogFn } from "./logging.js";
@@ -208,6 +229,58 @@ export interface RelayConfig {
   /** `RELAY_DENY_SUBJECTS`: licence ids / `account:<acc>` subjects refused before their tokens
    * expire (audit 2026-10-20 L3). */
   denySubjects?: readonly string[];
+  /** The agent API (E3 / E9). Absent = `AGENT_API_ENABLED` is not `1`: the routes do not exist. */
+  agent?: AgentConfig;
+}
+
+/** The validated agent-API settings (the `AGENT_*` / `STRIPE_*` / `PUBLIC_BASE_URL` variables). */
+export interface AgentConfig {
+  powSecret: string;
+  powBits: number;
+  publicBaseUrl: string;
+  registerPerHour: number;
+  keyIterations: number;
+  caps: CapSet;
+  stripe?: { secretKey: string; webhookSecret: string };
+}
+
+/** Parse the agent-API settings, or `undefined` when the API is off. Throws `BootError` naming
+ * the variable, never echoing a value. */
+export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
+  if (env.AGENT_API_ENABLED?.trim() !== "1") return undefined;
+  const powSecret = env.AGENT_POW_SECRET;
+  if (!powSecret || powSecret.length < 16) throw new BootError("missing required env: AGENT_POW_SECRET (at least 16 characters; AGENT_API_ENABLED=1)");
+  const publicBaseUrl = env.PUBLIC_BASE_URL?.trim();
+  if (!publicBaseUrl || !/^https?:\/\/[^\s/]+$/.test(publicBaseUrl)) throw new BootError("invalid PUBLIC_BASE_URL (an origin such as https://api.shogunaios.com; AGENT_API_ENABLED=1)");
+  const usd = (name: string, fallbackUsd: number): number => {
+    try {
+      return usdCapMicrosFromEnv(env[name], name, fallbackUsd);
+    } catch {
+      throw new BootError(`invalid ${name}`);
+    }
+  };
+  const caps: CapSet = {
+    key: { day: usd("AGENT_KEY_CAP_DAY_USD", DEFAULT_CAPS.key.day / 1e6), month: usd("AGENT_KEY_CAP_MONTH_USD", DEFAULT_CAPS.key.month / 1e6) },
+    principal: { day: usd("AGENT_PRINCIPAL_CAP_DAY_USD", DEFAULT_CAPS.principal.day / 1e6), month: usd("AGENT_PRINCIPAL_CAP_MONTH_USD", DEFAULT_CAPS.principal.month / 1e6) },
+  };
+  const stripeKey = env.STRIPE_SECRET_KEY?.trim();
+  const webhookSecret = env.STRIPE_WEBHOOK_SECRET?.trim();
+  if ((stripeKey ? 1 : 0) + (webhookSecret ? 1 : 0) === 1) throw new BootError("STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be set together");
+  return {
+    powSecret,
+    powBits: intFromEnv(env, "AGENT_POW_BITS", DEFAULT_POW_BITS, 0, MAX_POW_BITS),
+    publicBaseUrl,
+    registerPerHour: intFromEnv(env, "AGENT_REGISTER_PER_HOUR", REGISTER_PER_HOUR, 1),
+    keyIterations: intFromEnv(env, "AGENT_KEY_PBKDF2_ITERATIONS", DEFAULT_PBKDF2_ITERATIONS, 1_000, MAX_PBKDF2_ITERATIONS),
+    caps,
+    ...(stripeKey && webhookSecret ? { stripe: { secretKey: stripeKey, webhookSecret } } : {}),
+  };
+}
+
+/** Whether the agent API is served; one boot-log line, so a 404 on `/v1/agents` is not a mystery. */
+export function agentLaneLine(config: Pick<RelayConfig, "agent">): string {
+  if (!config.agent) return "agent_api closed (AGENT_API_ENABLED unset)";
+  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"})`;
 }
 
 /** The Batch price table in force: the override, or the shipped defaults. */
@@ -274,6 +347,9 @@ export function relayConfigFromEnv(env: EnvRecord): RelayConfig {
     throw new BootError(e instanceof Error ? e.message : "invalid LICENSE_PUBKEY_B64 or LICENSE_PUBKEY_NEXT_B64");
   }
 
+  // The agent API (E3 / E9), off unless asked for.
+  const agent = agentConfigFromEnv(env);
+
   // The global breaker is not optional in production (audit H1).
   const spendCapRefusal = spendCapRequirementError(env);
   if (spendCapRefusal) throw new BootError(spendCapRefusal);
@@ -311,6 +387,7 @@ export function relayConfigFromEnv(env: EnvRecord): RelayConfig {
     ...(env.METRICS_TOKEN ? { metricsToken: env.METRICS_TOKEN } : {}),
     ...(env.TYPESAFE_API_KEY?.trim() ? { typesafeApiKey: env.TYPESAFE_API_KEY.trim() } : {}),
     ...(env.RELAY_DENY_SUBJECTS?.trim() ? { denySubjects: env.RELAY_DENY_SUBJECTS.split(",").map(value => value.trim()).filter(Boolean) } : {}),
+    ...(agent ? { agent } : {}),
   };
 }
 
@@ -338,6 +415,11 @@ export interface RelayStore {
    * app's in-process defaults (the Node development entry). */
   formRateLimit?: RateLimiter;
   formInFlight?: InFlightLimiter;
+  /** The agent store (keys, wallet, receipts — agent-store.ts). Absent = the agent routes are
+   * not served even when configured. */
+  agent?: AgentStore;
+  /** The per-IP registration limiter. Absent = the app's in-process default. */
+  registerLimiter?: RateLimiter;
   close(): Promise<void>;
 }
 
@@ -348,13 +430,15 @@ export interface RelayStore {
  * one fixed warning line. `checkSchema` is the caller's: Node runs it before listening, the
  * Worker on each sweep (a missing table is otherwise a 503 per request, fail-closed).
  */
-export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore } {
+export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker" | "agent">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore; agent: SqlAgentStore } {
   return {
     usage: new SqlUsageStore(db),
     asr: new SqlAsrStore(db, Date.now, config.spendBreaker?.capMicros ?? 0),
     rateLimit: new SqlRateLimiter(db, config.rateBurst, config.ratePerMin, () => warn("ratelimit_unavailable (failing open)")),
     formRateLimit: new SqlWindowLimiter(db, FORM_DECIDE_PER_HOUR, FORM_DECIDE_WINDOW_MS, () => warn("ratelimit_unavailable (failing open)")),
     formInFlight: new SqlInFlightLimiter(db, FORM_DECIDE_MAX_IN_FLIGHT, FORM_IN_FLIGHT_LEASE_MS, () => warn("inflight_unavailable (failing open)")),
+    agent: new SqlAgentStore(db),
+    registerLimiter: new SqlWindowLimiter(db, config.agent?.registerPerHour ?? REGISTER_PER_HOUR, REGISTER_WINDOW_MS, () => warn("ratelimit_unavailable (failing open)")),
     close: () => db.close(),
   };
 }
@@ -431,6 +515,23 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
     ...(config.spendBreaker ? { spendBreaker: config.spendBreaker } : {}),
     ...(config.metricsToken ? { metricsToken: config.metricsToken } : {}),
     ...(config.denySubjects ? { denySubjects: config.denySubjects } : {}),
+    // The agent routes (E3 / E9): the agent store, the PoW and cap settings, Stripe when
+    // configured, and the licence ledger + breaker so agent spend shares the company's day. The
+    // core proxy (`mcpUpstream`) is E4's: until it is wired, `/mcp` answers 503 before reserving.
+    ...(config.agent && store.agent ? {
+      agent: {
+        store: store.agent,
+        publicBaseUrl: config.agent.publicBaseUrl,
+        powSecret: config.agent.powSecret,
+        powBits: config.agent.powBits,
+        keyIterations: config.agent.keyIterations,
+        caps: config.agent.caps,
+        usage: store.usage,
+        ...(store.registerLimiter ? { registerLimiter: store.registerLimiter } : {}),
+        ...(config.agent.stripe ? { stripe: config.agent.stripe } : {}),
+        ...(config.spendBreaker ? { spendBreaker: config.spendBreaker } : {}),
+      },
+    } : {}),
   };
   const settlementDeps: SettlementDeps = {
     usage: store.usage,
@@ -464,6 +565,8 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
     app,
     sweep: async () => {
       if (config.asrEnabled && store.asr) await store.asr.maintenance().catch(() => operational.warn("speech maintenance unavailable"));
+      // Expired PoW rows and settled receipts past their window (agent-store.ts). Counts nothing.
+      if (config.agent && store.agent) await store.agent.maintenance((shared.now?.() ?? new Date()).getTime()).catch(() => operational.warn("agent maintenance unavailable"));
       return sweepOnce(settlementDeps);
     },
     settle: () => settleOnce(settlementDeps),

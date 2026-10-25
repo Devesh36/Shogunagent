@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { logId } from "../src/logging.js";
+import { authed, makeAgentRig, mcp, registerAgent } from "./agent-helpers.js";
 import { makeRig, postBatch, sampleBody } from "./helpers.js";
 
 describe("redacting logger", () => {
@@ -51,5 +52,24 @@ describe("redacting logger", () => {
     const all = rig.logLines.join("\n");
     expect(all).toContain("GET /v1/batch/:id 200");
     expect(all).not.toContain("SECRET-RESULT");
+  });
+
+  it("never logs an agent key (E3-T1): registration, a metered call and a rejected key leave only a hashed key id", async () => {
+    const rig = makeAgentRig();
+    const reg = await registerAgent(rig);
+    await mcp(rig, reg.key, { "mcp-method": "tools/call", "mcp-name": "memory.ingest", "mcp-quantity": "2" });
+    await authed(rig, `sa_live_${"Q".repeat(43)}`, "/v1/receipts");
+    await authed(rig, reg.key, `/v1/keys/${reg.keyId}/revoke`, { method: "POST" });
+    const all = rig.logLines.join("\n");
+    expect(all).toContain("POST /v1/agents 201");
+    expect(all).toContain("POST /mcp 200");
+    expect(all).toContain("GET /v1/receipts 401 ");
+    expect(all).toContain("POST /v1/keys/:id/revoke 200");
+    expect(all).toContain(`key=${logId(reg.keyId)}`);
+    // Neither the secret, nor the raw key id, nor the path's id, nor the tool name.
+    expect(all).not.toContain(reg.key.slice(8, 24));
+    expect(all).not.toContain(reg.keyId);
+    expect(all).not.toContain("Q".repeat(8));
+    expect(all).not.toContain("memory.ingest");
   });
 });

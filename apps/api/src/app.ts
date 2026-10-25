@@ -23,6 +23,7 @@ import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createHash, timingSafeEqual, type KeyObject } from "node:crypto";
 
+import { createAgentApp, type AgentDeps } from "./agent-app.js";
 import { AuthError, TRIAL_PLAN, deniedByOperator, isExpiredTrialToken, meterSubject, verifyLicense, type License, type TrustedKeys } from "./auth.js";
 import type { AnthropicGateway } from "./gateway.js";
 import { UpstreamError } from "./gateway.js";
@@ -111,6 +112,9 @@ export interface RelayDeps {
   formRateLimit?: RateLimiter;
   /** The per-device in-flight limit of the form route (default: in-process, 2). */
   formInFlight?: InFlightLimiter;
+  /** The agent-facing routes (agent-app.ts: `sa_` keys, wallet, 402, caps, quote, receipts, the
+   * metered `/mcp` proxy — plan E3 / E9). Absent = those routes do not exist on this relay. */
+  agent?: Omit<AgentDeps, "log" | "now">;
 }
 
 /** The form route's rate key: the payer alone (`meterSubject`: the licence, or a trial's
@@ -313,6 +317,10 @@ export function createApp(deps: RelayDeps): Hono<{ Variables: RelayVars }> {
 
   const nowSecs = (): number => Math.floor(now().getTime() / 1000);
   const limiter = deps.rateLimit ?? new NoRateLimit();
+
+  // The agent routes, behind the same logger and metrics middleware as everything else. Their
+  // log line is the same shape (route template, status, counters, `key=<hash>`).
+  if (deps.agent) app.route("/", createAgentApp({ ...deps.agent, log: deps.log, now }));
 
   /** Verify the bearer, for every authenticated route. A valid trial token is still refused
    * (402, before any metering or provider call) on a relay whose trial lane is closed.

@@ -469,3 +469,26 @@ budget** (§3, "Provider-side hard limits") plus the allowlist.
 - Final CI, distribution and public activation evidence is tracked in PR #1158 and its associated release. The results above describe staged verification.
 
 Owner decision 2026-10-22: `ASR_ALLOWED_SUBJECTS` is removed and company speech is open to every paid licence and trial (the audit 2026-10-20 H3 trial refusal is reversed; see "Who gets company speech" above). Proxying the speech socket through the relay remains the follow-up that closes the grant-JWT exposure.
+
+## 9. The agent API (plan E3 / E9) — off until switched on
+
+The `sa_` keys, wallet, 402, quote, receipts and the metered `/mcp` proxy (`README-agent-api.md`)
+are served only with `AGENT_API_ENABLED: "1"` in `vars`. Before the switch:
+
+1. Provision the tables, as the relay role with `search_path=relay`:
+   `psql "$RELAY_DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/sql/agent-keys.sql` then
+   `-f apps/api/sql/agent-keys-permissions.sql`. Idempotent, additive only.
+2. Secrets: `wrangler secret put AGENT_POW_SECRET` (any ≥16-character random string; rotating it
+   only invalidates unspent registration challenges) and, for card top-ups, `STRIPE_SECRET_KEY`
+   and `STRIPE_WEBHOOK_SECRET` (both or neither; the webhook endpoint is
+   `https://api.shogunaios.com/v1/stripe/webhook`, event `checkout.session.completed`).
+3. Vars: `AGENT_API_ENABLED: "1"`, `PUBLIC_BASE_URL: "https://api.shogunaios.com"`; optional
+   `AGENT_POW_BITS` (18), `AGENT_REGISTER_PER_HOUR` (5), `AGENT_KEY_PBKDF2_ITERATIONS` (20000),
+   `AGENT_KEY_CAP_DAY_USD` / `AGENT_KEY_CAP_MONTH_USD` / `AGENT_PRINCIPAL_CAP_DAY_USD` /
+   `AGENT_PRINCIPAL_CAP_MONTH_USD` (1 / 20 / 5 / 100).
+
+The boot log says `agent_api open (card top-ups on)` or `agent_api closed (…)`. Cost-bearing
+agent calls book against the same `DAILY_SPEND_CAP_USD` day as the Batch lane (E3-T4), so size
+the breaker with agent traffic in mind once the lane opens; the wallet, caps and receipts are the
+agent side's own tables. `/mcp` answers `503 upstream_unavailable` before reserving anything
+until the core (E4) is wired behind it.

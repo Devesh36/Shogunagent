@@ -25,6 +25,7 @@
  */
 import { createHash, createPublicKey, verify as edVerify, type KeyObject } from "node:crypto";
 import releaseKeyJson from "../../../packages/config/license-public-key.json";
+import { agentMeterSubject, type AgentPrincipal } from "./agent-keys.js";
 
 /** The shipped trust roots. `ed25519_next` is present only during a rotation window. */
 const releaseKey = releaseKeyJson as { ed25519: string; ed25519_next?: string };
@@ -139,6 +140,14 @@ export interface License {
  */
 export function meterSubject(license: License): string {
   return license.plan === TRIAL_PLAN && license.accountId !== undefined ? `account:${license.accountId}` : license.licenseId;
+}
+
+/** Either credential the gateway accepts, as a metering subject (E3-T4). An agent key's
+ * principal is `principal:<id>` (`agentMeterSubject`); the two never collide with a licence id
+ * or `account:<acc>`, so licence tokens and agent keys share one ledger (the global daily
+ * breaker, `relay_usage_days`) without sharing a budget row. */
+export function meterSubjectOf(subject: License | Pick<AgentPrincipal, "principalId">): string {
+  return "principalId" in subject ? agentMeterSubject(subject) : meterSubject(subject);
 }
 
 /** Whether the operator's emergency denylist (`RELAY_DENY_SUBJECTS`, audit 2026-10-20 L3) names
