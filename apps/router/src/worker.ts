@@ -16,14 +16,34 @@ import { DEFAULTS } from "./env.js";
 import { InMemoryHealthStore } from "./health.js";
 import { InMemoryIdempotencyStore } from "./idempotency.js";
 import { consoleLogger } from "./logging.js";
+import { OpsMetrics, OtlpTraceExporter, otlpSettingsFromEnv, type RouterOps } from "./observability.js";
 import { InMemoryMeteringClient } from "./metering.js";
 import { InMemoryPersonalStore, PersonalRanker } from "./personal.js";
 import { InMemoryRunLogSink } from "./runlog.js";
 import { HttpSettlementSink } from "./settlement.js";
-import { createFetchTransport, createSettlementPoster } from "./transport.js";
+import { createFetchTransport, createMetricsAuthorizer, createOtlpPoster, createSettlementPoster, parseOtlpHeaders } from "./transport.js";
 
 type App = ReturnType<typeof createApp>;
-let cached: { env: RouterEnv; app: App } | undefined;
+let cached: { env: RouterEnv; app: App; ops: RouterOps } | undefined;
+
+/** E37: the isolate's metrics window, the `/metrics` bearer check and, when configured, the span
+ * exporter. A malformed OTLP setting turns export off (logged once by name) rather than failing
+ * the router: telemetry is never a reason to refuse traffic. */
+function opsFor(env: RouterEnv, credentials: Record<string, string | undefined>): RouterOps {
+  const metrics = new OpsMetrics();
+  const ops: RouterOps = { metrics, authorize: createMetricsAuthorizer(credentials) };
+  try {
+    const settings = otlpSettingsFromEnv(env as Record<string, string | undefined>);
+    if (settings) {
+      parseOtlpHeaders(credentials["OTEL_EXPORTER_OTLP_HEADERS"]);
+      ops.exporter = new OtlpTraceExporter(settings, createOtlpPoster({ env: credentials, url: settings.tracesUrl }), metrics);
+      consoleLogger.log({ kind: "catalog", outcome: "otlp_export_enabled" });
+    }
+  } catch {
+    consoleLogger.log({ kind: "catalog", outcome: "otlp_config_invalid" });
+  }
+  return ops;
+}
 
 function appFor(env: RouterEnv): App {
   if (cached && cached.env === env) return cached.app;
@@ -36,7 +56,9 @@ function appFor(env: RouterEnv): App {
   const settlements = env.ROUTER_SETTLEMENT_URL
     ? new HttpSettlementSink(createSettlementPoster({ env: credentials, url: env.ROUTER_SETTLEMENT_URL }))
     : undefined;
+  const ops = opsFor(env, credentials);
   const app = createApp({
+    ops,
     catalog,
     transport: createFetchTransport({ env: credentials }),
     metering: new InMemoryMeteringClient({ topUpUrl: env.ROUTER_TOPUP_URL ?? DEFAULTS.ROUTER_TOPUP_URL, ...(settlements ? { settlements } : {}) }),
@@ -48,12 +70,19 @@ function appFor(env: RouterEnv): App {
     approvalBaseUrl: env.APPROVAL_BASE_URL ?? DEFAULTS.APPROVAL_BASE_URL,
   });
   consoleLogger.log({ kind: "catalog", count: catalog.manifest.entry_count });
-  cached = { env, app };
+  cached = { env, app, ops };
   return app;
 }
 
+/** The parts of the Workers `ExecutionContext` the router uses. */
+interface WorkerContext {
+  waitUntil(promise: Promise<unknown>): void;
+  passThroughOnException(): void;
+}
+
 export default {
-  fetch(request: Request, env: RouterEnv): Response | Promise<Response> {
-    return appFor(env).fetch(request);
+  fetch(request: Request, env: RouterEnv, ctx?: WorkerContext): Response | Promise<Response> {
+    // The context reaches Hono so the telemetry middleware can `waitUntil` a span flush.
+    return ctx ? appFor(env).fetch(request, env, ctx as Parameters<App["fetch"]>[2]) : appFor(env).fetch(request);
   },
 };

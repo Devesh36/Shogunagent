@@ -30,6 +30,14 @@ not scanned. A call that rustfmt wrapped onto later lines is joined until its pa
 (string and char literals do not count) and checked as one call (#915); the marker may sit on the
 line above the call or on any of its lines.
 
+Operational metrics and traces (plan E37). The same rule covers the server's ops telemetry: a
+metric label or a span attribute is a log line that a dashboard keeps. Every TypeScript
+`observability.ts` under `apps/*/src` must declare `METRIC_LABELS` and `SPAN_ATTRIBUTES` as array
+literals drawn only from the allowlists below (no label name may be a content or credential word),
+may read only the `Mcp-Method` / `Mcp-Name` headers (by literal name), and may not read a request
+or response body, a query string or the raw request (`c.req.json()`, `c.req.query()`,
+`searchParams`, `c.res.text()`, …). A new label therefore needs a change here, in review.
+
 Run from the repo root:  python3 scripts/check-log-hygiene.py
 Self-test the detector:   python3 scripts/check-log-hygiene.py --self-test
 """
@@ -301,6 +309,105 @@ def scan(files):
     return hits
 
 
+# --- E37: ops telemetry label allowlist (TypeScript) ---
+
+ALLOWED_METRIC_LABELS = ("route", "method", "status", "mcp_method", "mcp_name")
+ALLOWED_SPAN_ATTRIBUTES = (
+    "http.route",
+    "http.request.method",
+    "http.response.status_code",
+    "mcp.method.name",
+    "mcp.tool.name",
+)
+# A label name made of any of these is refused even if someone adds it to the allowlist above.
+FORBIDDEN_LABEL_WORDS = frozenset(
+    "body text content prompt query key token secret authorization auth cookie bearer principal "
+    "licence license user email name_raw path url header input output argument arguments result "
+    "message summary title id ids ip".split()
+)
+ALLOWED_HEADERS = frozenset({"mcp-method", "mcp-name"})
+# Reads that return a body, a query string or the raw request/response.
+BODY_READ_RE = re.compile(
+    r"\.req\.(?:json|text|arrayBuffer|formData|parseBody|blob|query|queries|raw)\b"
+    r"|\bsearchParams\b"
+    r"|\bc\.res\.(?:text|json|clone|body|arrayBuffer|blob)\b"
+    r"|\brequest\.(?:json|text|body|arrayBuffer|formData)\b"
+)
+HEADER_CALL_RE = re.compile(r"\b(?:header|headers\.get)\(\s*([^)]*?)\s*\)")
+ARRAY_DECL_RE = re.compile(r"\b(METRIC_LABELS|SPAN_ATTRIBUTES)\s*=\s*\[([^\]]*)\]")
+TS_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
+TS_LINE_COMMENT_RE = re.compile(r"(?<![:\"'\w\\])//.*$", re.M)
+
+
+def _ts_code(text):
+    """The source with comments removed (strings kept), for the pattern checks."""
+    return TS_LINE_COMMENT_RE.sub("", TS_BLOCK_COMMENT_RE.sub("", text))
+
+
+def telemetry_violations(path, text):
+    """Why an `observability.ts` could put content into a label, or [] when it cannot."""
+    code = _ts_code(text)
+    found = []
+    decls = {m.group(1): re.findall(r'"([^"]*)"', m.group(2)) for m in ARRAY_DECL_RE.finditer(code)}
+    for name, allowed in (("METRIC_LABELS", ALLOWED_METRIC_LABELS), ("SPAN_ATTRIBUTES", ALLOWED_SPAN_ATTRIBUTES)):
+        if name not in decls:
+            found.append(f"{path}: no `{name} = [...]` array literal")
+            continue
+        for label in decls[name]:
+            words = set(re.split(r"[._]", label.lower()))
+            if label not in allowed:
+                found.append(f"{path}: {name} has `{label}`, which is not in the allowlist")
+            elif words & FORBIDDEN_LABEL_WORDS:
+                found.append(f"{path}: {name} has `{label}`, a content or credential word")
+    for m in BODY_READ_RE.finditer(code):
+        line = code.count("\n", 0, m.start()) + 1
+        found.append(f"{path}:{line}: reads a body, query or raw request (`{m.group(0)}`)")
+    for m in HEADER_CALL_RE.finditer(code):
+        arg = m.group(1)
+        literal = re.fullmatch(r'"([^"]*)"', arg)
+        line = code.count("\n", 0, m.start()) + 1
+        if not literal:
+            found.append(f"{path}:{line}: reads a header by a computed name (`{m.group(0)}`)")
+        elif literal.group(1).lower() not in ALLOWED_HEADERS:
+            found.append(f"{path}:{line}: reads the `{literal.group(1)}` header")
+    return found
+
+
+def repo_telemetry_files():
+    for path in sorted(pathlib.Path("apps").glob("*/src/**/observability.ts")):
+        if any(part in SKIP_DIRS for part in path.parts):
+            continue
+        yield path.as_posix(), path.read_text(encoding="utf-8", errors="replace")
+
+
+def telemetry_self_test():
+    good = """
+// a comment may mention c.req.json() and header("authorization") freely
+/* and so may c.res.text() */
+export const METRIC_LABELS = ["route", "method", "status", "mcp_method", "mcp_name"] as const;
+export const SPAN_ATTRIBUTES = ["http.route", "http.request.method", "http.response.status_code", "mcp.method.name", "mcp.tool.name"] as const;
+const m = c.req.header("mcp-method") ?? c.res.headers.get("mcp-name");
+const url = "https://collector.example/v1/traces";
+"""
+    assert not telemetry_violations("apps/x/src/observability.ts", good), telemetry_violations("apps/x/src/observability.ts", good)
+    head = good.split("const m =")[0]
+    bad = [
+        head.replace('"mcp_name"]', '"mcp_name", "principal"]'),
+        head.replace('"mcp_name"]', '"mcp_name", "mcp_name_raw"]'),
+        head.replace('"mcp.tool.name"]', '"mcp.tool.name", "http.request.body"]'),
+        head.replace("export const METRIC_LABELS", "export const LABELS"),
+        head + 'const b = await c.req.json();',
+        head + 'const q = c.req.query("q");',
+        head + 'const s = new URL(c.req.url).searchParams;',
+        head + 'const t = await c.res.text();',
+        head + 'const a = c.req.header("authorization");',
+        head + 'const a = c.req.header(name);',
+        head + 'const r = c.req.raw;',
+    ]
+    for n, text in enumerate(bad):
+        assert telemetry_violations(f"apps/x/src/observability{n}.ts", text), f"telemetry detector missed case {n}"
+
+
 def self_test():
     bad = [
         # The real 2026-08-13 findings, in their original shape.
@@ -400,6 +507,7 @@ def self_test():
 
     above = [("crates/fake/src/j.rs", '// log-hygiene-ok: provider status only\neprintln!("{msg}");')]
     assert not scan(above), "marker on the line above was not honoured"
+    telemetry_self_test()
     print("check-log-hygiene self-test OK")
 
 
@@ -409,6 +517,18 @@ def main():
         return 0
     files = list(repo_rust_files())
     hits = scan(files)
+    telemetry = list(repo_telemetry_files())
+    telemetry_hits = [v for path, text in telemetry for v in telemetry_violations(path, text)]
+    if telemetry_hits:
+        print("ops telemetry violation: a metric label or span attribute could carry content.")
+        for v in telemetry_hits:
+            print(f"  - {v}")
+        print(
+            "\nLabels are closed sets (plan E37): route template, method, status, Mcp-Method, Mcp-Name. "
+            "Never read a body, query or credential in observability.ts, and add a label only by "
+            "extending the allowlist in scripts/check-log-hygiene.py, in review."
+        )
+        return 1
     if hits:
         print("log-rule violation: a bare log line interpolates user-derived content.")
         for path, line, text in hits:
@@ -420,7 +540,10 @@ def main():
             "despite its name, mark the site `// log-hygiene-ok: <reason>`."
         )
         return 1
-    print(f"log hygiene OK: no bare log line interpolates user content ({len(files)} files scanned).")
+    print(
+        f"log hygiene OK: no bare log line interpolates user content ({len(files)} files scanned); "
+        f"ops telemetry labels within the allowlist ({len(telemetry)} observability modules)."
+    )
     return 0
 
 

@@ -62,6 +62,9 @@ export const silentLogger: Logger = { log() {} };
 export function routeTemplate(pathname: string): string {
   if (pathname === "/v1/router/discover" || pathname === "/v1/router/inspect" || pathname === "/v1/router/run") return pathname;
   if (pathname === "/mcp" || pathname === "/health" || pathname === "/v1/router/catalog") return pathname;
+  if (pathname === "/v1/catalog" || pathname === "/catalog" || pathname === "/metrics") return pathname;
+  // The tool id is a catalog id, not content, but it is unbounded: one template for all of them.
+  if (/^\/v1\/catalog\/[^/]+$/.test(pathname)) return "/v1/catalog/:tool_id";
   return "/unmatched";
 }
 

@@ -29,6 +29,7 @@ import type { AnthropicGateway } from "./gateway.js";
 import { UpstreamError } from "./gateway.js";
 import { redactingLogger, routeTemplate, type LogFn, type LogVars } from "./logging.js";
 import { RelayMetrics } from "./metrics.js";
+import { opsTelemetry, type OtlpTraceExporter } from "./observability.js";
 import { EFFORT_BY_CLASS, MAX_TOKENS_BY_CLASS, MODEL_BY_CLASS, systemBlocksFor } from "./models.js";
 import { outputFormatFor } from "./schemas.js";
 import { InMemoryInFlight, NoRateLimit, WindowLimiter, type InFlightLimiter, type RateLimiter } from "./ratelimit.js";
@@ -102,6 +103,8 @@ export interface RelayDeps {
   reviewer?: Reviewer;
   /** Bearer token for `GET /metrics`. Absent = the endpoint answers 404 (ops-only, off by default). */
   metricsToken?: string;
+  /** E37: the opt-in OTLP span exporter (`OTEL_EXPORTER_OTLP_ENDPOINT`). Absent = no spans. */
+  traceExporter?: OtlpTraceExporter;
   /** Licence ids / metering subjects refused before their token expires (`RELAY_DENY_SUBJECTS`,
    * audit 2026-10-20 L3; `deniedByOperator`). */
   denySubjects?: readonly string[];
@@ -286,6 +289,9 @@ export function createApp(deps: RelayDeps): Hono<{ Variables: RelayVars }> {
       metrics.observe(routeTemplate(new URL(c.req.url).pathname), c.res.status, performance.now() - start, now().getTime());
     }
   });
+  // E37: closed-set labels (route template, method, status, `Mcp-Method`, `Mcp-Name`) for the
+  // Prometheus rendering of /metrics and, when configured, the OTLP spans. Never a body.
+  app.use("*", opsTelemetry({ metrics: metrics.ops, ...(deps.traceExporter ? { exporter: deps.traceExporter } : {}), routeTemplate, now: () => now().getTime() }));
 
   app.onError((err, c) => {
     if (err instanceof AuthError) {
@@ -436,6 +442,12 @@ export function createApp(deps: RelayDeps): Hono<{ Variables: RelayVars }> {
     const presented = (c.req.header("authorization") ?? "").replace(/^Bearer\s+/i, "");
     const digest = createHash("sha256").update(presented).digest();
     if (!timingSafeEqual(digest, metricsDigest)) return c.json({ error: "unauthorized" }, 401);
+    // E37: the Prometheus text format for a scraper (an OpenTelemetry Collector's prometheus
+    // receiver included); the JSON snapshot stays the default.
+    const accept = c.req.header("accept") ?? "";
+    if (c.req.query("format") === "prometheus" || /text\/plain|application\/openmetrics-text/.test(accept)) {
+      return c.body(metrics.ops.render(), 200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "cache-control": "no-store" });
+    }
     const date = utcDate(now());
     let spend: { date: string; spentMicros: number; capMicros: number } | undefined;
     if (deps.spendBreaker) {

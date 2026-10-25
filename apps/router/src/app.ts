@@ -6,8 +6,9 @@
 import { Hono, type Context } from "hono";
 import type { StatusCode } from "hono/utils/http-status";
 import { callVerb, type RouterDeps } from "./engine.js";
-import { requestLogger } from "./logging.js";
+import { requestLogger, routeTemplate } from "./logging.js";
 import { handleMcp } from "./mcp.js";
+import { OpsMetrics, opsTelemetry } from "./observability.js";
 import { openCatalog, openCatalogDetail, openCatalogHtml, type OpenCatalogFilter } from "./open-catalog.js";
 import { errorBody } from "./responses.js";
 import { Secret } from "./secret.js";
@@ -35,6 +36,18 @@ async function readJson(req: Request): Promise<{ ok: true; value: unknown } | { 
 export function createApp(deps: RouterDeps): Hono {
   const app = new Hono();
   app.use("*", requestLogger(deps.logger));
+  // E37: closed-set request metrics and the opt-in spans (src/observability.ts). Never a body.
+  const ops = deps.ops ?? { metrics: new OpsMetrics() };
+  app.use("*", opsTelemetry({ metrics: ops.metrics, ...(ops.exporter ? { exporter: ops.exporter } : {}), routeTemplate, ...(deps.now ? { now: deps.now } : {}) }));
+
+  // Ops-only Prometheus text, behind `ROUTER_METRICS_TOKEN` (checked in src/transport.ts). 404
+  // when the token is unset: the body describes the deployment's traffic.
+  app.get("/metrics", (c) => {
+    const verdict = ops.authorize?.(c.req.header("authorization")) ?? "disabled";
+    if (verdict === "disabled") return sendJson(c, errorBody("invalid_request", "no such route", "discover", 0), 404);
+    if (verdict === "unauthorized") return sendJson(c, { error: "unauthorized" }, 401);
+    return c.newResponse(ops.metrics.render(), 200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "cache-control": "no-store" });
+  });
 
   app.get("/health", (c) => c.json({ ok: true, catalog_hash: deps.catalog.manifest.hash, entries: deps.catalog.manifest.entry_count }));
 

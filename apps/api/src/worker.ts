@@ -28,10 +28,11 @@ import { SqlLiveStore } from "./live-store.js";
  */
 import type { ExecutionContext } from "hono";
 
-import { BootError, agentLaneLine, createRelay, formLaneLine, newMetrics, postgresStore, relayConfigFromEnv, trialLaneLine, type EnvRecord, type RelayConfig, providerGateways } from "./boot.js";
+import { BootError, agentLaneLine, createRelay, formLaneLine, newMetrics, newTraceExporter, postgresStore, relayConfigFromEnv, trialLaneLine, type EnvRecord, type RelayConfig, providerGateways } from "./boot.js";
 import type { AnthropicGateway } from "./gateway.js";
 import { operational } from "./logging.js";
 import type { RelayMetrics } from "./metrics.js";
+import type { OtlpTraceExporter } from "./observability.js";
 import { postgresClient } from "./sql.js";
 
 /** The `HYPERDRIVE` binding, as far as the relay reads it. */
@@ -70,6 +71,8 @@ interface Booted {
   gateway: AnthropicGateway;
   orphanSweep?: () => Promise<number>;
   hyperdrive: HyperdriveBinding;
+  /** E37: the isolate's span buffer, when OTLP export is configured. */
+  traceExporter?: OtlpTraceExporter;
 }
 
 type BootState = { ok: true; booted: Booted } | { ok: false };
@@ -90,7 +93,9 @@ function boot(env: WorkerEnv): BootState {
     operational.info(formLaneLine(config));
     operational.info(agentLaneLine(config));
     const provided = providerGateways(config);
-    state = { ok: true, booted: { config, metrics: newMetrics(config), gateway: provided.gateway, ...(provided.orphanSweep ? { orphanSweep: provided.orphanSweep } : {}), hyperdrive } };
+    const metrics = newMetrics(config);
+    const traceExporter = newTraceExporter(config, metrics);
+    state = { ok: true, booted: { config, metrics, gateway: provided.gateway, ...(provided.orphanSweep ? { orphanSweep: provided.orphanSweep } : {}), hyperdrive, ...(traceExporter ? { traceExporter } : {}) } };
   } catch (e) {
     // Logged once: every later request answers 503 silently.
     operational.error(e instanceof BootError ? e.message : "invalid relay configuration");
@@ -121,7 +126,7 @@ export default {
   async fetch(request: Request, env: WorkerEnv, ctx: WorkerExecutionContext): Promise<Response> {
     const s = boot(env);
     if (!s.ok) return misconfigured();
-    const { config, metrics, gateway, orphanSweep } = s.booted;
+    const { config, metrics, gateway, orphanSweep, traceExporter } = s.booted;
     const path = new URL(request.url).pathname;
     // `/v1/ai/form_decide` (#1144) belongs to the Batch relay app on the company TypeSafe key.
     if (path.startsWith("/v1/ai/") && path !== "/v1/ai/form_decide") {
@@ -150,7 +155,7 @@ export default {
 
     // Per request: the client (see the module comment) and therefore the store and the app around
     // it. Composition is a handful of object literals; the metrics window and the gateway persist.
-    const relay = createRelay(config, openStore(s.booted), { metrics, gateway, ...(orphanSweep ? { orphanSweep } : {}) });
+    const relay = createRelay(config, openStore(s.booted), { metrics, gateway, ...(orphanSweep ? { orphanSweep } : {}), ...(traceExporter ? { traceExporter } : {}) });
     return relay.app.fetch(request, env, ctx);
   },
 
@@ -162,6 +167,8 @@ export default {
     const s = boot(env);
     if (!s.ok) return;
     if (s.booted.config.settleEverySec !== 0) ctx.waitUntil(sweep(s.booted));
+    // E37: spans still buffered from a quiet period go out with the cron tick.
+    if (s.booted.traceExporter && s.booted.traceExporter.pendingCount > 0) ctx.waitUntil(s.booted.traceExporter.flush());
     if (envRecord(env).LIVE_AI_ENABLED === "1") {
       ctx.waitUntil((async () => {
         const db = postgresClient(s.booted.hyperdrive.connectionString, { hyperdrive: true });
