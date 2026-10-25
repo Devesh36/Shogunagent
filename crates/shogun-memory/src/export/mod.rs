@@ -24,6 +24,10 @@
 //! provenance and its quote hold in the new store. Imported confidence is capped at
 //! [`crate::memory_import::CONFIDENCE_MAX`]: an imported claim is not a fact this store observed.
 //! Tombstones name ids of the exporting store and are counted, not applied.
+//!
+//! **Export v2** ([`v2`], E27) is this format plus global ids, record times, relations,
+//! supersession links, source hashes and a capability manifest; [`convert`] maps v1 ↔ v2 without
+//! a store. Both imports share one restore.
 
 use std::collections::HashMap;
 
@@ -324,12 +328,17 @@ pub struct ImportReport {
     pub tombstones: usize,
     /// Records skipped because they were malformed or of an unknown kind.
     pub skipped: usize,
+    /// Relations restored (export v2 only).
+    pub relations: usize,
+    /// Supersession links restored (export v2 only).
+    pub superseded: usize,
 }
 
 /// Why an import was refused as a whole. Never carries content.
 #[derive(Debug)]
 pub enum ImportError {
     NotExportV1,
+    NotExportV2,
     TooLarge,
     Db(MemoryError),
 }
@@ -351,17 +360,27 @@ fn str_field<'a>(record: &'a Value, key: &str) -> Option<&'a str> {
 }
 
 /// One evidence event per pointer: the quote as its text (the row's text when there is none).
-fn evidence_events(conn: &Connection, record: &Value, fallback: &str, ts: i64, ctx: &WriteContext) -> Result<Vec<(i64, Option<String>)>, rusqlite::Error> {
+/// With `per_pointer_ts` (export v2), an evidence event takes the pointer's `observed_at`, so the
+/// source event's time survives the move; otherwise every one takes `ts`.
+pub(crate) fn evidence_events(
+    conn: &Connection,
+    record: &Value,
+    fallback: &str,
+    ts: i64,
+    per_pointer_ts: bool,
+    ctx: &WriteContext,
+) -> Result<Vec<(i64, Option<String>)>, rusqlite::Error> {
     let mut out = Vec::new();
     let pointers = record.get("provenance").and_then(Value::as_array).cloned().unwrap_or_default();
     for pointer in pointers.iter().take(50) {
         let quote = pointer.get("quote").and_then(Value::as_str).map(str::to_string);
         let text = quote.clone().unwrap_or_else(|| fallback.to_string());
         let hash = event_log::content_hash(&text);
+        let pointer_ts = if per_pointer_ts { pointer.get("observed_at").and_then(Value::as_i64).unwrap_or(ts) } else { ts };
         let (id, _) = event_log::insert_or_touch_as(
             conn,
             &NewEvent {
-                ts,
+                ts: pointer_ts,
                 source: IMPORT_SOURCE,
                 kind: IMPORT_KIND,
                 app_bundle_id: None,
@@ -411,7 +430,7 @@ pub fn import_v1(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i64
     if own_transaction {
         conn.execute_batch("BEGIN IMMEDIATE")?;
     }
-    let result = import_records(conn, text, ctx, now);
+    let result = import_records(conn, text, ctx, now, Mode::V1).map(|(report, _)| report);
     if own_transaction {
         match &result {
             Ok(_) => conn.execute_batch("COMMIT")?,
@@ -423,12 +442,47 @@ pub fn import_v1(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i64
     result
 }
 
-fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i64) -> Result<ImportReport, ImportError> {
+/// Which export an import reads. v2 records carry every v1 field, so one restore serves both; v2
+/// additionally keeps `recorded_at`, each pointer's `observed_at`, relations and supersession.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    V1,
+    V2,
+}
+
+/// Exported ids → new ids, per state table.
+#[derive(Debug, Default)]
+pub(crate) struct IdMaps {
+    pub people: HashMap<i64, i64>,
+    pub projects: HashMap<i64, i64>,
+    pub commitments: HashMap<i64, i64>,
+    pub open_loops: HashMap<i64, i64>,
+}
+
+impl IdMaps {
+    pub(crate) fn get(&self, table: StateTable, old: i64) -> Option<i64> {
+        match table {
+            StateTable::People => self.people.get(&old),
+            StateTable::Projects => self.projects.get(&old),
+            StateTable::Commitments => self.commitments.get(&old),
+            StateTable::OpenLoops => self.open_loops.get(&old),
+        }
+        .copied()
+    }
+}
+
+pub(crate) fn import_records(
+    conn: &mut Connection,
+    text: &str,
+    ctx: &WriteContext,
+    now: i64,
+    mode: Mode,
+) -> Result<(ImportReport, IdMaps), ImportError> {
     let cap = crate::memory_import::CONFIDENCE_MAX;
     let mut report = ImportReport::default();
+    let v2 = mode == Mode::V2;
     // Exported ids → new ids, so facts keep pointing at the entities they name.
-    let mut people: HashMap<i64, i64> = HashMap::new();
-    let mut projects: HashMap<i64, i64> = HashMap::new();
+    let mut maps = IdMaps::default();
     let records: Vec<Value> = text
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -441,6 +495,8 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
             let confidence = record.get("confidence").and_then(Value::as_f64).unwrap_or(cap).clamp(0.0, cap);
             let valid_from = record.get("valid_from").and_then(Value::as_i64).unwrap_or(now);
             let updated = record.get("updated_at").and_then(Value::as_i64).unwrap_or(now);
+            // v1 has no record time: the row is recorded when it became current. v2 carries it.
+            let recorded = if v2 { record.get("recorded_at").and_then(Value::as_i64).unwrap_or(valid_from) } else { valid_from };
             let old_id = record.get("id").and_then(Value::as_i64).unwrap_or(0);
             match (pass, str_field(record, "kind")) {
                 ("entity", Some(kind @ ("person" | "project"))) => {
@@ -448,7 +504,7 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
                         report.skipped += 1;
                         continue;
                     };
-                    let evidence = evidence_events(conn, record, name, valid_from, ctx)?;
+                    let evidence = evidence_events(conn, record, name, valid_from, v2, ctx)?;
                     report.events += evidence.len();
                     let aliases = record.get("aliases").filter(|a| a.as_array().is_some_and(|a| !a.is_empty())).map(Value::to_string);
                     let summary = str_field(record, "summary");
@@ -459,11 +515,11 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
                                 "INSERT INTO people (display_name, aliases, relationship_summary, confidence, base_confidence,
                                                      created_at, updated_at, last_evidence_at)
                                  VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?6)",
-                                params![name, aliases, summary, confidence, valid_from, updated.max(valid_from)],
+                                params![name, aliases, summary, confidence, recorded, updated.max(recorded)],
                             )?;
                             Ok(c.last_insert_rowid())
                         })?;
-                        people.insert(old_id, id);
+                        maps.people.insert(old_id, id);
                         (StateTable::People, id)
                     } else {
                         let status = str_field(record, "status").filter(|s| matches!(*s, "active" | "waiting" | "paused" | "done")).unwrap_or("active");
@@ -471,11 +527,11 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
                             c.execute(
                                 "INSERT INTO projects (name, status, summary, aliases, confidence, created_at, updated_at, last_evidence_at)
                                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-                                params![name, status, summary, aliases, confidence, valid_from, updated.max(valid_from)],
+                                params![name, status, summary, aliases, confidence, recorded, updated.max(recorded)],
                             )?;
                             Ok(c.last_insert_rowid())
                         })?;
-                        projects.insert(old_id, id);
+                        maps.projects.insert(old_id, id);
                         (StateTable::Projects, id)
                     };
                     for (event_id, quote) in &evidence {
@@ -483,6 +539,12 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
                             state::retain_quote(conn, table, new_id, *event_id, quote)?;
                         }
                     }
+                    // Retaining a quote touches `updated_at`; keep the exported change time, which a
+                    // terminal row's `valid_to` is read from.
+                    conn.execute(
+                        &format!("UPDATE {} SET updated_at = ?1 WHERE id = ?2", table.as_str()),
+                        params![updated.max(recorded).max(valid_from), new_id],
+                    )?;
                     report.entities += 1;
                 }
                 ("fact", Some(kind @ ("commitment" | "open_loop"))) => {
@@ -490,11 +552,11 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
                         report.skipped += 1;
                         continue;
                     };
-                    let evidence = evidence_events(conn, record, text, valid_from, ctx)?;
+                    let evidence = evidence_events(conn, record, text, valid_from, v2, ctx)?;
                     report.events += evidence.len();
                     let links: Vec<Provenance> = evidence.iter().map(|(id, _)| Provenance::new(*id)).collect();
-                    let counterparty = record.get("counterparty_id").and_then(Value::as_i64).and_then(|id| people.get(&id).copied());
-                    let project = record.get("project_id").and_then(Value::as_i64).and_then(|id| projects.get(&id).copied());
+                    let counterparty = record.get("counterparty_id").and_then(Value::as_i64).and_then(|id| maps.people.get(&id).copied());
+                    let project = record.get("project_id").and_then(Value::as_i64).and_then(|id| maps.projects.get(&id).copied());
                     let (table, new_id) = if kind == "commitment" {
                         let direction = str_field(record, "subtype").filter(|s| matches!(*s, "mine" | "theirs")).unwrap_or("mine");
                         let status = str_field(record, "status").filter(|s| matches!(*s, "open" | "done" | "overdue" | "cancelled")).unwrap_or("open");
@@ -504,10 +566,11 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
                                 "INSERT INTO commitments (direction, counterparty_id, description, due_at, status, project_id,
                                                           confidence, base_confidence, created_at, updated_at, last_evidence_at)
                                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9, ?9)",
-                                params![direction, counterparty, text, due, status, project, confidence, valid_from, updated.max(valid_from)],
+                                params![direction, counterparty, text, due, status, project, confidence, recorded, updated.max(recorded)],
                             )?;
                             Ok(c.last_insert_rowid())
                         })?;
+                        maps.commitments.insert(old_id, id);
                         (StateTable::Commitments, id)
                     } else {
                         let loop_kind = str_field(record, "subtype")
@@ -518,11 +581,12 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
                             c.execute(
                                 "INSERT INTO open_loops (kind, description, counterparty_id, project_id, opened_at, staleness_days,
                                                          status, confidence, base_confidence, created_at, updated_at, last_evidence_at)
-                                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?7, ?5, ?8, ?8)",
-                                params![loop_kind, text, counterparty, project, valid_from, status, confidence, updated.max(valid_from)],
+                                 VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?7, ?8, ?9, ?9)",
+                                params![loop_kind, text, counterparty, project, valid_from, status, confidence, recorded, updated.max(recorded).max(valid_from)],
                             )?;
                             Ok(c.last_insert_rowid())
                         })?;
+                        maps.open_loops.insert(old_id, id);
                         (StateTable::OpenLoops, id)
                     };
                     for (event_id, quote) in &evidence {
@@ -530,6 +594,12 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
                             state::retain_quote(conn, table, new_id, *event_id, quote)?;
                         }
                     }
+                    // Retaining a quote touches `updated_at`; keep the exported change time, which a
+                    // terminal row's `valid_to` is read from.
+                    conn.execute(
+                        &format!("UPDATE {} SET updated_at = ?1 WHERE id = ?2", table.as_str()),
+                        params![updated.max(recorded).max(valid_from), new_id],
+                    )?;
                     report.facts += 1;
                 }
                 ("tombstone", _) => report.tombstones += 1,
@@ -537,9 +607,20 @@ fn import_records(conn: &mut Connection, text: &str, ctx: &WriteContext, now: i6
             }
         }
     }
-    report.skipped += records.iter().filter(|r| !matches!(r["type"].as_str(), Some("entity" | "fact" | "tombstone"))).count();
-    Ok(report)
+    let known: &[&str] = if v2 { &["entity", "fact", "tombstone", "relation"] } else { &["entity", "fact", "tombstone"] };
+    report.skipped += records.iter().filter(|r| !r["type"].as_str().is_some_and(|t| known.contains(&t))).count();
+    if v2 {
+        v2::restore_links(conn, &records, &maps, ctx, now, &mut report)?;
+    }
+    Ok((report, maps))
 }
+
+pub mod convert;
+pub mod v2;
+
+pub use v2::{export_v2, import_v2, is_export_v2, namespace_id, ExportV2};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_v2;

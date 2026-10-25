@@ -1517,14 +1517,15 @@ fn parse_state(rest: &[String]) -> Result<Command, CliError> {
             }
             Ok(Command::State(StateCommand::Create { body: body.to_string() }))
         }
-        // `--format export-v1` selects the portable JSON Lines export (E7); without it, Markdown.
+        // `--format export-v1|export-v2` selects the portable JSON Lines export (E7, E27); without
+        // it, Markdown.
         Some("export") if rest.iter().any(|arg| arg == "--format") => {
             let mut body = serde_json::Map::new();
             let mut i = 1;
             while i < rest.len() {
                 match rest[i].as_str() {
                     "--format" => {
-                        let value = rest.get(i + 1).ok_or(CliError::MissingArgument("--format <markdown|export-v1>"))?;
+                        let value = rest.get(i + 1).ok_or(CliError::MissingArgument("--format <markdown|export-v1|export-v2>"))?;
                         body.insert("format".into(), value.clone().into());
                         i += 2;
                     }
@@ -2368,6 +2369,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(&call.body.unwrap()).unwrap();
         assert_eq!(body, serde_json::json!({ "format": "export-v1", "differential": true }));
         assert!(parse(&v(&["state", "export", "--format", "export-v1", "--since-cursor", "12"])).is_ok());
+        assert!(parse(&v(&["state", "export", "--format", "export-v2", "--differential"])).is_ok());
         assert!(parse(&v(&["state", "export", "--format", "export-v1", "--differential", "--since-cursor", "12"])).is_err());
         assert!(parse(&v(&["state", "export", "--format", "xml"])).is_err());
         assert!(parse(&v(&["state", "export", "--format", "export-v1", "--bogus"])).is_err());

@@ -1,0 +1,34 @@
+[package]
+name = "loop-bench"
+version = "1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Open-loop and commitment tracking benchmark v1 (plan E28): a deterministic generator of heterogeneous event streams with planted commitments, open loops, resolutions, supersessions and distractors; a gold file; a scorer; and adapters to drive any memory system through it."
+
+# Model-free and network-free: the generator is a fixed template set over a seeded SplitMix64
+# (memory-bench's, so a seed reproduces a stream forever), the scorer is exact string and token
+# arithmetic, and the ShogunAgent adapter runs the engine in process on its on-device local rules.
+#
+# shogun-core with `db` is already unified into the workspace build by shogun-cli, so depending
+# on it here adds no feature to any other crate's build.
+
+[lib]
+name = "loop_bench"
+path = "src/lib.rs"
+
+[[bin]]
+name = "loop-bench"
+path = "src/bin/loop-bench.rs"
+
+[dependencies]
+shogun-core = { path = "../shogun-core", features = ["db"] }
+shogun-mcp = { path = "../shogun-mcp" }
+shogun-memory = { path = "../shogun-memory" }
+memory-bench = { path = "../memory-bench" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

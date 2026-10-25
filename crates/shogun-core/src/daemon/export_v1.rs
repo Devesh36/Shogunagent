@@ -1,9 +1,9 @@
-//! Export format v1 on the store (plan E7): `state.export {format: "export-v1"}` and the
-//! export-v1 branch of `memory.import`. The format and the restore live in
+//! Export formats v1 and v2 on the store (plan E7, E27): `state.export {format: "export-v1" |
+//! "export-v2"}` and the export branches of `memory.import`. The formats and the restores live in
 //! `shogun_memory::export`; this module holds the transaction and the cursor bookkeeping.
 
 use serde_json::{json, Value};
-use shogun_mcp::export_api::{ExportOutput, ExportRequest};
+use shogun_mcp::export_api::{ExportFormat, ExportOutput, ExportRequest};
 use shogun_memory::export;
 
 use super::Db;
@@ -20,11 +20,23 @@ impl Db {
             }
             let result = (|| -> Result<ExportOutput, rusqlite::Error> {
                 let since = if request.differential { export::cursor(conn)? } else { request.since_cursor };
-                let built = export::export_v1(conn, since, now)?;
+                let (jsonl, cursor, since, records) = match request.format {
+                    ExportFormat::V1 => {
+                        let built = export::export_v1(conn, since, now)?;
+                        (built.jsonl(), built.cursor, built.since, built.records())
+                    }
+                    ExportFormat::V2 => {
+                        // The namespace id is created once per store (no content); every later
+                        // export reuses it, so URIs are stable.
+                        let ns = export::namespace_id(conn, now)?;
+                        let built = export::export_v2(conn, since, now, &ns)?;
+                        (built.jsonl(), built.cursor, built.since, built.records())
+                    }
+                };
                 if request.differential {
-                    export::advance_cursor(conn, built.cursor)?;
+                    export::advance_cursor(conn, cursor)?;
                 }
-                Ok(ExportOutput { jsonl: built.jsonl(), cursor: built.cursor, since: built.since, records: built.records() })
+                Ok(ExportOutput { jsonl, cursor, since, records, format: request.format })
             })();
             if own_transaction {
                 match &result {
@@ -42,34 +54,49 @@ impl Db {
     /// The `memory.import.preview` answer for an export v1 package: what it holds, nothing read
     /// or written beyond parsing.
     pub(super) fn export_v1_import_preview(text: &str) -> Value {
-        let mut counts = (0usize, 0usize, 0usize);
+        let v2 = export::is_export_v2(text);
+        let mut counts = (0usize, 0usize, 0usize, 0usize);
         for line in text.lines().filter(|l| !l.trim().is_empty()).skip(1) {
             match serde_json::from_str::<Value>(line).ok().as_ref().and_then(|v| v["type"].as_str().map(str::to_string)).as_deref() {
                 Some("entity") => counts.0 += 1,
                 Some("fact") => counts.1 += 1,
                 Some("tombstone") => counts.2 += 1,
+                Some("relation") => counts.3 += 1,
                 _ => {}
             }
         }
-        json!({
-            "format": export::FORMAT,
+        let mut preview = json!({
+            "format": if v2 { export::v2::FORMAT } else { export::FORMAT },
             "action": "restore",
             "entities": counts.0,
             "facts": counts.1,
             "tombstones": counts.2,
             "note": "An export v1 restores every entity and fact with its quotes as new rows under this store's ids; confidence is capped below High until reviewed. Tombstones name the exporting store's ids and are not applied. Commit with memory.import (no select needed).",
-        })
+        });
+        if v2 {
+            preview["relations"] = json!(counts.3);
+            preview["note"] = json!("An export v2 restores every entity, fact and relation with its quotes, record times and supersession links as new rows under this store's ids; confidence is capped below High until reviewed. Tombstones name the exporting store's ids and are not applied. Commit with memory.import (no select needed).");
+        }
+        preview
     }
 
     /// The `memory.import` commit for an export v1 package, as `ctx`.
     pub(super) fn export_v1_import_commit(&self, text: &str, ctx: &shogun_memory::actor::WriteContext) -> Result<Value, String> {
         let now = self.now_ms();
         let outcome = self
-            .with_conn_mut("memory_import.export_v1", |conn| match export::import_v1(conn, text, ctx, now) {
-                Ok(report) => Ok(json!({ "format": export::FORMAT, "restored": report })),
+            .with_conn_mut("memory_import.export_v1", |conn| {
+                let (format, imported) = if export::is_export_v2(text) {
+                    (export::v2::FORMAT, export::import_v2(conn, text, ctx, now))
+                } else {
+                    (export::FORMAT, export::import_v1(conn, text, ctx, now))
+                };
+                match imported {
+                Ok(report) => Ok(json!({ "format": format, "restored": report })),
                 Err(export::ImportError::NotExportV1) => Ok(json!({ "error": "invalid_package", "reason": "not an export v1" })),
+                Err(export::ImportError::NotExportV2) => Ok(json!({ "error": "invalid_package", "reason": "not an export v2" })),
                 Err(export::ImportError::TooLarge) => Ok(json!({ "error": "invalid_request", "reason": "invalid request: too large" })),
                 Err(export::ImportError::Db(error)) => Err(error),
+                }
             })
             .map_err(|fault| format!("memory import failed: {}", fault.as_str()))?;
         if outcome.get("restored").is_some() {
@@ -135,13 +162,13 @@ mod tests {
         assert_eq!(envelope["usage"]["cost_micro_usd"], 0, "exports are free");
         // A full export leaves the cursor alone; a differential one advances it.
         assert_eq!(db.with_conn("cursor", export::cursor).unwrap(), None);
-        let first = db.export_v1(&ExportRequest { differential: true, since_cursor: None }).unwrap();
+        let first = db.export_v1(&ExportRequest { differential: true, since_cursor: None, ..ExportRequest::default() }).unwrap();
         assert_eq!(first.since, None);
         assert!(first.cursor >= 10_000, "the cursor is at least the export's time");
         assert_eq!(db.with_conn("cursor", export::cursor).unwrap(), Some(first.cursor));
         // Nothing changed since: the next differential export carries nothing, not even a row
         // whose provenance edit put its `updated_at` a millisecond past the clock.
-        let second = db.export_v1(&ExportRequest { differential: true, since_cursor: None }).unwrap();
+        let second = db.export_v1(&ExportRequest { differential: true, since_cursor: None, ..ExportRequest::default() }).unwrap();
         assert_eq!((second.since, second.records), (Some(first.cursor), 0));
     }
 
@@ -178,5 +205,32 @@ mod tests {
         };
         assert_eq!(quotes(&target), quotes(&source));
         assert_eq!(count(&target), source_rows);
+    }
+
+    /// E27: `state.export {format: "export-v2"}` through the face, with stable URIs across
+    /// exports, and the same text restored by `memory.import`.
+    #[test]
+    fn state_export_emits_v2_with_stable_uris_and_memory_import_restores_it() {
+        let source = db_at(10_000);
+        seed_commitment(&source, "I'll send the rollout plan to Oren by Friday.");
+        let backend = crate::db_backend::DbBackend::new(source.clone());
+        let text = shogun_mcp::export_api::serve(&json!({ "format": "export-v2" }), &backend).unwrap();
+        let envelope: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(envelope["result"]["format"], "shogunagent-export/v2");
+        let jsonl = envelope["result"]["jsonl"].as_str().unwrap().to_string();
+        assert!(export::is_export_v2(&jsonl));
+        let again = source.export_v1(&ExportRequest { format: ExportFormat::V2, ..ExportRequest::default() }).unwrap().jsonl;
+        let manifest = |t: &str| serde_json::from_str::<Value>(t.lines().next().unwrap()).unwrap()["namespace"].clone();
+        assert_eq!(manifest(&jsonl), manifest(&again), "the namespace (and so every URI) is stable");
+
+        let target = db_at(20_000);
+        let body = json!({ "package": jsonl }).to_string();
+        let preview = target.memory_import_preview(&body).unwrap();
+        assert_eq!((preview["format"].as_str(), preview["action"].as_str()), (Some("shogunagent-export/v2"), Some("restore")), "{preview}");
+        let committed = target
+            .memory_import_commit_as(&body, shogun_memory::memory_import::Via::Api, &WriteContext::world(Actor::agent("migrator").unwrap()))
+            .unwrap();
+        assert_eq!(committed["format"], "shogunagent-export/v2", "{committed}");
+        assert!(committed["restored"]["facts"].as_i64().unwrap_or(0) >= 1, "{committed}");
     }
 }

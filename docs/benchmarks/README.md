@@ -83,6 +83,7 @@ Every suite row has the same keys; a value a suite cannot express is `null`, nev
 | `multi_session_coverage_at_5` | `multi-session` (48 questions whose answer is two facts stated far apart, in different apps) | `coverage_at_5` | share of questions whose **whole** answer (both facts) was inside the top 5. Recall asks whether a part appeared; coverage asks whether the question became answerable. |
 | `omnimemeval` | OmniMemEval question set | — | `not_run`: the dataset is not bundled and this build has no reader/judge adapter. `SHOGUN_OMNIMEMEVAL_DIR` is the hook the adapter will read. |
 | `mem0-harness` | Mem0 public harness conversations | — | `not_run`, same reason; `SHOGUN_MEM0_HARNESS_DIR`. |
+| `open_loop_tracking` | `crates/loop-bench` hard tier (synthetic email / chat / meeting / agent streams with planted commitments, open loops, resolutions, date changes and distractors) | `tracking_f1` | micro F1 of commitments and open loops at the end of the stream, operating point `all`. Not produced by the memory-bench harness: `loop-bench run --adapter shogunagent --seeds 10 --merge-into docs/benchmarks/benchmarks.json` adds or replaces this row. The other metrics (resolution, supersession, distractors, provenance) and the definition are in [`open-loop-tracking.md`](open-loop-tracking.md). Not in the committed file yet. |
 
 The external entries are deliberately present as rows so a consumer of the file sees that they
 were not run, rather than not seeing them.

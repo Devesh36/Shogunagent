@@ -1404,6 +1404,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "loop-bench"
+version = "1.0.0"
+dependencies = [
+ "memory-bench",
+ "serde",
+ "serde_json",
+ "shogun-core",
+ "shogun-mcp",
+ "shogun-memory",
+]
+
+[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2738,6 +2750,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "shogun-redact",
  "sqlite-vec",
  "thiserror 2.0.19",
