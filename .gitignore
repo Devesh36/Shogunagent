@@ -24,3 +24,8 @@ models/
 __pycache__/
 .wrangler/
 .claude/worktrees/
+
+# Python SDK (packages/sdk-py)
+.venv/
+.pytest_cache/
+*.egg-info/
