@@ -5,10 +5,16 @@
 //! little-endian byte blobs, keyed by `rowid = event_log.id`. This module owns the extension
 //! registration, the store/delete, and the KNN query that produces the ranked id list the
 //! search layer fuses with FTS (via RRF).
+//!
+//! Every stored vector names the model that wrote it (`vector_models`, V101) and every KNN only
+//! considers rows of the store's active model ([`crate::embedding_space`]), so vectors of two
+//! models are never ranked against each other.
 
 use std::sync::Once;
 
 use rusqlite::{params, Connection};
+
+use crate::embedding_space::{ACTIVE_EVENT_ROWS, EVENT_VEC, UNSPECIFIED_MODEL};
 
 static REGISTER: Once = Once::new();
 
@@ -44,22 +50,35 @@ fn to_blob(v: &[f32]) -> Vec<u8> {
     out
 }
 
-/// Store (or replace) the embedding for `event_id`. The vector length must match the table's
-/// declared dimension (384) or sqlite-vec rejects it.
+/// Store (or replace) the embedding for `event_id` without naming its model: it is recorded as
+/// [`UNSPECIFIED_MODEL`], which becomes the active space only if the store has none. Tests and
+/// fixtures use this; the embed job writes through [`upsert_in`] with its model's id.
 pub fn upsert(conn: &Connection, event_id: i64, embedding: &[f32]) -> Result<(), rusqlite::Error> {
+    upsert_in(conn, event_id, UNSPECIFIED_MODEL, embedding)?;
+    crate::embedding_space::activate_if_unset(conn, UNSPECIFIED_MODEL, embedding.len())
+}
+
+/// Store (or replace) the embedding `model_id` produced for `event_id`, recording the model. The
+/// vector length must match the table's declared dimension (384) or sqlite-vec rejects it.
+pub fn upsert_in(
+    conn: &Connection,
+    event_id: i64,
+    model_id: &str,
+    embedding: &[f32],
+) -> Result<(), rusqlite::Error> {
     // vec0 is a virtual table; DELETE-then-INSERT keeps it simple and idempotent.
     conn.execute("DELETE FROM event_vec WHERE rowid = ?1", params![event_id])?;
     conn.execute(
         "INSERT INTO event_vec (rowid, embedding) VALUES (?1, ?2)",
         params![event_id, to_blob(embedding)],
     )?;
-    Ok(())
+    crate::embedding_space::record(conn, EVENT_VEC, event_id, model_id)
 }
 
 /// Remove an event's embedding (e.g. when the event moves to Cold).
 pub fn delete(conn: &Connection, event_id: i64) -> Result<(), rusqlite::Error> {
     conn.execute("DELETE FROM event_vec WHERE rowid = ?1", params![event_id])?;
-    Ok(())
+    crate::embedding_space::forget(conn, EVENT_VEC, event_id)
 }
 
 /// Unpack a little-endian f32 byte blob back into a vector.
@@ -95,10 +114,12 @@ pub fn knn_scored(
     query: &[f32],
     k: usize,
 ) -> Result<Vec<VectorHit>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT rowid,distance FROM event_vec
-          WHERE embedding MATCH ?1 AND k = ?2 ORDER BY distance",
-    )?;
+          WHERE embedding MATCH ?1 AND k = ?2
+            AND rowid IN ({ACTIVE_EVENT_ROWS})
+          ORDER BY distance"
+    ))?;
     let hits = stmt
         .query_map(params![to_blob(query), k as i64], |row| {
             Ok(VectorHit { id: row.get(0)?, distance: row.get(1)? })
@@ -129,15 +150,16 @@ pub fn knn_range_scored(
     to_ms: i64,
     k: usize,
 ) -> Result<Vec<VectorHit>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT rowid,distance FROM event_vec
          WHERE embedding MATCH ?1 AND k = ?2
            AND rowid IN (
                SELECT id FROM event_log INDEXED BY idx_event_log_ts
                WHERE ts >= ?3 AND ts < ?4
+                 AND id IN ({ACTIVE_EVENT_ROWS})
            )
-         ORDER BY distance",
-    )?;
+         ORDER BY distance"
+    ))?;
     let hits = stmt
         .query_map(params![to_blob(query), k as i64, from_ms, to_ms], |row| {
             Ok(VectorHit { id: row.get(0)?, distance: row.get(1)? })
@@ -199,6 +221,29 @@ mod tests {
         let hits = knn(&conn, &q, 2).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0], close_id, "the budget event must rank first");
+    }
+
+    /// E24: a vector written by another model is never ranked against the active model's query.
+    #[test]
+    fn knn_never_mixes_models() {
+        let conn = crate::open_in_memory().unwrap();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+        let a = add_event(&conn, "the quarterly budget review meeting", "h1");
+        let b = add_event(&conn, "the quarterly budget review meeting again", "h2");
+        let v = m.embed_passages(&["the quarterly budget review meeting"]).unwrap()[0].clone();
+        upsert_in(&conn, a, "model-a@384", &v).unwrap();
+        upsert_in(&conn, b, "model-b@384", &v).unwrap();
+        let q = m.embed_query("quarterly budget review").unwrap();
+
+        assert!(knn(&conn, &q, 5).unwrap().is_empty(), "no active space: nothing is comparable");
+        crate::embedding_space::activate(&conn, "model-a@384", E5_SMALL_DIM, 1).unwrap();
+        assert_eq!(knn(&conn, &q, 5).unwrap(), vec![a]);
+        assert_eq!(knn_range(&conn, &q, 0, 10, 5).unwrap(), vec![a]);
+        crate::embedding_space::activate(&conn, "model-b@384", E5_SMALL_DIM, 2).unwrap();
+        assert_eq!(knn(&conn, &q, 5).unwrap(), vec![b]);
+        delete(&conn, b).unwrap();
+        assert!(knn(&conn, &q, 5).unwrap().is_empty());
+        assert_eq!(crate::embedding_space::model_of(&conn, EVENT_VEC, b).unwrap(), None);
     }
 
     #[test]

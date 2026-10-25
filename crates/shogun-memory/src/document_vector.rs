@@ -16,7 +16,8 @@ pub enum DocumentVectorError {
 }
 
 pub fn ensure_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.execute_batch(SCHEMA_SQL)
+    conn.execute_batch(SCHEMA_SQL)?;
+    crate::embedding_space::ensure_schema(conn)
 }
 
 pub fn pending(
@@ -29,7 +30,10 @@ pub fn pending(
            LEFT JOIN search_document_embeddings e
              ON e.document_id=d.id AND e.content_digest=d.content_digest
            LEFT JOIN search_document_vec v ON v.rowid=d.id
-          WHERE d.is_dirty=0 AND (e.document_id IS NULL OR v.rowid IS NULL)
+          LEFT JOIN vector_models m ON m.vec_table='search_document_vec' AND m.row_id=d.id
+          WHERE d.is_dirty=0
+            AND (e.document_id IS NULL OR v.rowid IS NULL OR m.model_id IS NULL
+                 OR m.model_id IS NOT (SELECT model_id FROM embedding_space WHERE id=1))
             AND NOT EXISTS (
                 SELECT 1 FROM search_document_invalidations i
                  WHERE i.source_table=d.source_table AND i.source_id=d.source_id)
@@ -41,6 +45,8 @@ pub fn pending(
     rows.collect()
 }
 
+/// Store a document vector without naming its model ([`crate::embedding_space::UNSPECIFIED_MODEL`],
+/// which becomes the active space only if the store has none). The embed job uses [`upsert_in`].
 pub fn upsert(
     conn: &Connection,
     document_id: i64,
@@ -48,6 +54,21 @@ pub fn upsert(
     embedding: &[f32],
     now_ms: i64,
 ) -> Result<(), rusqlite::Error> {
+    let model = crate::embedding_space::UNSPECIFIED_MODEL;
+    upsert_in(conn, document_id, content_digest, model, embedding, now_ms)?;
+    crate::embedding_space::activate_if_unset(conn, model, embedding.len())
+}
+
+/// Store the vector `model_id` produced for a document, recording the model.
+pub fn upsert_in(
+    conn: &Connection,
+    document_id: i64,
+    content_digest: &str,
+    model_id: &str,
+    embedding: &[f32],
+    now_ms: i64,
+) -> Result<(), rusqlite::Error> {
+    crate::embedding_space::record(conn, crate::embedding_space::DOCUMENT_VEC, document_id, model_id)?;
     conn.execute("DELETE FROM search_document_vec WHERE rowid=?1", [document_id])?;
     conn.execute(
         "INSERT INTO search_document_vec(rowid,embedding) VALUES(?1,?2)",
@@ -70,6 +91,7 @@ pub fn embed_batch(
     now_ms: i64,
 ) -> Result<usize, DocumentVectorError> {
     ensure_schema(conn)?;
+    crate::embedding_space::activate(conn, embedder.model_id(), embedder.dim(), now_ms)?;
     let rows = pending(conn, batch)?;
     if rows.is_empty() {
         return Ok(0);
@@ -82,6 +104,9 @@ pub fn embed_batch(
     let embeddings = embedder.embed_passages(&inputs)?;
     if embeddings.len() != rows.len() {
         return Err(EmbedError::Inference("passage count mismatch".to_owned()).into());
+    }
+    if let Some(bad) = embeddings.iter().find(|v| v.len() != embedder.dim()) {
+        return Err(EmbedError::Dim { expected: embedder.dim(), got: bad.len() }.into());
     }
     let tx = conn.transaction()?;
     for ((document_id, _, _, digest), embedding) in rows.iter().zip(&embeddings) {
@@ -96,7 +121,7 @@ pub fn embed_batch(
             |row| row.get(0),
         )?;
         if current {
-            upsert(&tx, *document_id, digest, embedding, now_ms)?;
+            upsert_in(&tx, *document_id, digest, embedder.model_id(), embedding, now_ms)?;
         }
     }
     tx.commit()?;
@@ -161,6 +186,9 @@ pub fn knn_filtered_scored(
               JOIN search_document_embeddings e
                 ON e.document_id=d.id AND e.content_digest=d.content_digest
              WHERE d.is_dirty=0
+               AND d.id IN (SELECT row_id FROM vector_models
+                             WHERE vec_table='search_document_vec'
+                               AND model_id=(SELECT model_id FROM embedding_space WHERE id=1))
                AND (?3 IS NULL OR d.period_end_ms IS NULL OR d.period_end_ms>?3)
                AND (?4 IS NULL OR d.period_start_ms IS NULL OR d.period_start_ms<?4)
                AND (

@@ -1554,6 +1554,10 @@ pub fn recreate_projection_and_rebuild(
     conn: &mut Connection,
     now_ms: i64,
 ) -> Result<RebuildReport, SearchDocumentError> {
+    conn.execute(
+        "DELETE FROM vector_models WHERE vec_table = 'search_document_vec'",
+        [],
+    )?;
     conn.execute_batch(
         "DROP TABLE IF EXISTS search_document_vec;
          DROP TABLE IF EXISTS search_document_embeddings;
