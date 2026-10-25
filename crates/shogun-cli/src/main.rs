@@ -141,9 +141,12 @@ fn main() -> ExitCode {
         eprintln!("{}", start_hint());
         return ExitCode::from(3);
     };
+    // The operator's routes (deciding an approval, changing a grant, teams) take the admin
+    // credential, never the agent token (E15 / E18).
+    let token_var = if port::needs_admin(&call.path) { "SHOGUN_ADMIN_TOKEN" } else { "SHOGUN_API_TOKEN" };
     let token = invocation
         .token
-        .or_else(|| std::env::var("SHOGUN_API_TOKEN").ok().filter(|t| !t.is_empty()))
+        .or_else(|| std::env::var(token_var).ok().filter(|t| !t.is_empty()))
         .filter(|_| port::needs_token(&call.path));
 
     match http::request(port, call.method, &call.path, token.as_deref(), call.body.as_deref()) {

@@ -40,6 +40,17 @@ pub fn resolve(
 
 /// Whether a request should carry the bearer token. Discovery and health answer without one, so
 /// the token is not sent there, where a process that is not SHOGUN could be listening.
+/// Whether `path` is an operator route (E15 / E18): deciding an approval, changing a grant,
+/// teams. The CLI sends `SHOGUN_ADMIN_TOKEN` there (unless `--token` is given), never the agent
+/// token, so an agent's key cannot approve or grant.
+pub fn needs_admin(path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    path == "/v1/acl/grant"
+        || path == "/v1/acl/revoke"
+        || path == "/v1/teams"
+        || (path.starts_with("/v1/approvals/") && path.ends_with("/decide"))
+}
+
 pub fn needs_token(path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
     !matches!(path, "/v1/status" | "/v1/metrics")

@@ -87,6 +87,9 @@ fn expected_for(command: &str) -> Option<&'static str> {
         "update" => "status (installing and restarting are in the app)",
         "profile" => "set <json>",
         "wiki" => "list | evidence <key> | neighbors <key>",
+        "approvals" => "list | get <id> | decide <id> approve|reject [--as <kind:id>]",
+        "acl" => "list | grant <json> | revoke <json> | teams | team <json>",
+        "audit" => "[--since-ms N] [--limit N]",
         "voice-dictionary" => "list | create | update | delete | import | export | autoadd | autoadd-manage",
         _ => return None,
     })
@@ -495,6 +498,88 @@ fn parse_command(positionals: &[String]) -> Result<Command, CliError> {
                 serde_json::from_str(&raw).map_err(|_| CliError::BadInput("ingest takes one JSON object".into()))?;
             shogun_mcp::ingest_api::ingest_request(&body).map_err(CliError::BadInput)?;
             Ok(Command::Ingest { body: body.to_string() })
+        }
+        // E15: approvals. Deciding is the operator's (the CLI sends SHOGUN_ADMIN_TOKEN for it).
+        "approvals" => {
+            use crate::command::ApprovalsCommand;
+            let id_at = |i: usize| -> Result<u64, CliError> {
+                let raw = rest.get(i).ok_or(CliError::MissingArgument("<id>"))?;
+                raw.parse::<u64>().ok().filter(|id| *id > 0).ok_or_else(|| CliError::BadId(raw.clone()))
+            };
+            match rest.first().map(String::as_str) {
+                None | Some("list") => Ok(Command::Approvals(ApprovalsCommand::List)),
+                Some("get") => Ok(Command::Approvals(ApprovalsCommand::Get { id: id_at(1)? })),
+                Some("decide") => {
+                    let id = id_at(1)?;
+                    let decision = match rest.get(2).map(String::as_str) {
+                        Some(d @ ("approve" | "reject")) => d,
+                        Some(other) => return Err(CliError::BadInput(format!("decision must be approve or reject, not `{other}`"))),
+                        None => return Err(CliError::MissingArgument("approve|reject")),
+                    };
+                    let decided_by = match rest.get(3).map(String::as_str) {
+                        Some("--as") => rest.get(4).cloned().ok_or(CliError::MissingFlagValue("--as"))?,
+                        Some(other) => return Err(CliError::BadInput(format!("unexpected `{other}` (use --as <kind:id>)"))),
+                        None => "human:operator".to_string(),
+                    };
+                    let valid = decided_by.split_once(':').is_some_and(|(kind, id)| !kind.is_empty() && !id.is_empty())
+                        && decided_by.chars().count() <= 128
+                        && !decided_by.chars().any(|c| c.is_whitespace() || c.is_control());
+                    if !valid {
+                        return Err(CliError::BadInput("--as takes <kind>:<id>, for example human:aiko".into()));
+                    }
+                    let body = serde_json::json!({ "decision": decision, "decided_by": decided_by }).to_string();
+                    Ok(Command::Approvals(ApprovalsCommand::Decide { id, body }))
+                }
+                Some(other) => Err(CliError::UnknownSubcommand { command: "approvals", got: other.to_string() }),
+            }
+        }
+        // E18: the audit log.
+        "audit" => {
+            let (mut since_ms, mut limit) = (None, None);
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--since-ms" => {
+                        let raw = rest.get(i + 1).ok_or(CliError::MissingFlagValue("--since-ms"))?;
+                        since_ms = Some(raw.parse::<i64>().map_err(|_| CliError::BadInput("--since-ms takes milliseconds".into()))?);
+                        i += 2;
+                    }
+                    "--limit" => {
+                        let raw = rest.get(i + 1).ok_or(CliError::MissingFlagValue("--limit"))?;
+                        limit = Some(
+                            raw.parse::<u32>().ok().filter(|n| (1..=500).contains(n)).ok_or_else(|| CliError::BadInput("--limit takes 1 to 500".into()))?,
+                        );
+                        i += 2;
+                    }
+                    other => return Err(CliError::UnknownSubcommand { command: "audit", got: other.to_string() }),
+                }
+            }
+            Ok(Command::Audit { since_ms, limit })
+        }
+        // E18: access grants and teams. Changes are the operator's (SHOGUN_ADMIN_TOKEN).
+        "acl" => {
+            use crate::command::AclCommand;
+            let json_body = |what: &'static str| -> Result<String, CliError> {
+                let raw = join(&rest[1..]).ok_or(CliError::MissingArgument("<json>"))?;
+                let value: serde_json::Value =
+                    serde_json::from_str(&raw).map_err(|_| CliError::BadInput(format!("acl {what} takes one JSON object")))?;
+                if !value.is_object() {
+                    return Err(CliError::BadInput(format!("acl {what} takes one JSON object")));
+                }
+                Ok(value.to_string())
+            };
+            match rest.first().map(String::as_str) {
+                None | Some("list") => Ok(Command::Acl(AclCommand::List)),
+                Some(op @ ("grant" | "revoke")) => {
+                    let body = json_body(if op == "grant" { "grant" } else { "revoke" })?;
+                    let value: serde_json::Value = serde_json::from_str(&body).map_err(|_| CliError::BadInput("bad JSON".into()))?;
+                    shogun_mcp::governance_api::acl_change(&value, op == "grant").map_err(CliError::BadInput)?;
+                    Ok(Command::Acl(if op == "grant" { AclCommand::Grant { body } } else { AclCommand::Revoke { body } }))
+                }
+                Some("teams") => Ok(Command::Acl(AclCommand::Teams)),
+                Some("team") => Ok(Command::Acl(AclCommand::SetTeam { body: json_body("team")? })),
+                Some(other) => Err(CliError::UnknownSubcommand { command: "acl", got: other.to_string() }),
+            }
         }
         // E6-T2: one `memory.fs` command as JSON, validated by the shared parser.
         "fs" => {
@@ -2219,6 +2304,39 @@ mod tests {
     #[test]
     fn no_args_is_help() {
         assert_eq!(parse(&[]).unwrap().command, Command::Help);
+    }
+
+    /// E15 / E18: the governance commands map to the shared tools; deciding and granting are the
+    /// operator's routes (no tool) and go to the admin paths.
+    #[test]
+    fn governance_commands_map_to_tools_and_operator_routes() {
+        use shogun_mcp::memory_api::Tool;
+        let call = |args: &[&str]| {
+            let inv = parse(&v(args)).unwrap();
+            (inv.command.tool(), crate::wire::to_call(&inv.command, false).unwrap())
+        };
+        let (tool, c) = call(&["approvals"]);
+        assert_eq!((tool, c.method, c.path.as_str()), (Some(Tool::ApprovalsList), "GET", "/v1/approvals"));
+        let (tool, c) = call(&["approvals", "get", "7"]);
+        assert_eq!((tool, c.path.as_str()), (Some(Tool::ApprovalsGet), "/v1/approvals/7"));
+        let (tool, c) = call(&["approvals", "decide", "7", "reject", "--as", "human:aiko"]);
+        assert_eq!((tool, c.method, c.path.as_str()), (None, "POST", "/v1/approvals/7/decide"));
+        let body: serde_json::Value = serde_json::from_str(c.body.as_deref().unwrap()).unwrap();
+        assert_eq!((body["decision"].as_str(), body["decided_by"].as_str()), (Some("reject"), Some("human:aiko")));
+        assert!(crate::port::needs_admin(&c.path));
+        assert!(parse(&v(&["approvals", "decide", "7", "maybe"])).is_err());
+        let (tool, c) = call(&["audit", "--since-ms", "5", "--limit", "10"]);
+        assert_eq!((tool, c.path.as_str()), (Some(Tool::AuditList), "/v1/audit?since_ms=5&limit=10"));
+        assert!(parse(&v(&["audit", "--limit", "0"])).is_err());
+        let (tool, c) = call(&["acl"]);
+        assert_eq!((tool, c.path.as_str()), (Some(Tool::AclList), "/v1/acl"));
+        assert!(!crate::port::needs_admin(&c.path));
+        let (tool, c) = call(&["acl", "grant", r#"{"grantee":"agent:b","agent":"a"}"#]);
+        assert_eq!((tool, c.path.as_str()), (None, "/v1/acl/grant"));
+        assert!(crate::port::needs_admin(&c.path));
+        assert!(parse(&v(&["acl", "grant", r#"{"grantee":"agent:a","agent":"a"}"#])).is_err());
+        let (_, c) = call(&["acl", "team", r#"{"tenant":"acme","team":"ops","members":["alice"]}"#]);
+        assert_eq!((c.method, c.path.as_str()), ("POST", "/v1/teams"));
     }
 
     /// E6-T2: `shogun fs <json>` is `memory.fs`, validated by the shared parser before it is sent.

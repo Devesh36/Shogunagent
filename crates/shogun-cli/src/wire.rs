@@ -242,6 +242,28 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Ingest { body } => post("/v1/memory/ingest".into(), body.clone()),
         Command::Recall { body } => post("/v1/memory/recall".into(), body.clone()),
         Command::Fs { body } => post("/v1/memory/fs".into(), body.clone()),
+        Command::Approvals(approvals) => match approvals {
+            crate::command::ApprovalsCommand::List => get("/v1/approvals".into()),
+            crate::command::ApprovalsCommand::Get { id } => get(format!("/v1/approvals/{id}")),
+            crate::command::ApprovalsCommand::Decide { id, body } => post(format!("/v1/approvals/{id}/decide"), body.clone()),
+        },
+        Command::Audit { since_ms, limit } => {
+            let mut query = Vec::new();
+            if let Some(since) = since_ms {
+                query.push(format!("since_ms={since}"));
+            }
+            if let Some(limit) = limit {
+                query.push(format!("limit={limit}"));
+            }
+            get(if query.is_empty() { "/v1/audit".into() } else { format!("/v1/audit?{}", query.join("&")) })
+        }
+        Command::Acl(acl) => match acl {
+            crate::command::AclCommand::List => get("/v1/acl".into()),
+            crate::command::AclCommand::Grant { body } => post("/v1/acl/grant".into(), body.clone()),
+            crate::command::AclCommand::Revoke { body } => post("/v1/acl/revoke".into(), body.clone()),
+            crate::command::AclCommand::Teams => get("/v1/teams".into()),
+            crate::command::AclCommand::SetTeam { body } => post("/v1/teams".into(), body.clone()),
+        },
         Command::People(w) => get(low(state_path("people", w))),
         Command::Projects(w) => get(low(state_path("projects", w))),
         Command::Commitments(w) => get(low(state_path("commitments", w))),

@@ -13,6 +13,33 @@ pub enum ListOrGet {
     Get { id: i64 },
 }
 
+/// `shogun approvals …` (E15).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalsCommand {
+    /// `approvals [list]` → `approvals.list`.
+    List,
+    /// `approvals get <id>` → `approvals.get`.
+    Get { id: u64 },
+    /// `approvals decide <id> approve|reject [--as <kind:id>]`: the operator's decision, sent with
+    /// `SHOGUN_ADMIN_TOKEN` (never an agent's token). `body` is the decide request JSON.
+    Decide { id: u64, body: String },
+}
+
+/// `shogun acl …` (E18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AclCommand {
+    /// `acl [list]` → `acl.list`.
+    List,
+    /// `acl grant <json>` (operator, `SHOGUN_ADMIN_TOKEN`).
+    Grant { body: String },
+    /// `acl revoke <json>` (operator).
+    Revoke { body: String },
+    /// `acl teams` (operator, multi-principal).
+    Teams,
+    /// `acl team <json>` define a team (operator, multi-principal).
+    SetTeam { body: String },
+}
+
 /// The action for `shogun config path|show|validate`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigAction {
@@ -62,6 +89,12 @@ pub enum Command {
     /// `shogun fs <json>` → `memory.fs` (E6-T2): one memory-tool command (`view`, `create`,
     /// `str_replace`, `insert`, `delete`, `rename`) over `/memories`; `body` is validated at parse.
     Fs { body: String },
+    /// `shogun approvals list|get <id>|decide <id> approve|reject` (E15).
+    Approvals(ApprovalsCommand),
+    /// `shogun audit [--since-ms N] [--limit N]` → `audit.list` (E18).
+    Audit { since_ms: Option<i64>, limit: Option<u32> },
+    /// `shogun acl list|grant|revoke|teams|team` (E18).
+    Acl(AclCommand),
     People(ListOrGet),
     Projects(ListOrGet),
     Commitments(ListOrGet),
@@ -686,6 +719,15 @@ impl Command {
             Command::Ingest { .. } => Tool::MemoryIngest,
             Command::Recall { .. } => Tool::MemoryRecall,
             Command::Fs { .. } => Tool::MemoryFs,
+            Command::Approvals(ApprovalsCommand::List) => Tool::ApprovalsList,
+            Command::Approvals(ApprovalsCommand::Get { .. }) => Tool::ApprovalsGet,
+            Command::Audit { .. } => Tool::AuditList,
+            Command::Acl(AclCommand::List) => Tool::AclList,
+            // The operator's routes: not tools, never an agent's (E15 / E18).
+            Command::Approvals(ApprovalsCommand::Decide { .. })
+            | Command::Acl(AclCommand::Grant { .. } | AclCommand::Revoke { .. } | AclCommand::Teams | AclCommand::SetTeam { .. }) => {
+                return None
+            }
             Command::People(ListOrGet::List) => Tool::StatePeopleList,
             Command::People(ListOrGet::Get { .. }) => Tool::StatePeopleGet,
             Command::Projects(ListOrGet::List) => Tool::StateProjectsList,
@@ -901,6 +943,19 @@ COMMANDS:
     recall <query> [--budget-tokens N] [--include-scratch]
                               What memory holds on a question, within a token budget
     ingest <json>             Append events[] or turns[] under an idempotency_key (L1)
+    approvals [list]          Queued L2/L3 approvals, redacted (kind, tier, recipient class)
+    approvals get <id>        One approval's redacted summary
+    approvals decide <id> approve|reject [--as <kind:id>]
+                              Decide as the operator (sends SHOGUN_ADMIN_TOKEN, never an agent key)
+    audit [--since-ms N] [--limit N]
+                              The audit log: who wrote or decided what, when (no bodies)
+    acl [list]                Scratch and Team access grants
+    acl grant|revoke <json>   Change a grant as the operator (SHOGUN_ADMIN_TOKEN), e.g.
+                              {\"grantee\":\"agent:b\",\"agent\":\"a\",\"access\":\"read\"} or
+                              {\"kind\":\"principal\",\"grantee_principal\":\"bob\",\"principal\":\"alice\"}
+    acl teams | acl team <json>
+                              List or define teams (operator, multi-principal):
+                              {\"tenant\":\"acme\",\"team\":\"ops\",\"members\":[\"alice\",\"bob\"]}
     people list|get <id>      People state
     projects list|get <id>    Projects state
     commitments list|get <id> Commitments state
