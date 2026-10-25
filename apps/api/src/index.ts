@@ -20,7 +20,8 @@
  */
 import { serve } from "@hono/node-server";
 
-import { BootError, SERVER_TIMEOUTS, createRelay, formLaneLine, intFromEnv, postgresStore, relayConfigFromEnv, startPeriodicSweep, trialLaneLine, type RelayStore } from "./boot.js";
+import { InMemoryAgentStore } from "./agent-store.js";
+import { BootError, SERVER_TIMEOUTS, agentLaneLine, createRelay, formLaneLine, intFromEnv, postgresStore, relayConfigFromEnv, startPeriodicSweep, trialLaneLine, type RelayStore } from "./boot.js";
 import { operational } from "./logging.js";
 import { TokenBucketLimiter } from "./ratelimit.js";
 import { postgresClient } from "./sql.js";
@@ -56,6 +57,7 @@ const metricsEverySec = nodeInt("METRICS_LOG_INTERVAL_SEC", 60, 0);
 const databaseUrl = process.env.RELAY_DATABASE_URL;
 operational.info(trialLaneLine(config));
 operational.info(formLaneLine(config));
+operational.info(agentLaneLine(config));
 
 async function openStore(): Promise<RelayStore> {
   if (databaseUrl) {
@@ -64,6 +66,7 @@ async function openStore(): Promise<RelayStore> {
     const store = postgresStore(postgresClient(databaseUrl), config);
     try {
       await store.usage.checkSchema();
+      if (config.agent) await store.agent.checkSchema();
     } catch (e) {
       refuse(e instanceof Error ? e.message : "shared store unavailable");
     }
@@ -76,6 +79,8 @@ async function openStore(): Promise<RelayStore> {
   return {
     usage: new InMemoryUsageStore(),
     rateLimit: new TokenBucketLimiter(config.rateBurst, config.ratePerMin),
+    // Keys, wallets and receipts vanish with the process too.
+    ...(config.agent ? { agent: new InMemoryAgentStore() } : {}),
     close: () => Promise.resolve(),
   };
 }

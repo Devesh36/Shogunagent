@@ -28,7 +28,7 @@ import { SqlLiveStore } from "./live-store.js";
  */
 import type { ExecutionContext } from "hono";
 
-import { BootError, createRelay, formLaneLine, newMetrics, postgresStore, relayConfigFromEnv, trialLaneLine, type EnvRecord, type RelayConfig, providerGateways } from "./boot.js";
+import { BootError, agentLaneLine, createRelay, formLaneLine, newMetrics, postgresStore, relayConfigFromEnv, trialLaneLine, type EnvRecord, type RelayConfig, providerGateways } from "./boot.js";
 import type { AnthropicGateway } from "./gateway.js";
 import { operational } from "./logging.js";
 import type { RelayMetrics } from "./metrics.js";
@@ -88,6 +88,7 @@ function boot(env: WorkerEnv): BootState {
     }
     operational.info(trialLaneLine(config));
     operational.info(formLaneLine(config));
+    operational.info(agentLaneLine(config));
     const provided = providerGateways(config);
     state = { ok: true, booted: { config, metrics: newMetrics(config), gateway: provided.gateway, ...(provided.orphanSweep ? { orphanSweep: provided.orphanSweep } : {}), hyperdrive } };
   } catch (e) {
@@ -180,6 +181,7 @@ async function sweep(booted: Booted): Promise<void> {
     // place to say so (table names only).
     try {
       await store.usage.checkSchema();
+      if (booted.config.agent) await store.agent.checkSchema();
     } catch (e) {
       operational.error(e instanceof Error ? e.message : "shared store table missing or unreadable");
       return;

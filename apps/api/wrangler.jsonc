@@ -8,7 +8,11 @@
 //   DEEPGRAM_API_KEY    company speech grants (#1101 D2; Member permission, exactly one project). Unset = 503 speech_unavailable
 //   METRICS_TOKEN       optional bearer for GET /metrics (unset = 404)
 //   TYPESAFE_API_KEY    the operator's TypeSafe key for Jev form decisions (/v1/ai/form_decide, issue #1144; unset = that route answers 503)
+//   AGENT_POW_SECRET    HMAC key of the agent-registration proof-of-work challenges (README-agent-api.md; required once AGENT_API_ENABLED=1)
+//   STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET   card top-ups for the agent wallet (both or neither; unset = POST /v1/wallet/topup answers 503)
 // Non-secrets are `vars` below. Every name is documented in src/boot.ts.
+// The agent API (plan E3 / E9) is OFF until `AGENT_API_ENABLED: "1"` and `PUBLIC_BASE_URL` are
+// added to `vars` and the agent tables are provisioned (sql/agent-keys.sql; DEPLOY.md §9).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "shogunai-relay",
