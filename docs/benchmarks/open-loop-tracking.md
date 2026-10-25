@@ -58,6 +58,21 @@ job, a model, rules) is its business; it must not read the gold file.
 | `easy` | 5 | 4 | 4 | ~30% / 0% | 0 | 4 | 3 | one sentence per event, canonical wording, updates on the same channel |
 | `medium` | 10 | 8 | 8 | ~35% / ~10% | 3 | 8 | 6 | greetings and sign-offs around the sentence; resolutions and updates arrive on another channel |
 | `hard` | 15 | 12 | 12 | ~40% / ~10% | 6 (2 move twice) | 16 | 10 | paraphrased promises and loops ("Leave the board memo with me; it'll be with Oren by Friday."), several items in one meeting note |
+| `heldout` | 15 | 12 | 12 | ~40% / ~10% | 6 (2 move twice) | 16 | 10 | the hard tier's shape with its own phrasing families (below), and ~30% of updates and closings posted on a thread of their own |
+
+**The held-out tier** (`--tiers heldout`, plan E49; not in the default run, so v1.0 results are
+unchanged). Every planted sentence — openings, resolutions, cancellations, due-date moves and
+distractors — comes from template families written for it **without looking at the engine's
+rules**: other verbs ("Let me take care of …; Oren will have it no later than Friday", "Pinged
+Priya again about …, nothing back", "Signed off on …"), the passive voice ("… will be shared
+with Oren by me on Friday", "… was handed to Oren today", "… has been rescheduled, new date
+…"), non-native English ("OK I make … for Oren until Friday, no problem", "I already give … to
+Oren, it is finish"), and Japanese sentences around English names and dates
+("the Q3 budgetはFridayまでにOren Valeさんへお送りします。",
+"the board memoの締切はSeptember 21に変更になりました"). About 30% of the updates and closings arrive on a new thread
+(another email, another chat channel) instead of the item's. The gold, the canonical text and
+the scorer are the same as for the other tiers. These families must not be used to write or
+tune rules; a change that does should say so and report the held-out numbers from before it.
 
 The gold file per `(tier, seed)` lists each item with its opening event and exact quote, its
 first and latest due date, the events that moved it, its final status and the event that closed
@@ -105,6 +120,9 @@ cargo run -p loop-bench --release -- run --adapter shogunagent-scripted-review -
 cargo run -p loop-bench --release -- run --adapter will-baseline --seeds 5 --out baseline.json
 cargo run -p loop-bench --release -- run --adapter oracle        --seeds 5     # every metric 1
 
+# The held-out tier (not in the default run).
+cargo run -p loop-bench --release -- run --adapter shogunagent --tiers heldout --seeds 5 --out heldout.json
+
 # Add the hard-tier headline to a benchmarks.json as the `open_loop_tracking` suite row.
 cargo run -p loop-bench --release -- run --adapter shogunagent --seeds 10 \
   --merge-into docs/benchmarks/benchmarks.json
@@ -112,7 +130,7 @@ cargo run -p loop-bench --release -- run --adapter shogunagent --seeds 10 \
 cargo run -p loop-bench -- --help
 ```
 
-`--tiers easy,medium,hard`, `--seeds N` and `--first-seed 42` select the runs. The run is
+`--tiers easy,medium,hard` (or `heldout`), `--seeds N` and `--first-seed 42` select the runs. The run is
 deterministic in its quality numbers; latency moves with the machine.
 
 ### The adapters
@@ -127,9 +145,12 @@ deterministic in its quality numbers; latency moves with the machine.
   At the end the state is read through `state.export` with `format: "export-v2"`, every band,
   rows not superseded.
 - **`shogunagent-scripted-review`** (`ScriptedReviewAdapter`, `src/scripted.rs`, plan E49): the
-  same engine, ingest and read as `shogunagent`, but after each hour the hourly review runs
-  through the **Batch lane** (`tick_principal_with_lane`) and then the loop consolidator
-  (`shogun_core::dreamcycle::loops::consolidate_loops`), with the lane answered in process by an
+  same engine, ingest and read as `shogunagent`, but after each hour it runs the server's
+  production Batch tick (`shogun_core::tenancy::dream_tick::tick_principal_batch`, the path
+  `shogun-api --dream-tick` takes for a principal with a relay credential): the hourly review
+  through the **Batch lane**, then the loop consolidator when its gate says so (unread signals or
+  outcomes, at most hourly, eight a local day — counted from the traceability rows the lane
+  writes before each call, as the relay does), with the lane answered in process by an
   **offline scripted reviewer — not a model**. Its window-review answer is the on-device rules run
   over each numbered line, anchored on that line as the answer contract asks; its consolidator
   answer re-lists every new signal with its exact quote at confidence 0.9 and applies every
@@ -196,13 +217,19 @@ Release build, Linux x86_64 container shared with other builds (latency is indic
 seeds (42–46) per tier, 2026-10-25. Mean [95% interval]; one value when the seeds agreed exactly.
 "Before" is the engine at plan E28 (commit `cac2e3f`); "after" is the engine with plan E49
 (outcomes read off later messages, paraphrase rules, the consolidator changes below), same seeds,
-same generator, same scorer.
+same generator, same scorer. The "after" files were re-run after the consolidator was wired into
+the server's Batch tick (the scripted arm now goes through `tick_principal_batch` and its gate):
+every quality number on the three v1.0 tiers came out identical to the first E49 run; only
+latency moved (the latency lines below are from that re-run).
 
 Full files in [`open-loop-tracking/`](open-loop-tracking/):
 [`results-shogunagent-local-rules.json`](open-loop-tracking/results-shogunagent-local-rules.json) (after),
 [`results-shogunagent-local-rules-before-e49.json`](open-loop-tracking/results-shogunagent-local-rules-before-e49.json) (before),
 [`results-shogunagent-scripted-review.json`](open-loop-tracking/results-shogunagent-scripted-review.json),
-[`results-will-baseline.json`](open-loop-tracking/results-will-baseline.json).
+[`results-will-baseline.json`](open-loop-tracking/results-will-baseline.json);
+held-out tier: [`results-heldout-shogunagent-local-rules.json`](open-loop-tracking/results-heldout-shogunagent-local-rules.json),
+[`results-heldout-shogunagent-scripted-review.json`](open-loop-tracking/results-heldout-shogunagent-scripted-review.json),
+[`results-heldout-will-baseline.json`](open-loop-tracking/results-heldout-will-baseline.json).
 
 ### ShogunAgent, local rules (no model)
 
@@ -249,7 +276,7 @@ Change, `all` (metrics that moved):
 F1 0.000). That is the rule, not a gap: local rules alone never lift a candidate to 0.5 (owner
 decision 2026-10-02). The path to that band is the next arm.
 
-After: easy: ingest 0.85 ms/event, processing 0.27 s/run; medium: ingest 0.76 ms/event, processing 0.90 s/run; hard: ingest 0.78 ms/event, processing 2.17 s/run (hourly ticks included; before: easy: ingest 0.90 ms/event, processing 0.28 s/run; medium: ingest 0.81 ms/event, processing 0.95 s/run; hard: ingest 0.81 ms/event, processing 1.85 s/run); 0 model calls, 0 cost.
+After (re-run): easy: ingest 1.19 ms/event, processing 0.38 s/run; medium: ingest 1.03 ms/event, processing 1.30 s/run; hard: ingest 1.03 ms/event, processing 2.91 s/run (hourly ticks included; the container was busier than for the first run; before: easy: ingest 0.90 ms/event, processing 0.28 s/run; medium: ingest 0.81 ms/event, processing 0.95 s/run; hard: ingest 0.81 ms/event, processing 1.85 s/run); 0 model calls, 0 cost.
 
 ### ShogunAgent, scripted review (offline script, not a model)
 
@@ -276,13 +303,13 @@ there is no before row.
 | medium | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 | 1.000 | 0.000 | 1.000 |
 | hard | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.940 [0.87, 1.02] | 0.000 | 0.900 [0.79, 1.01] | 0.000 | 1.000 |
 
-What the consolidator did, summed over the five seeds (counts from
+What the consolidator did in the first E49 run, before it went through the production tick and its traced gate, summed over the five seeds (counts from
 `ScriptedReviewAdapter::applied`): easy 44 calls, 40 re-lists, 14 resolutions; medium 112 calls, 95 re-lists, 27 resolutions; hard 178 calls, 156 re-lists, 59 resolutions; 0 items opened as new rows and 0 refused, on every tier. No item was ever *opened* as a new row: every
 re-list landed in place on the local candidate that cites the same span, so the store holds one
 row per item. Every actionable row carries the consolidator's confidence (0.9), and every close
 of a reviewed row went through a `resolved` entry quoting the outcome's own words.
 
-easy: ingest 0.90 ms/event, processing 0.25 s/run; medium: ingest 0.79 ms/event, processing 0.72 s/run; hard: ingest 0.81 ms/event, processing 1.51 s/run; 0 model calls, 0 cost (the script is not billed and is not a model call).
+Re-run through the wired tick: easy: ingest 1.14 ms/event, processing 0.28 s/run; medium: ingest 1.08 ms/event, processing 1.06 s/run; hard: ingest 1.22 ms/event, processing 2.25 s/run; 0 model calls, 0 cost (the script is not billed and is not a model call).
 
 ### "will" baseline (unchanged)
 
@@ -293,6 +320,40 @@ easy: ingest 0.90 ms/event, processing 0.25 s/run; medium: ingest 0.79 ms/event,
 | hard | 0.493 [0.38, 0.60] | 0.767 [0.57, 0.97] | 0.696 [0.56, 0.83] | 0.000 | — | 0.000 | 0.000 | 0.000 | 0.263 [0.18, 0.35] | 1.000 |
 
 The oracle scores 1 on every metric and 0 on both false rates (tested).
+
+### Held-out tier (`heldout`): before any tuning
+
+The rules above were never shown these families. Run on 2026-10-25 with the engine as of the E49
+change described here, five seeds (42–46), **before any rule was changed for them** (none has
+been since: the outcome rules for text without a thread and the consolidator wiring do not
+touch threaded text, and a re-run after them gave the same numbers). The number to compare is
+the hard tier's 1.000 above: the gap is how much of that score was the templates.
+
+| arm | point | tracking F1 | commit. recall | commit. precision | loop recall | loop precision | resolution | false closure | supersession | false commitment | provenance |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| local rules | all | 0.489 [0.42, 0.56] | 0.383 [0.33, 0.44] | 1.000 | 0.267 [0.13, 0.40] | 1.000 | 0.000 | 0.000 | 0.000 | 0.000 | 1.000 |
+| local rules | actionable | 0.000 | 0.000 | — | 0.000 | — | 0.000 | — | 0.000 | 0.000 | — |
+| scripted review | all | 0.489 [0.42, 0.56] | 0.383 [0.33, 0.44] | 1.000 | 0.267 [0.13, 0.40] | 1.000 | 0.000 | 0.000 | 0.000 | 0.000 | 1.000 |
+| scripted review | actionable | 0.489 [0.42, 0.56] | 0.383 [0.33, 0.44] | 1.000 | 0.267 [0.13, 0.40] | 1.000 | 0.000 | 0.000 | 0.000 | 0.000 | 1.000 |
+| "will" baseline | all = actionable | 0.206 [0.11, 0.30] | 0.233 [0.12, 0.35] | 1.000 | 0.000 | — | 0.000 | 0.000 | 0.000 | 0.000 | 1.000 |
+
+Local rules: ingest 0.72 ms/event, processing 1.59 s/run; scripted review: ingest 0.75 ms/event,
+processing 1.47 s/run; 0 model calls, 0 cost.
+
+- **Tracking F1 falls from 1.000 (hard) to 0.489.** About two in five held-out commitments and one
+  in four open loops are found; the rest are worded in ways no rule reads (other verbs, the
+  passive, non-native English, Japanese with English names in it).
+- **Resolution and supersession are 0.000.** None of the held-out ways of saying "done", "called
+  off" or "moved" ("went out to …", "has … in hand", "was handed to …", "has been shelved",
+  "is now expected …", "has been rescheduled, new date …", Japanese "送付済み", "変更になりました")
+  is a cue of the outcome rules, and about 30% of them arrive on another thread, where the rules
+  do not look by design.
+- **What held: precision.** Commitment and loop precision stay 1.000, the false-commitment rate
+  stays 0.000 against the new distractor families, there is no false closure, and every quote is
+  exact. The rules miss rather than invent.
+- The scripted-review arm matches the local rules exactly, as it must: its reviewer is scripted
+  from the same rules. It shows the route to the actionable band holds for what the rules find;
+  a real model's reviewer is the arm that could close the recall gap, and it is still unmeasured.
 
 **What the numbers say.**
 
@@ -319,8 +380,9 @@ The oracle scores 1 on every metric and 0 on both false rates (tested).
   tests with forms the generator never produces (`extract::paraphrase_tests`,
   `loop_updates::tests`), and the independent extraction eval (`cargo run -p extract-eval`, six
   golden days written for E-series extraction work) is byte-identical before and after — the same
-  21 commitments and 18 open loops, the same 4 and 1 extras, precision unchanged. A held-out
-  template set released only for scoring (see Limits) is still the real test.
+  21 commitments and 18 open loops, the same 4 and 1 extras, precision unchanged. The held-out
+  tier is the real test, and it says the rules do not generalise much past these families:
+  tracking F1 0.489, resolution and supersession 0.000, precision intact (previous section).
 - **How a candidate reaches the actionable band** is the scripted-review arm: the hourly window
   review turns the local candidate into a typed signal with the exact span of its line; the loop
   consolidator re-lists it in place at its answer's confidence, which code accepts only at ≥ 0.84
@@ -334,9 +396,11 @@ The oracle scores 1 on every metric and 0 on both false rates (tested).
 ## Limits
 
 - Synthetic text from templates: a system tuned to these templates can overfit them. The
-  paraphrase tier and the distractor families exist to make that harder, not impossible; a
-  future version should add a held-out template set released only for scoring.
-- English only. The engine's rules cover Japanese too; the generator does not yet.
+  paraphrase tier and the distractor families exist to make that harder, not impossible. The
+  held-out tier is in the repository, so it is held out only as long as nobody writes rules from
+  it; a version released only for scoring would be stronger.
+- English only on the v1.0 tiers; the held-out tier adds Japanese sentences around English names
+  and dates, not fully Japanese streams (dates stay English, as the generator writes them).
 - One principal per stream, no cross-principal facts, no calendar events.
 - Text-match tolerance (token F1 ≥ 0.5) is a choice; the `counts` in every run let anyone
   recompute with another rule.

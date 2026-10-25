@@ -236,6 +236,28 @@ fn source_excerpt(conn: &Connection, event_id: i64, quote: &str) -> Result<Optio
     )))
 }
 
+/// The sections of a consolidator input, in the order [`consolidation_input`] writes them:
+/// `(name, columns)`. The instruction the model reads (`shogun_core::dreamcycle::loops`) names
+/// every one of them with its columns, and a test there holds the two together, so a section added
+/// here cannot go undescribed.
+pub const SECTIONS: [(&str, &str); 6] = [
+    ("Now", ""),
+    ("Open items", "id | kind | horizon | due | text | evidence"),
+    ("Recently closed", "id | status | text"),
+    ("New signals", "kind | event | text | quote"),
+    ("Outcomes noticed in later messages", "id | outcome | event | quote | new due"),
+    ("Sources", ""),
+];
+
+/// `Name (columns):` / `Name:`, the header line of section `i` of [`SECTIONS`].
+pub fn section_header(i: usize) -> String {
+    match SECTIONS.get(i) {
+        Some((name, "")) => format!("{name}:"),
+        Some((name, columns)) => format!("{name} ({columns}):"),
+        None => String::new(),
+    }
+}
+
 /// id, kind, horizon, due, text, last seen.
 type OpenRow = (i64, String, Option<String>, Option<i64>, String, i64);
 
@@ -371,16 +393,16 @@ pub fn consolidation_input(conn: &Connection, now: i64) -> Result<Option<Consoli
     let none = || vec!["(none)".to_string()];
     let or_none = |v: Vec<String>| if v.is_empty() { none() } else { v };
     let text = [
-        format!("Now: {}", stamp(now)),
-        "Open items (id | kind | horizon | due | text | evidence):".into(),
+        format!("{} {}", section_header(0), stamp(now)),
+        section_header(1),
         or_none(open.into_iter().map(|(_, _, l)| l).collect()).join("\n"),
-        "Recently closed (id | status | text):".into(),
+        section_header(2),
         or_none(closed).join("\n"),
-        "New signals (kind | event | text | quote):".into(),
+        section_header(3),
         or_none(signal_lines).join("\n"),
-        "Outcomes noticed in later messages (id | outcome | event | quote | new due):".into(),
+        section_header(4),
         or_none(outcome_lines).join("\n"),
-        "Sources:".into(),
+        section_header(5),
         sources.into_iter().map(|(_, s)| s).collect::<Vec<_>>().join("\n\n"),
     ]
     .join("\n");
@@ -1153,6 +1175,13 @@ mod tests {
         assert!(input.text.contains(&format!("[E{done}]")), "its source is shown: {}", input.text);
         assert!(input.events.contains(&done));
         assert!(input.read.iter().any(|r| *r < 0), "the outcome is read by this call: {:?}", input.read);
+        // Every section header of the input is one of SECTIONS, in order, each exactly once (the
+        // instruction describes SECTIONS; shogun-core tests that side).
+        let headers: Vec<&str> = input.text.lines().filter(|l| SECTIONS.iter().any(|(name, _)| l.starts_with(&format!("{name}:")) || l.starts_with(&format!("{name} (")))).collect();
+        assert_eq!(headers.len(), SECTIONS.len(), "{headers:?}");
+        for (i, line) in headers.iter().enumerate() {
+            assert!(line.starts_with(&section_header(i)), "{line} / {}", section_header(i));
+        }
 
         trace(&conn, NOW);
         let answer = json!({"resolved": [{"id": format!("C{id}"), "event_id": done, "quote": "Sent the launch deck to Toru"}]});

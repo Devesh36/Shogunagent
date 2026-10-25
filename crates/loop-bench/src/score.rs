@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn the_oracle_scores_perfectly_and_nothing_scores_nothing() {
-        for tier in Tier::ALL {
+        for tier in Tier::EVERY {
             let data = generate(tier, 42);
             let (m, _) = score(&data, &oracle_predictions(&data));
             for value in [m.commitment_recall, m.commitment_precision, m.open_loop_recall, m.open_loop_precision, m.resolution_accuracy, m.provenance_validity, m.tracking_f1] {

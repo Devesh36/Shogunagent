@@ -392,8 +392,10 @@ fn attach_local_embedder(db: Db) -> Db {
 /// `SHOGUN_MULTI_ROOT`, else `./principals`) and exit. A principal with no new material since its
 /// cursor is not reviewed and costs no model call. A principal whose token store
 /// (`SHOGUN_TOKEN_STORE_DIR`, else `<root>/.tokens`, sealed with the principal's own key) holds a
-/// Batch relay credential is reviewed through the relay with it; every other principal with the
-/// on-device local rules (no model, no egress). Prints one line of counts, never content.
+/// Batch relay credential is reviewed through the relay with it, and then given the loop
+/// consolidator's turn on the same relay lane when it is due (E49: unread signals or outcomes, at
+/// most hourly and eight times a local day); every other principal with the on-device local rules
+/// (no model, no egress, no consolidator). Prints one line of counts, never content.
 async fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
     use shogun_core::llm::relay::{ModelClass, RelayBatchClient, RelayConfig};
     use shogun_core::llm::transport::ReqwestTransport;

@@ -33,7 +33,7 @@ USAGE
       ({\"adapter\": {...}, \"predictions\": [...], \"latency\"?: {...}, \"usage\"?: {...}}).
 
 OPTIONS
-  --tiers <LIST>        comma-separated tiers (default easy,medium,hard)
+  --tiers <LIST>        comma-separated tiers (default easy,medium,hard; also heldout)
   --seeds <N>           number of seeds (default 5)
   --first-seed <N>      first seed (default 42); seeds are consecutive
   --out <FILE>          write the results JSON here
@@ -121,7 +121,7 @@ fn fmt(v: &Value) -> String {
 fn print_summary(results: &Value) {
     let name = results["adapter"]["name"].as_str().unwrap_or("?");
     println!("adapter: {name}  seeds: {}  profile: {}", results["seeds"], results["environment"]["profile"]);
-    for tier in Tier::ALL.map(Tier::as_str) {
+    for tier in Tier::EVERY.map(Tier::as_str) {
         let Some(entry) = results["summary"].get(tier) else { continue };
         for point in OPERATING_POINTS {
             println!("\n[{tier} / {}] (n = {})", point.name, entry["seeds"]);
