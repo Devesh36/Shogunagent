@@ -242,6 +242,20 @@ pub enum Command {
     Config {
         action: ConfigAction,
     },
+    /// `shogun principal import --from <memory.db> --root <dir> --principal <id>` (ShogunAgent
+    /// E2-T6): copy a single-user store into the principal layout and apply the pending
+    /// migrations. Runs locally, no server call.
+    Principal(PrincipalCommand),
+}
+
+/// The `principal` subcommands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrincipalCommand {
+    Import {
+        from: String,
+        root: String,
+        principal: String,
+    },
 }
 
 /// Filters for `lessons list`. Default is the Settings/management list (every row).
@@ -845,9 +859,11 @@ impl Command {
             },
             Command::ApiTokens => Tool::ApiTokensList,
             Command::ApiRestrict { .. } => Tool::ApiConnectionsRestrict,
-            Command::ApiStatus | Command::Metrics | Command::Help | Command::Config { .. } => {
-                return None
-            }
+            Command::ApiStatus
+            | Command::Metrics
+            | Command::Help
+            | Command::Config { .. }
+            | Command::Principal(_) => return None,
         })
     }
 }
@@ -1108,6 +1124,10 @@ COMMANDS:
     mail history                         Gmail write-back history (the undo list)
     config path|show|validate Show the Shougun.md path, the parsed config (JSON), or
                               validation (ok, or one error per line; exit 1)
+    principal import --from <memory.db> --root <dir> --principal <id>
+                              Copy a single-user store into <dir>/<id>/memory.db and apply the
+                              pending migrations (local; the key comes from SHOGUN_DB_KEY or
+                              SHOGUN_DB_KEY_<ID>)
     help                      This help
 
 GLOBAL FLAGS:

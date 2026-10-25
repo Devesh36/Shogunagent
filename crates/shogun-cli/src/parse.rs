@@ -2,7 +2,7 @@
 //! whole command grammar is unit-testable without spawning a process. Dependency-free (no clap):
 //! the grammar is small and the tests are the spec.
 
-use crate::command::{AgentSourceCommand, CaptureExclusionsCommand, Command, ConnectionsCommand, ConfigAction, ImportSource, ListOrGet, MicrophoneCommand, RecapEditBody, TranslateCommand, TranslateRegisterCommand, VoiceDictionaryCommand};
+use crate::command::{AgentSourceCommand, CaptureExclusionsCommand, Command, ConnectionsCommand, ConfigAction, ImportSource, ListOrGet, MicrophoneCommand, PrincipalCommand, RecapEditBody, TranslateCommand, TranslateRegisterCommand, VoiceDictionaryCommand};
 use shogun_mcp::backend::SearchDepthV1;
 use shogun_mcp::forms_api::FormOperation;
 
@@ -78,6 +78,7 @@ fn expected_for(command: &str) -> Option<&'static str> {
         "search depth" => "warm | auto | all",
         "search source kind" => "meeting | state | brief | person | project | thread | period",
         "config" => "path | show | validate",
+        "principal" => "import --from <memory.db> --root <dir> --principal <id>",
         "api" => "status | tokens",
         "actions" => "questions | answer | steer",
         "mail" => "triage | labels | rules | history | status | on | off",
@@ -970,6 +971,7 @@ fn parse_command(positionals: &[String]) -> Result<Command, CliError> {
             };
             Ok(Command::Config { action })
         }
+        "principal" => parse_principal(rest),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
 }
@@ -3295,5 +3297,79 @@ mod memory_note_tests {
             assert_eq!(wire::to_call(&invocation.command,false).unwrap().path,path);
         }
         assert!(parse::parse(&["memory-notes".into(),"change".into(),r#"{"action":"forget","id":2}"#.into()]).is_err());
+    }
+}
+
+/// `principal import --from <memory.db> --root <dir> --principal <id>` (E2-T6). Flags may come in
+/// any order; each is required once.
+fn parse_principal(rest: &[String]) -> Result<Command, CliError> {
+    match rest.first().map(String::as_str) {
+        Some("import") => {}
+        Some(other) => {
+            return Err(CliError::UnknownSubcommand { command: "principal", got: other.to_string() })
+        }
+        None => return Err(CliError::MissingArgument("import")),
+    }
+    let mut from = None;
+    let mut root = None;
+    let mut principal = None;
+    let mut i = 1;
+    while i < rest.len() {
+        let value = rest.get(i + 1);
+        match rest[i].as_str() {
+            "--from" => from = Some(value.ok_or(CliError::MissingFlagValue("--from"))?.clone()),
+            "--root" => root = Some(value.ok_or(CliError::MissingFlagValue("--root"))?.clone()),
+            "--principal" => {
+                principal = Some(value.ok_or(CliError::MissingFlagValue("--principal"))?.clone())
+            }
+            other => {
+                return Err(CliError::UnknownSubcommand { command: "principal import", got: other.to_string() })
+            }
+        }
+        i += 2;
+    }
+    Ok(Command::Principal(PrincipalCommand::Import {
+        from: from.ok_or(CliError::MissingArgument("--from <memory.db>"))?,
+        root: root.ok_or(CliError::MissingArgument("--root <dir>"))?,
+        principal: principal.ok_or(CliError::MissingArgument("--principal <id>"))?,
+    }))
+}
+
+#[cfg(test)]
+mod principal_tests {
+    use super::*;
+
+    #[test]
+    fn principal_import_takes_its_three_flags_in_any_order() {
+        let args: Vec<String> = ["principal", "import", "--root", "/tmp/p", "--principal", "alice", "--from", "/tmp/memory.db"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            parse(&args).unwrap().command,
+            Command::Principal(PrincipalCommand::Import {
+                from: "/tmp/memory.db".into(),
+                root: "/tmp/p".into(),
+                principal: "alice".into(),
+            })
+        );
+        for bad in [
+            vec!["principal"],
+            vec!["principal", "export"],
+            vec!["principal", "import", "--from", "/tmp/memory.db", "--root", "/tmp/p"],
+            vec!["principal", "import", "--from"],
+            vec!["principal", "import", "--bogus", "x", "--from", "a", "--root", "b", "--principal", "c"],
+        ] {
+            let args: Vec<String> = bad.iter().map(|s| s.to_string()).collect();
+            assert!(parse(&args).is_err(), "{bad:?}");
+        }
+        // No wire call: it runs locally.
+        let local = Command::Principal(PrincipalCommand::Import {
+            from: "a".into(),
+            root: "b".into(),
+            principal: "c".into(),
+        });
+        assert!(crate::wire::to_call(&local, false).is_none());
+        assert!(local.tool().is_none());
     }
 }
