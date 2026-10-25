@@ -314,7 +314,7 @@
 | E39 | Phase 3 C の積み残し。サイドカーの `DELETE /v1/principals/<id>`（SCIM 削除の猶予後に実ファイルを消す）、SAML の未対応部分、メンバー鍵の発行を冪等にする | `crates/shogun-core/src/server`, `apps/api/src/enterprise/` |
 | E40 | リリース工学（準備のみ）。npm / PyPI の公開 workflow は手動実行と `environment: release` の承認の裏に置き、版の付け方と変更履歴を決める。実際の公開はオーナーの確認後。準備済み（2026-10-25、未公開）: `publish-npm.yml` / `publish-pypi.yml`（手動実行のみ・main のみ・既定は dry run・`environment: release`・trusted publishing でトークンを置かない）、CI の `release-dry-run` ジョブ（`npm publish --dry-run`、`python -m build` + `twine check`、workflow の YAML 検査、版の一致検査）、各パッケージの `CHANGELOG.md` | `.github/workflows/publish-*.yml`, `docs/release.md` |
 | E41 | 本番デプロイの手順書とステージング設定（準備のみ）。Workers・Postgres・サイドカーの順序、ロールバック、シークレットの一覧（値は書かない）。実デプロイはオーナーの確認後。準備済み（2026-10-25、未デプロイ）: `docs/deploy/production.md`（構成、初回と更新の順序、SQL 19 ファイルの適用順、Worker・ルーター・サイドカーの環境変数とシークレットの一覧、ルーターの Hyperdrive バインディング、スモークと適合スイート、構成要素ごとのロールバック、未決のオーナー判断を含むローンチ前チェックリスト）。wrangler に env ブロックが無いため、ステージングは別名の Worker をコピーした設定から出すコマンドで記述。`scripts/check-env-docs.mjs`（CI の invariant guards ジョブ）が apps/api・apps/router の読む環境変数が手順書に無いと落とす | `docs/deploy/production.md`, `deploy/` |
-| E42 | ディレクトリ提出の前提を片付ける。OpenAI のクレジット販売の規定への対応案、提出物の差分チェック。提出そのものはオーナーの確認後 | `docs/directories/` |
+| E42 | ディレクトリ提出の前提を片付ける。OpenAI のクレジット販売の規定への対応案、提出物の差分チェック。提出そのものはオーナーの確認後。準備済み（2026-10-25、未提出）: `docs/directories/openai-credit-rule.md`（規定の記録、3 案と推奨: ChatGPT クライアントには無料の読み取りツールだけを出し、課金はリンクで外へ）、`docs/directories/submission-checklist.md`（ディレクトリごとの必要物と現状の差分、ブロッカー: hosted `/mcp` の 503、ホスト名の不一致、注釈、法務文書の DRAFT、法人名と連絡先、デモアカウント、ロゴ、npm 未公開） | `docs/directories/` |
 
 ## 6B. Phase 5：拡張
 
