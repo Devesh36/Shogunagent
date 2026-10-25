@@ -284,6 +284,16 @@ Use `shogun meeting export 42 --transcript` to read a particular archived meetin
 3. In Cursor agent chat: call `profile.whoami`, then `memory.get_context`, then `memory.append_note` with a short note.  
 4. Disable Memory API in Settings → restart MCP → process should refuse to start (stderr: `Memory API is disabled`, naming the settings file it checked).
 
+## Response envelope (all three faces)
+
+MCP, REST and the CLI answer with the same envelope fields (E34, invariant 4), from one table in
+`shogun_mcp::envelope`: a refusal names `next_action` (MCP in the JSON-RPC error's `data` or in an
+`isError` text block, REST at the top of the error body, the CLI prints that body), and a state
+read or `profile.whoami` carries `usage` (`{unit: "read", quantity: 1, cost_micro_usd: 0}`),
+`latency_ms` and `next_action: null`. `memory.search` and `memory.get_events` carry no read
+envelope on any face. The values and what each one asks of the caller are in
+[`docs/api/envelope.md`](api/envelope.md).
+
 ## Troubleshooting
 
 When a client reports that the server failed to start, or every call fails, read the client's MCP server log: that is `shogun-mcp`'s stderr. The start-up checks print lines that start with `shogun-mcp:` (`shogun-api:` for REST), name the file they checked with the home folder shown as `~`, and never print a token (issue #744).
