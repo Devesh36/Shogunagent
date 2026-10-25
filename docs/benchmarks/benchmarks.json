@@ -1,0 +1,172 @@
+{
+  "schema": "1",
+  "generated_at": "2026-10-25T09:38:21Z",
+  "commit": "e21f3ea5ab373e4a1377bc7977d1fe06f31b76e7",
+  "commit_dirty": true,
+  "embedding": null,
+  "reader": null,
+  "judge": null,
+  "seeds": [
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51
+  ],
+  "environment": {
+    "os": "linux",
+    "arch": "x86_64",
+    "profile": "release",
+    "in_memory": true,
+    "search_path": "federated",
+    "events": 20000,
+    "k": 10
+  },
+  "suites": [
+    {
+      "name": "query_p95",
+      "status": "ok",
+      "metric": "query_p95_ms",
+      "value": 6.681641000000001,
+      "ci95": [
+        6.10002550116082,
+        7.263256498839182
+      ],
+      "n": 10,
+      "tokens_per_answer": 172.8478,
+      "write_cost_micro_usd": 0.0,
+      "p95_ms": 6.681641000000001,
+      "direction": "lower",
+      "workload": "clean",
+      "queries_per_seed": 500,
+      "per_seed": [
+        6.974243,
+        7.097849,
+        7.124847,
+        6.292596,
+        4.970941,
+        6.604344,
+        6.153365,
+        7.10676,
+        8.056555,
+        6.43491
+      ]
+    },
+    {
+      "name": "temporal_recall_at_1",
+      "status": "ok",
+      "metric": "recall_at_1",
+      "value": 1.0,
+      "ci95": [
+        1.0,
+        1.0
+      ],
+      "n": 10,
+      "tokens_per_answer": 149.5,
+      "write_cost_micro_usd": 0.0,
+      "p95_ms": 8.1257269,
+      "direction": "higher",
+      "workload": "temporal",
+      "queries_per_seed": 12,
+      "per_seed": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "abstention_false_evidence",
+      "status": "ok",
+      "metric": "false_evidence_rate",
+      "value": 0.0,
+      "ci95": [
+        0.0,
+        0.0
+      ],
+      "n": 10,
+      "tokens_per_answer": 0.0,
+      "write_cost_micro_usd": 0.0,
+      "p95_ms": 9.9410778,
+      "direction": "lower",
+      "workload": "abstention",
+      "queries_per_seed": 500,
+      "per_seed": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "name": "multi_session_coverage_at_5",
+      "status": "ok",
+      "metric": "coverage_at_5",
+      "value": 1.0,
+      "ci95": [
+        1.0,
+        1.0
+      ],
+      "n": 10,
+      "tokens_per_answer": 137.984375,
+      "write_cost_micro_usd": 0.0,
+      "p95_ms": 5.6278329,
+      "direction": "higher",
+      "workload": "multi-session",
+      "queries_per_seed": 48,
+      "per_seed": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "name": "omnimemeval",
+      "status": "not_run",
+      "metric": null,
+      "value": null,
+      "ci95": null,
+      "n": 0,
+      "tokens_per_answer": null,
+      "write_cost_micro_usd": null,
+      "p95_ms": null,
+      "reason": "SHOGUN_OMNIMEMEVAL_DIR is not set; the OmniMemEval question set is not bundled with this repository"
+    },
+    {
+      "name": "mem0-harness",
+      "status": "not_run",
+      "metric": null,
+      "value": null,
+      "ci95": null,
+      "n": 0,
+      "tokens_per_answer": null,
+      "write_cost_micro_usd": null,
+      "p95_ms": null,
+      "reason": "SHOGUN_MEM0_HARNESS_DIR is not set; the Mem0 public harness conversations is not bundled with this repository"
+    }
+  ]
+}

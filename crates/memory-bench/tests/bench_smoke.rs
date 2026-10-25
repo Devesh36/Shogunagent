@@ -662,3 +662,151 @@ fn slicing_a_clean_corpus_leaves_the_two_retention_numbers_equal() {
         "clean has no redundancy, so the two definitions must agree"
     );
 }
+
+// E12-T1 / E12-T2: the two closed weaknesses, measured on the daemon's path, and the harness.
+
+fn federated(workload: &str, events: usize, queries: usize) -> BenchConfig {
+    BenchConfig {
+        workload: workload.to_string(),
+        events,
+        queries,
+        warmup: 2,
+        search_path: memory_bench::backend::SearchPath::Federated,
+        ..BenchConfig::smoke()
+    }
+}
+
+#[test]
+fn temporal_recall_at_1_is_perfect_on_the_federated_path() {
+    // Baseline before E12-T1: recall@1 0.000, stale-outranking 100% (BASELINE.md). The question
+    // now says "currently", and the search orders equally matching rows by when they were last
+    // seen, so the value restated last ranks first in every tracked project.
+    let report = memory_bench::run(&federated("temporal", 2_000, 12)).expect("run");
+    assert_eq!(report.quality.temporal_queries, 12);
+    assert_eq!(report.quality.recall_at_1, Some(1.0), "{:?}", report.quality);
+    assert_eq!(report.quality.stale_outranked_rate, Some(0.0), "{:?}", report.quality);
+    assert_eq!(report.quality.recall_at_5, Some(1.0));
+}
+
+#[test]
+fn abstention_returns_no_evidence_on_the_federated_path() {
+    // Baseline before E12-T1: false evidence 100%. The relevance floor blanks a result whose best
+    // row covers at most half of the question with more than one word missing.
+    let report = memory_bench::run(&federated("abstention", 2_000, 72)).expect("run");
+    assert_eq!(report.quality.abstention_queries, 72);
+    assert_eq!(report.quality.false_evidence, 0, "{:?}", report.quality);
+    assert_eq!(report.quality.false_evidence_rate, Some(0.0));
+}
+
+#[test]
+fn the_floor_does_not_cost_the_answer_bearing_workloads_their_recall() {
+    for (workload, queries) in [("clean", 50), ("multi-session", 48), ("preference", 32)] {
+        let report = memory_bench::run(&federated(workload, 2_000, queries)).expect("run");
+        assert_eq!(
+            report.quality.recall_at_10,
+            Some(1.0),
+            "{workload}: {:?}",
+            report.quality
+        );
+    }
+}
+
+#[test]
+fn evidence_size_is_reported_per_query() {
+    let report = memory_bench::run(&federated("clean", 600, 20)).expect("run");
+    let chars = report.quality.evidence_chars_per_query.expect("chars");
+    let tokens = report.quality.evidence_tokens_per_query.expect("tokens");
+    assert!(chars > 0.0);
+    assert!((tokens - chars / memory_bench::metrics::CHARS_PER_TOKEN).abs() < 1e-9);
+}
+
+#[test]
+fn harness_smoke_emits_the_published_shape() {
+    use memory_bench::harness::{self, HarnessConfig, SuiteStatus};
+
+    let config = HarnessConfig::smoke();
+    let mut seen = Vec::new();
+    let benchmarks = harness::run(&config, |suite, seed, _| seen.push((suite, seed))).expect("run");
+    assert_eq!(seen.len(), harness::SUITES.len() * config.seeds.len());
+
+    let json: serde_json::Value =
+        serde_json::from_str(&benchmarks.to_json().expect("json")).expect("parse");
+    for key in [
+        "generated_at",
+        "commit",
+        "embedding",
+        "reader",
+        "judge",
+        "seeds",
+        "suites",
+    ] {
+        assert!(json.get(key).is_some(), "missing top-level key {key}");
+    }
+    assert!(json["embedding"].is_null() && json["reader"].is_null() && json["judge"].is_null());
+    assert_eq!(json["seeds"], serde_json::json!([42, 43]));
+    assert!(json["generated_at"]
+        .as_str()
+        .is_some_and(|s| s.len() == 20 && s.ends_with('Z')));
+
+    let suites = json["suites"].as_array().expect("suites");
+    assert_eq!(suites.len(), 6);
+    for suite in suites {
+        for key in [
+            "name",
+            "metric",
+            "value",
+            "ci95",
+            "n",
+            "tokens_per_answer",
+            "write_cost_micro_usd",
+            "p95_ms",
+            "status",
+        ] {
+            assert!(suite.get(key).is_some(), "suite {} missing {key}", suite["name"]);
+        }
+    }
+    let by_name = |name: &str| {
+        suites
+            .iter()
+            .find(|suite| suite["name"] == name)
+            .unwrap_or_else(|| panic!("no suite {name}"))
+    };
+    assert_eq!(by_name("temporal_recall_at_1")["value"], 1.0);
+    assert_eq!(by_name("abstention_false_evidence")["value"], 0.0);
+    assert_eq!(by_name("multi_session_coverage_at_5")["n"], 2);
+    let p95 = by_name("query_p95");
+    assert!(p95["value"].as_f64().is_some_and(|v| v > 0.0));
+    assert_eq!(p95["ci95"].as_array().map(Vec::len), Some(2));
+    assert_eq!(p95["write_cost_micro_usd"], 0.0);
+    assert!(p95["tokens_per_answer"].as_f64().is_some_and(|v| v > 0.0));
+    for name in ["omnimemeval", "mem0-harness"] {
+        let stub = by_name(name);
+        assert_eq!(stub["status"], "not_run");
+        assert!(stub["value"].is_null() && stub["ci95"].is_null());
+        assert!(stub["reason"].as_str().is_some_and(|r| !r.is_empty()));
+    }
+    assert_eq!(
+        benchmarks
+            .suites
+            .iter()
+            .filter(|suite| suite.status == SuiteStatus::Ok)
+            .count(),
+        4
+    );
+
+    // Round trip through the writer, into a directory it has to create.
+    let dir = std::env::temp_dir().join(format!(
+        "memory-bench-harness-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let path = dir.join("nested").join("benchmarks.json");
+    harness::write(&benchmarks, &path.to_string_lossy()).expect("write");
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+    assert_eq!(written["suites"].as_array().map(Vec::len), Some(6));
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+}

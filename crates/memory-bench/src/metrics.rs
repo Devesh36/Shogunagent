@@ -191,6 +191,9 @@ pub struct QualityAccumulator {
     /// Abstention queries that still came back with rows — evidence for an answer that does not
     /// exist.
     false_evidence: u64,
+    /// Characters of event text returned per query (every query, answerable or not): the context
+    /// a reader model would be handed per answer. Tokens are estimated at four characters each.
+    evidence_chars: Vec<usize>,
 }
 
 impl QualityAccumulator {
@@ -262,6 +265,19 @@ impl QualityAccumulator {
                 }
             }
         }
+    }
+
+    /// Record how much event text one query returned, whatever its outcome.
+    pub fn record_evidence_chars(&mut self, chars: usize) {
+        self.evidence_chars.push(chars);
+    }
+
+    /// Mean characters of returned evidence per query; `None` before any query ran.
+    pub fn evidence_chars_per_query(&self) -> Option<f64> {
+        if self.evidence_chars.is_empty() {
+            return None;
+        }
+        Some(self.evidence_chars.iter().sum::<usize>() as f64 / self.evidence_chars.len() as f64)
     }
 
     pub fn record_failure(&mut self) {
@@ -351,9 +367,17 @@ impl QualityAccumulator {
             coverage_at_10: (self.multi_evidence_queries > 0 && retrieval_k >= 10)
                 .then(|| self.coverage_at(10))
                 .flatten(),
+            evidence_chars_per_query: self.evidence_chars_per_query(),
+            evidence_tokens_per_query: self
+                .evidence_chars_per_query()
+                .map(|chars| chars / CHARS_PER_TOKEN),
         }
     }
 }
+
+/// Rough token estimate for returned evidence: four characters per token, the usual English
+/// figure. It is a size indicator for `benchmarks.json`, not a tokenizer.
+pub const CHARS_PER_TOKEN: f64 = 4.0;
 
 /// Serializable form of [`QualityAccumulator`]. Every rate is `Option` so a workload that cannot
 /// express a metric reports `null` rather than a number that looks like a measurement.
@@ -383,6 +407,10 @@ pub struct QualitySummary {
     /// query needed more than one fact, where it would merely restate recall.
     pub coverage_at_5: Option<f64>,
     pub coverage_at_10: Option<f64>,
+    /// Mean characters of event text returned per query — what a reader would be handed.
+    pub evidence_chars_per_query: Option<f64>,
+    /// The same at [`CHARS_PER_TOKEN`] characters per token.
+    pub evidence_tokens_per_query: Option<f64>,
 }
 
 #[cfg(test)]

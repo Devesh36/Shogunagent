@@ -9,7 +9,8 @@ p95 計測ベンチをCIに置く（Linuxで実行可能）"* — and it is the 
 kept for Phase 1."*
 
 Measured baseline: [BASELINE.md](BASELINE.md) (100k events, release, on-disk). Machine-readable
-reports in [baselines/](baselines/).
+reports in [baselines/](baselines/). The published same-harness run (ten seeds, confidence
+intervals, `benchmarks.json`) is described in [`docs/benchmarks/README.md`](../../docs/benchmarks/README.md).
 
 ## Purpose
 
@@ -40,10 +41,19 @@ cargo run -p memory-bench --release -- \
   --db /tmp/memory-bench-run --out reports
 
 cargo run -p memory-bench --release -- --workload duplicate --events 10000 --queries 200
-cargo run -p memory-bench --release -- --workload temporal  --events 50000 --queries 12
+cargo run -p memory-bench --release -- --workload temporal  --events 50000 --queries 12 --path federated
+
+# The same-harness publication (E12-T2): every suite over ten seeds, one benchmarks.json.
+cargo run -p memory-bench --release -- harness --seeds 10 --events 100000 --out docs/benchmarks/benchmarks.json
 
 cargo run -p memory-bench -- --help
 ```
+
+`--path federated` is the daemon's retrieval path (`search_federated`, what every Memory API
+search runs); `--path hybrid` (the default, kept so `BASELINE.md` stays comparable) is the older
+plain-RRF path. The quality fixes of E12-T1 — newest-first ordering for a question about the
+present state, and the relevance floor that returns no evidence for a question nothing covers —
+live on the federated path, so quote `temporal` and `abstention` numbers from it.
 
 Always `--release`. A debug build's latency is roughly an order of magnitude off; the report stamps
 `environment.profile` so a debug number cannot quietly become a quoted one.
@@ -60,6 +70,8 @@ runner       how we execute    seed → generate → ingest → warm → measure
 metrics      how we measure    latency distributions, recall/MRR, amplification, staleness
    ↓
 report       what we save      one JSON artifact per run, with config + commit
+   ↓
+harness/     what we publish   seeds × suites → mean, 95% interval, tokens/answer → benchmarks.json
 ```
 
 The load-bearing piece is the `MemoryBackend` trait. A later experiment — selective update,
@@ -73,7 +85,7 @@ no longer be measuring the same thing, and the comparison would prove nothing.
 |---|---|---|
 | `clean` | Unique events, one answer per query | The reference point. Write amplification here should be 1.0 and nothing should collapse. |
 | `duplicate` | ~30% repeated facts: half byte-identical, half reworded | What the `content_hash` contract catches, and what it misses. Exact repeats collapse via `insert_or_touch`; reworded ones hash differently and become second rows. |
-| `temporal` | Facts overwritten by later facts; present-tense questions | How often retrieval hands back a value the user already overruled. |
+| `temporal` | Facts overwritten by later facts; present-tense questions ("where does {p} **currently** store its records") | How often retrieval hands back a value the user already overruled. The question's recency cue is read by the search itself (`query_asks_for_latest`), which orders equally matching rows by when they were last seen. Wording changed 2026-10-25 (E12-T1); earlier temporal numbers are not comparable. |
 
 The background is deliberately confusable with the answers — same projects, same people, same
 vocabulary. A corpus of random strings would make retrieval look perfect and measure nothing,
@@ -103,6 +115,15 @@ the quality numbers incomparable.
 **Staleness** — `stale_returned` (a superseded fact appeared at all) and `stale_outranked_current`
 (a superseded fact outranked every correct one). The second is the sharper number: a stale row
 sitting at rank 9 is untidy, one at rank 1 is a wrong answer.
+
+**False evidence** — on `abstention`, the share of unanswerable questions that still got rows
+back. On the federated path the search's relevance floor (`RELEVANCE_FLOOR_COVERAGE`) returns no
+evidence when no row covers more than half of the question's words (idf-weighted; source cues
+never required; exactly half passes only with a single word missing), so an empty list here is
+the search abstaining, not failing.
+
+**Evidence size** — `evidence_chars_per_query` / `evidence_tokens_per_query` (four characters per
+token): the event text a query hands back, i.e. the context a reader would be given per answer.
 
 **Resources** — sampled peak RSS and mean CPU% over the run. Mean CPU is total CPU time over
 total wall time between the first and last reading — duration-weighted, so an unevenly sampled run
