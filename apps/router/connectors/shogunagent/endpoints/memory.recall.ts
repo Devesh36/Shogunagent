@@ -52,5 +52,11 @@ export const memoryRecall = defineEndpoint({
       response: { status: 200, body: { excerpts: [], people: [], projects: [], chars: 0 } },
       expect: { usage: { quantity: 0, cost_micro_usd: 0 } },
     },
+    {
+      scenario: "synthetic-state-unavailable",
+      input: { query: "venue for the offsite", max_chars: 1200 },
+      response: { status: 503, body: { error: "unavailable" } },
+      expect: { error: true },
+    },
   ],
 });

@@ -6,7 +6,7 @@
     {
       "vendor": "shogunagent",
       "tool_name": "state.commitments.list",
-      "description": "Find what the user committed to: promises, deliverables and deadlines they made to others. Lists the user's commitments — things the user said they would do, with the person they owe it to, the due date when known, the status (open, done, overdue) and the quoted evidence each one rests on. Use for: what did the user commit to, what does the user owe someone, what is due this week, which promises are overdue, what has the user promised to deliver. Free read (L1); results are the user's own state, scoped to your agent key.",
+      "description": "Find what the user committed to: promises, deliverables and deadlines they made to others. Lists the user's commitments — things the user said they would do, with the person they owe it to, the due date when known, the status (open, done, overdue) and the quoted evidence behind each. Use for: what did the user commit to, what does the user owe someone, what is due this week, which promises are overdue, what has the user promised to deliver. Free read (L1); scoped to your agent key.",
       "annotations": { "exclusions": "Not for tasks other people owe the user (use state.open_loops.list), calendar events, or raw notes.", "categories": ["state", "memory"], "scope": "read / L1", "cost_micro_usd": 0, "first_party": true },
       "source": "apps/router/connectors/shogunagent/endpoints/state.commitments.list.ts (summary + description).",
       "verbatim": true
@@ -14,7 +14,7 @@
     {
       "vendor": "shogunagent",
       "tool_name": "state.open_loops.list",
-      "description": "What is pending with a person or project: unanswered questions, blockers, things others owe the user. Lists the user's open loops — threads waiting on someone else, unanswered questions, blockers and follow-ups, each with the person or project it belongs to, when it was last seen and the quoted evidence. Use for: what is pending with this person, what is the user waiting on, what is blocked, what should the user follow up on, what did someone promise the user. Free read (L1); scoped to your agent key.",
+      "description": "What is pending with a person or project: unanswered questions, blockers, things others owe the user. Lists the user's open loops — threads waiting on someone else, unanswered questions, blockers and follow-ups, each with the person or project it belongs to, when last seen and the quoted evidence. Use for: what is pending with this person, what is the user waiting on, what is blocked, what should the user follow up on, what did someone promise the user. Free read (L1); scoped to your agent key.",
       "annotations": { "exclusions": "Not for the user's own promises (use state.commitments.list), calendar events, or full message history.", "categories": ["state", "memory"], "scope": "read / L1", "cost_micro_usd": 0, "first_party": true },
       "source": "apps/router/connectors/shogunagent/endpoints/state.open_loops.list.ts (summary + description).",
       "verbatim": true
@@ -46,9 +46,73 @@
     {
       "vendor": "shogunagent",
       "tool_name": "actions.execute",
-      "description": "Send an email, post a message or create a calendar event on the user's behalf, after a human approves it. Queues an action that leaves the user's world — send an email reply, post a chat message, create a calendar event — for explicit human approval, then executes it through the user's connected services and records the outcome as state. Use for: reply to this thread, tell X that Y, put this on the calendar. Always L3: the call returns an approval URL; nothing is sent until a human approves. First-party tool run, $0.002 per executed action.",
+      "description": "Send an email, post a message or create a calendar event on the user's behalf, after a human approves it. Queues an action that leaves the user's world — send an email reply, post a chat message, create a calendar event — for human approval, then runs it through the user's connected services and records the outcome. Use for: reply to this thread, tell X that Y, put this on the calendar. Always L3: the call returns an approval URL; nothing is sent until a human approves. $0.002 per executed action.",
       "annotations": { "exclusions": "Not for drafting (draft locally and keep it as state), reading mail or messages (use the read tools), or anything the user has not asked to send.", "categories": ["approval", "communication", "state"], "scope": "external_send / L3", "cost_micro_usd": 2000, "first_party": true },
       "source": "apps/router/connectors/shogunagent/endpoints/actions.execute.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "gmail.drafts.create",
+      "description": "Draft an email in the user's Gmail without sending it: recipients, subject and plain-text body. Creates a Gmail draft in the user's own mailbox: to, cc, subject and a plain-text body, optionally inside an existing thread. Nothing is sent; the user reviews and sends it from Gmail. Use for: draft a reply to this email, prepare an email for the user to review, prepare a follow-up email without sending it. L2 (changes the user's mailbox, confirm once). $0.002 per call.",
+      "annotations": { "exclusions": "Not for sending (use gmail.messages.send, L3), reading mail, HTML or attachments.", "categories": ["communication"], "scope": "user_data_write / L2", "cost_micro_usd": 2000, "first_party": true },
+      "source": "apps/router/connectors/gmail/endpoints/drafts.create.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "gmail.messages.send",
+      "description": "Send an email from the user's Gmail after a human approves it. Sends a plain-text email from the user's Gmail account: to, cc, subject and body, optionally as a reply inside an existing thread. Use for: send this email, reply to the thread, email X the summary, send the follow-up. Always L3: the call returns an approval URL and nothing is sent until a human approves. $0.002 per sent email.",
+      "annotations": { "exclusions": "Not for drafting for review (use gmail.drafts.create, L2), bulk or marketing mail, reading mail, HTML or attachments.", "categories": ["communication", "approval"], "scope": "external_send / L3", "cost_micro_usd": 2000, "first_party": true },
+      "source": "apps/router/connectors/gmail/endpoints/messages.send.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "calendar.events.list",
+      "description": "List the user's Google Calendar events in a date range: meetings, start and end, attendees and locations. Reads events from the user's Google Calendar in a date range, expanded to single occurrences and ordered by start, with title, start, end, location and attendee emails. Use for: what meetings does the user have tomorrow, is the user free on Friday afternoon, when is the user meeting X, what is on the calendar this week. L1 read. $0.002 per call.",
+      "annotations": { "exclusions": "Not for creating or changing events (use calendar.events.create, L3) or for the user's commitments and deadlines (use state.commitments.list).", "categories": ["calendar"], "scope": "read / L1", "cost_micro_usd": 2000, "first_party": true },
+      "source": "apps/router/connectors/calendar/endpoints/events.list.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "calendar.events.create",
+      "description": "Create a Google Calendar event and invite attendees, after a human approves it. Creates an event on the user's Google Calendar with title, start, end, time zone, location, description and attendee emails, and sends the invitations. Use for: set up a meeting with X, put this on the calendar, book a call on Tuesday at 3pm, block time for the review. Always L3: the call returns an approval URL and nothing is created until a human approves. $0.002 per created event.",
+      "annotations": { "exclusions": "Not for reading the calendar (use calendar.events.list), finding free time across other people's calendars, or editing and deleting existing events.", "categories": ["calendar", "approval"], "scope": "external_send / L3", "cost_micro_usd": 2000, "first_party": true },
+      "source": "apps/router/connectors/calendar/endpoints/events.create.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "github.issues.list",
+      "description": "List issues in a GitHub repository, filtered by state, labels or assignee. Reads issues from one GitHub repository with number, title, state, labels, assignees, author, timestamps and URL; pull requests are left out. Use for: what issues are open in this repo, which bugs are assigned to X, what is labeled release-blocker, list the backlog of a repository. L1 read. $0.002 per call.",
+      "annotations": { "exclusions": "Not for pull requests or code search, creating issues (use github.issues.create, L3), or the user's own commitments (use state.commitments.list).", "categories": ["issue_tracking"], "scope": "read / L1", "cost_micro_usd": 2000, "first_party": true },
+      "source": "apps/router/connectors/github/endpoints/issues.list.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "github.issues.create",
+      "description": "Open a new issue in a GitHub repository, after a human approves it. Creates an issue in one GitHub repository with title, Markdown body, labels and assignees; watchers and assignees are notified. Use for: file a bug for this, open an issue to track the follow-up, report this problem on the repo, create a GitHub ticket and assign it to X. Always L3: the call returns an approval URL and nothing is created until a human approves. $0.002 per created issue.",
+      "annotations": { "exclusions": "Not for listing or searching issues (use github.issues.list), commenting, pull requests, or a private to-do for the user.", "categories": ["issue_tracking", "approval"], "scope": "external_send / L3", "cost_micro_usd": 2000, "first_party": true },
+      "source": "apps/router/connectors/github/endpoints/issues.create.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "linear.issues.create",
+      "description": "Create an issue in a Linear team, after a human approves it. Creates a Linear issue in one team with title, Markdown description, priority, assignee, labels and project; the team and assignee are notified. Use for: create a Linear ticket for this, track this bug in Linear, add a task to the team backlog, assign the follow-up to X in Linear. Always L3: the call returns an approval URL and nothing is created until a human approves. $0.002 per created issue.",
+      "annotations": { "exclusions": "Not for searching or updating existing issues, GitHub issues (use github.issues.create), or a private to-do for the user.", "categories": ["issue_tracking", "approval"], "scope": "external_send / L3", "cost_micro_usd": 2000, "first_party": true },
+      "source": "apps/router/connectors/linear/endpoints/issues.create.ts (summary + description).",
+      "verbatim": true
+    },
+    {
+      "vendor": "shogunagent",
+      "tool_name": "slack.messages.post",
+      "description": "Post a message to a Slack channel or thread, after a human approves it. Posts a message to a Slack channel, direct message or thread in the user's workspace, as plain text with Slack mrkdwn formatting. Use for: post the update in #team, tell the channel the deploy is done, reply in this Slack thread, message X on Slack. Always L3: the call returns an approval URL and nothing is posted until a human approves. $0.002 per posted message.",
+      "annotations": { "exclusions": "Not for reading channel history or searching Slack, editing or deleting messages, or email (use gmail.messages.send).", "categories": ["communication", "approval"], "scope": "external_send / L3", "cost_micro_usd": 2000, "first_party": true },
+      "source": "apps/router/connectors/slack/endpoints/messages.post.ts (summary + description).",
       "verbatim": true
     },
     {

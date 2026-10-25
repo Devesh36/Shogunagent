@@ -1,0 +1,21 @@
+{
+  "format": "shogunagent-provider/1",
+  "provider_id": "shogunagent",
+  "legal_name": "Select, Inc.",
+  "contact": { "url": "https://shogunai.si" },
+  "payout_account_ref": "first-party:select",
+  "pricing": [
+    { "endpoint": "state.commitments.list", "model": "per_call", "cost_micro_usd": 0 },
+    { "endpoint": "state.open_loops.list", "model": "per_call", "cost_micro_usd": 0 },
+    { "endpoint": "state.people.get", "model": "per_call", "cost_micro_usd": 0 },
+    { "endpoint": "memory.recall", "model": "per_call", "cost_micro_usd": 0 },
+    { "endpoint": "actions.execute", "model": "per_call", "cost_micro_usd": 2000 }
+  ],
+  "data_handling": {
+    "retention": "user_account",
+    "retention_days": 0,
+    "zero_retention": false,
+    "regions": ["global"],
+    "statement": "Reads are answered from the principal's own ShogunAgent store; the router and gateway keep no request or response body. An executed action and its outcome are recorded in that principal's store, which the principal can export or delete."
+  }
+}

@@ -41,18 +41,20 @@ curl -s -X POST http://localhost:8787/v1/router/discover \
         "categories": ["state", "memory"],
         "permission_level": "L1",
         "score": 0.787,
-        "scoreBreakdown": { "task_fit": 0.8089, "price": 1, "health": 0.999, "latency": 0.8929, "personal": 0 },
+        "scoreBreakdown": { "task_fit": 0.8089, "price": 1, "health": 0.999, "latency": 0.8929, "personal": 0.9729 },
         "price": { "model": "per_call", "unit": "call", "cost_micro_usd": 0, "quote_micro_usd": 0 },
         "p50_ms": 40,
-        "p95_ms": 120
+        "p95_ms": 120,
+        "personal": { "value": 0.9729, "runs": 0, "successes": 0, "basis": "none", "level": null, "cluster": "commit user" }
       }
     ],
     "ranking": {
-      "formula": "score = task_fit × (0.45*price + 0.30*health + 0.25*latency + 0*personal). …",
-      "weights": { "price": 0.45, "health": 0.3, "latency": 0.25, "personal": 0 }
+      "formula": "score = task_fit × (0.3825*price + 0.255*health + 0.2125*latency + 0.15*personal). …",
+      "weights": { "price": 0.3825, "health": 0.255, "latency": 0.2125, "personal": 0.15 },
+      "personal": { "formula": "personal = 0.6*success_rate + 0.25*price(cost_micro_usd / successes) + 0.15*hint_success_rate, …", "components": { "success_rate": 0.6, "cost_per_success": 0.25, "hint_success": 0.15 }, "min_runs": 5, "basis": "none", "cluster": "commit user" }
     },
     "catalog_hash": "…",
-    "considered": 17
+    "considered": 25
   },
   "usage": { "unit": "call", "quantity": 1, "cost_micro_usd": 0 },
   "latency_ms": 1,
@@ -61,7 +63,20 @@ curl -s -X POST http://localhost:8787/v1/router/discover \
 }
 ```
 
-Ranking (`src/discover.ts`): `task_fit` is BM25 over id, summary (×2), categories (×2), description and notes, normalised by the query's bound to [0, 1), with exclusion text left out of the index; `price = 1 / (1 + ln(1 + quote_micro_usd / 1000))` ($0 → 1, strictly decreasing); `health` = observed success rate (declared baseline until 20 runs); `latency = 1 / (1 + p95_ms / 1000)`; `personal` = 0 until Phase 2 reads `tool_runs`. Ties break on lower quote, then `tool_id`. `budget_micro_usd` drops tools whose quote exceeds it; `categories` restricts; `limit` ≤ 50.
+Ranking (`src/discover.ts`): `task_fit` is BM25 over id, summary (×2), categories (×2), description and notes, normalised by the query's bound to [0, 1), with exclusion text left out of the index; `price = 1 / (1 + ln(1 + quote_micro_usd / 1000))` ($0 → 1, strictly decreasing); `health` = observed success rate (declared baseline until 20 runs); `latency = 1 / (1 + p95_ms / 1000)`; `personal` is described below. Ties break on lower quote, then `tool_id`. `budget_micro_usd` drops tools whose quote exceeds it; `categories` restricts; `limit` ≤ 50.
+
+#### Personal factor (E20)
+
+`discover` called with an agent key as the bearer is personalised from that principal's own run history (`src/personal.ts`); without a key, or with an invalid one, it is the same for everyone.
+
+- **What is learned.** Every `ToolRunRecord` (body-less, `actor` is a hash of the key) also goes to `PersonalRanker`, which keeps per principal a row per tool × task cluster: counted runs, successes, runs that followed a hint and how many of those succeeded, and cost spent. Counted outcomes are `ok` (success), `empty`, `provider_error`, `transport_error`; permission stops, input errors, auth/payment stops, replays and anonymous runs are not evidence about the tool.
+- **Task clusters** use the same BM25 tokenizer as task fit: the cluster of a task phrase is its 3 most distinctive stemmed terms (highest catalog IDF), sorted — `"what did the user commit to"` → `"commit user"`. No model call.
+- **Value.** `personal = 0.6·success_rate + 0.25·price(cost_micro_usd / successes) + 0.15·hint_success_rate` over the rows of the task's cluster when it has ≥ 5 runs, otherwise over the tool's rows across clusters when those have ≥ 5 runs (`level: "task_cluster" | "tool"`). `price(·)` is the same price curve as the ranking; `hint_success_rate` falls back to `success_rate` when no hint was followed.
+- **Weight.** `PERSONAL_WEIGHT = 0.15`. The E8 mix (0.45 price, 0.30 health, 0.25 latency) is scaled by 0.85, so the published weights are 0.3825 / 0.255 / 0.2125 / 0.15 and `score = task_fit × (…)` as before.
+- **Neutral.** With fewer than 5 counted runs (`basis: "none"`), `personal` equals the candidate's own `0.45·price + 0.30·health + 0.25·latency`, so its score is exactly the unpersonalised score — the term has no effect until there is evidence.
+- **Explained.** Every candidate carries `personal: { value, runs, successes, basis: "principal" | "none", level, cluster }`, and `ranking.personal` publishes the formula, components and minimum.
+- **Isolated.** `PersonalStore` (`record(principal, …)`, `profile(principal)`) has no cross-principal read. `InMemoryPersonalStore` is the development stub; in production the store is the principal's own ShogunAgent state — `tool_runs` (V94) in that principal's file, reached through the state sidecar — never a hosted shared database. `test/personal.test.ts` shows that principal A's history never changes principal B's ranking.
+- **No self-preferencing.** The factor is computed the same way for first- and third-party tools; `test/personal.test.ts` shows a first-party tool with a worse history ranked below a third-party tool with a better one at equal fit and price.
 
 ### inspect
 
@@ -112,7 +127,25 @@ curl -s -X POST http://localhost:8787/mcp -H 'content-type: application/json' \
 Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the content-hashed catalog with `pnpm --filter @shogunagent/router build:catalog` (writes `dist/catalog.json` and `dist/catalog.<hash12>.json`; the compiler rejects duplicate ids, unknown categories, missing scope class or health, bad usage numbers and fixtures that fail their schema).
 
 - `shogunagent` (first-party, `caller_bearer` auth to the state REST face; base URL from `SHOGUNAGENT_API_BASE_URL`): `state.commitments.list`, `state.open_loops.list`, `state.people.get`, `memory.recall` — reads, L1, $0 — and `actions.execute` — `external_send`, L3, $0.002.
+- First-party connectors to the user's services (E22), each with `provider.json`, fixtures and replay tests, credentials named by `credential_env` and injected at the transport only, $0.002 per call (README §7):
+
+  | tool_id | class | level | credential_env |
+  |---|---|---|---|
+  | `gmail.drafts.create` | `user_data_write` | L2 (`input_required` once) | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `gmail.messages.send` | `external_send` | L3 (approval URL) | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `calendar.events.list` | `read` | L1 | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `calendar.events.create` | `external_send` | L3 | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `github.issues.list` | `read` | L1 | `GITHUB_TOKEN` |
+  | `github.issues.create` | `external_send` | L3 | `GITHUB_TOKEN` |
+  | `linear.issues.create` | `external_send` | L3 | `LINEAR_OAUTH_TOKEN` |
+  | `slack.messages.post` | `external_send` | L3 | `SLACK_TOKEN` |
+
+  In the hosted router the transport resolves the calling principal's own OAuth token for these variables; the definitions only name them. `test/connectors.test.ts` asserts the levels, that no L3 run reaches the transport, that the draft asks once, header-injection safety for Gmail and credential injection at fetch time only.
 - `monid` (passthrough, `src/passthrough/monid.ts`): endpoints imported from a Monid-style catalog JSON, executed through Monid's `POST /v1/run` with the router's `MONID_API_KEY` injected at the transport, priced at Monid's price + 5%. The fixture catalog holds 12 endpoints from 11 upstream providers (search, scrape, enrichment, SEO, image generation, and one L3 `provision-numbers`).
+
+## Listing pipeline (E21)
+
+`pnpm --filter @shogunagent/router listing:check <provider-dir> | --all` validates a provider directory for listing: `provider.json` (legal name, contact, opaque payout reference, per-endpoint price declarations, data handling) and the catalog compile, offline fixture replay through the connector hooks and through `run` with its permission tier, the scope classification (sends and payments are L3; a write is never `read`), the description lint (tasks named, exclusions, cost class, ≤ 400 characters, no superlatives) and price sanity (declared = usage model = what the fixtures settle). It prints a JSON report and exits 1 on any error; `.github/workflows/router-listing.yml` runs it on PRs touching `connectors/**` and posts the markdown report as the job summary. Details: `connectors/schema.md` §9–§10.
 
 ## Pluggable seams (what apps/api and the state layer wire later)
 
@@ -120,6 +153,7 @@ Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the conte
 |---|---|---|
 | `MeteringClient` (`identify`, `reserve`, `settle`) | `InMemoryMeteringClient` — `sa_` keys, $1 default balance, 401 for anonymous metered runs, x402-shaped 402 | apps/api wallet (E9) |
 | `RunLogSink` | `InMemoryRunLogSink` | `tool_runs` (V94) in the principal's store |
+| `PersonalStore` (behind `PersonalRanker`, E20) | `InMemoryPersonalStore` | the principal's `tool_runs` (V94) via the sidecar — never a hosted shared DB |
 | `IdempotencyStore` | `InMemoryIdempotencyStore` (24 h TTL, bounded) | the principal's store — never a hosted DB (invariant 2) |
 | `HealthStore` | `InMemoryHealthStore` (observed after 20 runs) | shared status store (`/.well-known/status.json`) |
 | `Transport` | `createFetchTransport({ env })` | same; `createReplayTransport` for tests |

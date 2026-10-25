@@ -5,7 +5,7 @@ export const stateOpenLoopsList = defineEndpoint({
   meta: {
     summary: "What is pending with a person or project: unanswered questions, blockers, things others owe the user.",
     description:
-      "Lists the user's open loops — threads waiting on someone else, unanswered questions, blockers and follow-ups, each with the person or project it belongs to, when it was last seen and the quoted evidence. " +
+      "Lists the user's open loops — threads waiting on someone else, unanswered questions, blockers and follow-ups, each with the person or project it belongs to, when last seen and the quoted evidence. " +
       "Use for: what is pending with this person, what is the user waiting on, what is blocked, what should the user follow up on, what did someone promise the user. " +
       "Free read (L1); scoped to your agent key.",
     exclusions: "Not for the user's own promises (use state.commitments.list), calendar events, or full message history.",
@@ -44,6 +44,12 @@ export const stateOpenLoopsList = defineEndpoint({
       input: { person: "Mika" },
       response: { status: 200, body: { items: [{ id: "l_7", text: "Mika to confirm the venue", kind: "followup", person: "Mika", last_seen: "2026-10-24T09:12:00Z", confidence: 0.88, provenance: { event_id: "e_9003", quote: "I'll confirm the venue tomorrow" } }], next_cursor: null } },
       expect: { usage: { quantity: 1, cost_micro_usd: 0 } },
+    },
+    {
+      scenario: "synthetic-state-unavailable",
+      input: { person: "Mika" },
+      response: { status: 503, body: { error: "unavailable" } },
+      expect: { error: true },
     },
   ],
 });

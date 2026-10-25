@@ -1,0 +1,18 @@
+{
+  "format": "shogunagent-provider/1",
+  "provider_id": "gmail",
+  "legal_name": "Select, Inc.",
+  "contact": { "url": "https://shogunai.si" },
+  "payout_account_ref": "first-party:select",
+  "pricing": [
+    { "endpoint": "drafts.create", "model": "per_call", "cost_micro_usd": 2000 },
+    { "endpoint": "messages.send", "model": "per_call", "cost_micro_usd": 2000 }
+  ],
+  "data_handling": {
+    "retention": "user_account",
+    "retention_days": 0,
+    "zero_retention": false,
+    "regions": ["global"],
+    "statement": "The router relays each call to Google's Gmail API and keeps no request or response body. The draft or sent message is stored in the user's own Gmail account under Google's terms until the user deletes it."
+  }
+}

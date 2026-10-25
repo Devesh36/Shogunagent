@@ -7,7 +7,10 @@
  *   - categories come from the closed list and the endpoint/provider union is non-empty;
  *   - the endpoint declares a scope class (src/scope.ts) and has a health baseline (own or provider's);
  *   - usage costs are non-negative integers (micro-USD);
- *   - every fixture's input passes the endpoint's input schema.
+ *   - every fixture's input passes the endpoint's input schema;
+ *   - a provider's provider.json, when present, passes src/listing/manifest.ts (schema, provider id,
+ *     opaque payout reference, one price declaration per endpoint equal to its usage model, a
+ *     consistent data-handling statement).
  *
  * The compiled entry carries no functions, so it serialises to the catalog JSON that
  * `scripts/build-catalog.ts` writes; hooks stay on the definition, reachable through `lookup`.
@@ -24,6 +27,7 @@ import type {
 } from "../connectors/types.js";
 import { Bm25Index } from "./bm25.js";
 import { contentHash, sha256Hex } from "./hash.js";
+import { publicDataHandling, validateManifest, type PublicDataHandling } from "./listing/manifest.js";
 import { buildScopeTable, levelFor, type Level, type ScopeTable } from "./scope.js";
 
 export type PublicUsage =
@@ -51,6 +55,8 @@ export interface CatalogEntry {
   scope: { class: OpClass; level: Level };
   examples: { input: Json; output: Json }[];
   docs_url: string | null;
+  /** From the provider's provider.json (E21): how request data is handled. Null for providers without a manifest (passthrough). */
+  data_handling: PublicDataHandling | null;
   /** SHA-256 of this entry's canonical JSON (all fields above). */
   hash: string;
 }
@@ -175,6 +181,8 @@ export function compileCatalog(providers: ProviderDefinition[]): CompiledCatalog
     if (!provider.request.baseUrl) problems.push(`${pw}: request.baseUrl is required`);
     for (const c of provider.categories ?? []) if (!isCategory(c)) problems.push(`${pw}: unknown category ${String(c)} (allowed: ${CATEGORIES.join(", ")})`);
     if (provider.health) validateHealth(provider.health, pw, problems);
+    const manifest = provider.manifest !== undefined ? validateManifest(provider, problems) : undefined;
+    const dataHandling = publicDataHandling(manifest);
 
     for (const endpoint of provider.endpoints) {
       const toolId = `${provider.id}.${endpoint.id}`;
@@ -218,6 +226,7 @@ export function compileCatalog(providers: ProviderDefinition[]): CompiledCatalog
         scope: { class: endpoint.scope.class, level: levelFor(endpoint.scope.class) },
         examples: endpoint.meta.examples ?? [],
         docs_url: endpoint.meta.docsUrl ?? provider.meta.docsUrl ?? null,
+        data_handling: dataHandling,
       };
       const entry: CatalogEntry = { ...entryBody, hash: contentHash(entryBody as unknown as Json) };
       entries.push(entry);

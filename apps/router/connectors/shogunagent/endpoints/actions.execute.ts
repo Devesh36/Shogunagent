@@ -10,9 +10,9 @@ export const actionsExecute = defineEndpoint({
   meta: {
     summary: "Send an email, post a message or create a calendar event on the user's behalf, after a human approves it.",
     description:
-      "Queues an action that leaves the user's world — send an email reply, post a chat message, create a calendar event — for explicit human approval, then executes it through the user's connected services and records the outcome as state. " +
+      "Queues an action that leaves the user's world — send an email reply, post a chat message, create a calendar event — for human approval, then runs it through the user's connected services and records the outcome. " +
       "Use for: reply to this thread, tell X that Y, put this on the calendar. " +
-      "Always L3: the call returns an approval URL; nothing is sent until a human approves. First-party tool run, $0.002 per executed action.",
+      "Always L3: the call returns an approval URL; nothing is sent until a human approves. $0.002 per executed action.",
     exclusions: "Not for drafting (draft locally and keep it as state), reading mail or messages (use the read tools), or anything the user has not asked to send.",
     categories: ["approval", "communication", "state"],
     notes: [
@@ -49,6 +49,12 @@ export const actionsExecute = defineEndpoint({
       scenario: "send-email-queued",
       input: { action: { kind: "send_email", to: "mika@example.com", subject: "Revised deck", body: "Attached is the revised deck." } },
       response: { status: 202, body: { approval_id: "ap_1", status: "pending" } },
+    },
+    {
+      scenario: "synthetic-state-unavailable",
+      input: { action: { kind: "post_message", channel: "C0123456789", text: "Deploy finished." } },
+      response: { status: 503, body: { error: "unavailable" } },
+      expect: { error: true },
     },
   ],
 });

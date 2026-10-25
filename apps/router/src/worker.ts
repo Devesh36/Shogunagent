@@ -17,6 +17,7 @@ import { InMemoryHealthStore } from "./health.js";
 import { InMemoryIdempotencyStore } from "./idempotency.js";
 import { consoleLogger } from "./logging.js";
 import { InMemoryMeteringClient } from "./metering.js";
+import { InMemoryPersonalStore, PersonalRanker } from "./personal.js";
 import { InMemoryRunLogSink } from "./runlog.js";
 import { createFetchTransport } from "./transport.js";
 
@@ -26,11 +27,14 @@ let cached: { env: RouterEnv; app: App } | undefined;
 function appFor(env: RouterEnv): App {
   if (cached && cached.env === env) return cached.app;
   const catalog = compileCatalog(allProviders());
+  // E20: per-isolate stub, like the other stores. Production: the principal's tool_runs (V94) via the sidecar.
+  const personal = new PersonalRanker(new InMemoryPersonalStore(), catalog.index);
   const app = createApp({
     catalog,
     transport: createFetchTransport({ env: env as Record<string, string | undefined> }),
     metering: new InMemoryMeteringClient({ topUpUrl: env.ROUTER_TOPUP_URL ?? DEFAULTS.ROUTER_TOPUP_URL }),
     runLog: new InMemoryRunLogSink(),
+    personal,
     idempotency: new InMemoryIdempotencyStore(),
     health: new InMemoryHealthStore(),
     logger: consoleLogger,

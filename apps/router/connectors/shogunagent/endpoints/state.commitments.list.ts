@@ -5,9 +5,9 @@ export const stateCommitmentsList = defineEndpoint({
   meta: {
     summary: "Find what the user committed to: promises, deliverables and deadlines they made to others.",
     description:
-      "Lists the user's commitments — things the user said they would do, with the person they owe it to, the due date when known, the status (open, done, overdue) and the quoted evidence each one rests on. " +
+      "Lists the user's commitments — things the user said they would do, with the person they owe it to, the due date when known, the status (open, done, overdue) and the quoted evidence behind each. " +
       "Use for: what did the user commit to, what does the user owe someone, what is due this week, which promises are overdue, what has the user promised to deliver. " +
-      "Free read (L1); results are the user's own state, scoped to your agent key.",
+      "Free read (L1); scoped to your agent key.",
     exclusions: "Not for tasks other people owe the user (use state.open_loops.list), calendar events, or raw notes.",
     categories: ["state", "memory"],
     notes: [
@@ -66,6 +66,12 @@ export const stateCommitmentsList = defineEndpoint({
       input: { status: "open" },
       response: { status: 200, body: { items: [], next_cursor: null } },
       expect: { usage: { quantity: 0, cost_micro_usd: 0 } },
+    },
+    {
+      scenario: "synthetic-state-unavailable",
+      input: { status: "open" },
+      response: { status: 503, body: { error: "unavailable" } },
+      expect: { error: true },
     },
   ],
 });

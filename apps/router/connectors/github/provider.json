@@ -1,0 +1,18 @@
+{
+  "format": "shogunagent-provider/1",
+  "provider_id": "github",
+  "legal_name": "Select, Inc.",
+  "contact": { "url": "https://shogunai.si" },
+  "payout_account_ref": "first-party:select",
+  "pricing": [
+    { "endpoint": "issues.list", "model": "per_call", "cost_micro_usd": 2000 },
+    { "endpoint": "issues.create", "model": "per_call", "cost_micro_usd": 2000 }
+  ],
+  "data_handling": {
+    "retention": "user_account",
+    "retention_days": 0,
+    "zero_retention": false,
+    "regions": ["global"],
+    "statement": "The router relays each call to the GitHub REST API and keeps no request or response body. A created issue is stored in the repository on GitHub under GitHub's terms and is visible to everyone with access to that repository."
+  }
+}

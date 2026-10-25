@@ -169,6 +169,13 @@ export interface ProviderDefinition {
     baseUrlEnv?: string;
   };
   auth: ProviderAuth;
+  /**
+   * The provider's listing manifest (`provider.json`, E21): legal name, contact, opaque payout
+   * reference, per-endpoint price declarations and the data-handling statement. Imported as JSON
+   * and validated by the catalog compiler (src/listing/manifest.ts); required by the listing
+   * pipeline (`listing:check`) for every listed provider. Passthrough catalogs (Monid) carry none.
+   */
+  manifest?: unknown;
   /** Defaults inherited by endpoints that omit them. */
   categories?: Category[];
   health?: HealthBaseline;
