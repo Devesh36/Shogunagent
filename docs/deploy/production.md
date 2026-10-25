@@ -170,6 +170,8 @@ psql "<relay connection string as shogun_relay>" -v ON_ERROR_STOP=1 -c 'SET sear
 | 24 | `apps/router/sql/settlement-outbox-permissions.sql` | router role | with 23 | after 23 |
 | 25 | `apps/router/sql/run-idempotency.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | cross-isolate run idempotency (E48); without it every metered run is refused `503` (the store fails closed) |
 | 26 | `apps/router/sql/run-idempotency-permissions.sql` | router role | with 25 | after 25 |
+| 27 | `apps/api/sql/ingest-hooks.sql` | `shogun_relay` | before `INGEST_HOOKS_SECRET` is set | ingest hook registrations (E44, `docs/api/ingest-sources.md`): derived-secret generations, sealed provider secrets, Gmail route HMACs; no bodies |
+| 28 | `apps/api/sql/ingest-hooks-permissions.sql` | `shogun_relay` | with 27 | RLS on, nothing for `PUBLIC` / `anon` / `authenticated`; after 27 |
 
 Applying a file for a lane that stays off is harmless; leaving one out for a lane that is switched
 on makes that lane's `checkSchema` refuse. Every file may be re-run: `live-store-access.sql` creates
@@ -438,6 +440,9 @@ Agent API (`AGENT_API_ENABLED=1`):
 | `SHOGUN_SIDECAR_PRINCIPAL_TOKENS` | secret | one of the two bearer sources turns the `/mcp` relay on | E34: the sidecar's `SHOGUN_PRINCIPAL_TOKENS` (`principal:token[:agent_id],…`); presented instead of the agent's key |
 | `SHOGUN_SIDECAR_BEARER_SECRET` | secret | one of the two bearer sources turns the `/mcp` relay on | E34: ≥ 32 characters, same value as the sidecar's; derives `sgw1.<principal>.<key>.<mac>` |
 | `SHOGUN_SHARD` | var | no | E34: `<index>/<count>` of this gateway's sidecar replica; other principals get `421 wrong_shard` (`deploy/README.md` §5.2) |
+| `INGEST_HOOKS_SECRET` | secret | no | E44: ≥ 32 characters; turns the provider ingest hooks on (`/v1/ingest-hooks`, needs `ingest-hooks.sql` and the `/mcp` relay). Derives GitHub secrets and Calendar channel tokens, seals Linear / Slack / Notion secrets, keys the Gmail mailbox routes. Changing it invalidates every hook's secret: rotate each hook after |
+| `INGEST_HOOKS_GMAIL_AUDIENCE` | var | no (pair) | E44: the OIDC audience set on the Gmail Pub/Sub push subscription (an https URL, e.g. `<PUBLIC_BASE_URL>/v1/ingest-hooks/gmail`); with `INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT`, both or neither |
+| `INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT` | var | no (pair) | E44: the service account the push subscription signs as; the gateway fetches Google's OIDC certs (`www.googleapis.com/oauth2/v3/certs`) to verify it |
 | `WEBHOOK_SIGNING_SECRET` | secret | with approvals | ≥ 32 characters |
 | `SLACK_BOT_TOKEN` | secret | no (trio) | the three Slack settings together or none |
 | `SLACK_SIGNING_SECRET` | secret | no (trio) | |
