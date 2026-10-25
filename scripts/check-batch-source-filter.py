@@ -28,7 +28,7 @@ PRODUCER = "crates/shogun-memory/src/event_log.rs"
 
 CONSTRUCT_RE = re.compile(r"BatchEventText\s*\{")
 
-SKIP_DIRS = {"target", "node_modules", ".git", "dist", ".next"}
+SKIP_DIRS = {"target", "node_modules", ".git", "dist", ".next", ".claude"}
 
 
 def repo_rust_files():

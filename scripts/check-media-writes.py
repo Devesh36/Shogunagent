@@ -51,7 +51,7 @@ WINDOW = 3
 # the point — the exceptions live in the DB and on a socket, not in the filesystem.
 ALLOWLIST: set[str] = set()
 
-SKIP_DIRS = {"target", "node_modules", ".git", "dist", ".next"}
+SKIP_DIRS = {"target", "node_modules", ".git", "dist", ".next", ".claude"}
 
 
 def repo_rust_files():

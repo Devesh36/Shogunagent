@@ -1210,15 +1210,18 @@ mod tests {
         conn.execute("INSERT INTO writing_voice_examples(app, person, text, ts_ms) VALUES ('mail', 'person:a', 'a retained user draft', 1)", [])?;
         conn.execute("INSERT INTO event_log(ts,source,kind,content,content_hash,last_seen_at) VALUES(1,'screen','text','Alice at Acme','migration-source',1)",[])?;
         let event_id = conn.last_insert_rowid();
-        let id = state::insert_person(
-            &mut conn,
-            &state::NewPerson {
-                display_name: "Alice",
-                confidence: 0.4,
-                now: 1,
-                ..Default::default()
-            },
-            &[state::Provenance::new(event_id)],
+        // Raw V36-era rows: the repository API writes the V93 actor/namespace columns, which a
+        // store at V36 does not have yet. The upgrade below must carry these rows forward.
+        conn.execute(
+            "INSERT INTO people(display_name, confidence, created_at, updated_at, last_evidence_at)
+             VALUES('Alice', 0.4, 1, 1, 1)",
+            [],
+        )?;
+        let id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO state_provenance(state_table, state_id, event_id, weight)
+             VALUES('people', ?1, ?2, 1.0)",
+            params![id, event_id],
         )?;
         crate::embedded::runner().run(&mut conn)?;
         assert_eq!(
