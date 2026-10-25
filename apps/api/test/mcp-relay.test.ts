@@ -119,17 +119,18 @@ describe("metered /mcp: authentication and headers", () => {
     expect(rig.upstreamCalls).toHaveLength(0);
   });
 
-  it("requires Mcp-Method on a POST and Mcp-Name on a tools/call, before reserving", async () => {
+  it("leaves Mcp-Method / Mcp-Name validation to the core: relayed, refused there, settled at 0", async () => {
     const rig = makeAgentRig();
     const { key } = await registerAgent(rig);
-    const noMethod = await rig.app.request("/mcp", { method: "POST", headers: { authorization: `Bearer ${key}` }, body: "{}" });
-    expect(noMethod.status).toBe(400);
-    expect(((await noMethod.json()) as Err).error).toEqual(expect.objectContaining({ code: "missing_header", next_action: "fix_request" }));
+    rig.upstream.status = 400;
+    rig.upstream.body = JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32600, message: "missing_header: Mcp-Name must name the tool of a tools/call (MCP 2026-07-28)" } });
     const noName = await mcp(rig, key, { "mcp-method": "tools/call" });
     expect(noName.status).toBe(400);
-    expect(rig.upstreamCalls).toHaveLength(0);
-    // GET (and DELETE) carry no JSON-RPC method: relayed as protocol traffic.
-    expect((await mcp(rig, key, {}, "GET")).status).toBe(200);
+    expect(noName.headers.get("x-usage-cost-micro-usd")).toBe("0");
+    const noMethod = await rig.app.request("/mcp", { method: "POST", headers: { authorization: `Bearer ${key}` }, body: "{}" });
+    expect(noMethod.status).toBe(400);
+    expect(noMethod.headers.get("x-usage-unit")).toBe("protocol");
+    expect(await balance(rig, key)).toEqual({ balance: FREE_ALLOWANCE_MICROS, reserved: 0 });
   });
 });
 

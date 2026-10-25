@@ -36,7 +36,7 @@ import { commitTerms, discounted, type CommitTerms } from "./billing/ledger.js";
 import { LOW_BALANCE_THRESHOLD_MICROS, capReachedEvent, crossedLowBalance, lowBalanceEvent, type Notifier } from "./billing/notify.js";
 import { DEFAULT_CAPS, capsFor, periodsOf, secsUntilPeriodReset, type CapSet } from "./caps.js";
 import type { LogFn } from "./logging.js";
-import { TOOLS_CALL, classifyCall, quoteCost, usageOf, type MeterUnit, type Quote } from "./pricing.js";
+import { classifyCall, quoteCost, usageOf, type MeterUnit, type Quote } from "./pricing.js";
 import type { SpendBreaker } from "./spend.js";
 import { utcDate, type UsageStore } from "./usage.js";
 
@@ -340,12 +340,11 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
       ? { ...classifyRequest(c), method: fixed.method, name: fixed.name, unit: classifyCall(fixed.method, fixed.name) }
       : classifyRequest(c);
     if ("error" in classified) return agentError(c, 400, "invalid_metering_header", classified.error);
-    // The MCP 2026-07-28 metering headers are required on a POST (the core refuses a body that
-    // disagrees with them, so a call cannot be billed as something cheaper than it is).
-    if (!fixed && c.req.method === "POST") {
-      if (!c.req.header(HEADER_METHOD)?.trim()) return agentError(c, 400, "missing_header", "Mcp-Method must name the JSON-RPC method of the body (MCP 2026-07-28).", "fix_request");
-      if (classified.method === TOOLS_CALL && !classified.name) return agentError(c, 400, "missing_header", "Mcp-Name must name the tool of a tools/call (MCP 2026-07-28).", "fix_request");
-    }
+    // `Mcp-Method` / `Mcp-Name` are validated by the core, not here: it refuses (JSON-RPC 400
+    // `missing_header` / `*_mismatch`) a request whose headers are missing or disagree with its
+    // body, before anything runs, so a call cannot be billed as something cheaper than it is, and
+    // the refusal settles at 0 (non-2xx). A POST without `Mcp-Method` classifies as free protocol
+    // traffic and is relayed only to be refused.
     const call: ClassifiedCall = classified;
     c.set("relayLogAgentKey", principal.keyId);
     // E26: a principal homed in another region is sent to its endpoint before anything is booked.
