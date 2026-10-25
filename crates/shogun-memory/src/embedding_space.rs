@@ -1,4 +1,4 @@
-//! Which embedding model a store's vectors belong to (E24, V101).
+//! Which embedding model a store's vectors belong to (E24, V102).
 //!
 //! Two vectors are only comparable when the same model produced them. A store therefore has one
 //! **active space** (`embedding_space`: model id + dimension) and records, per vector row, the
@@ -7,7 +7,7 @@
 //!
 //! - **Search reads the active space only.** Every KNN (`vector`, `document_vector`) and the Cold
 //!   scan take their candidate set from [`ACTIVE_EVENT_ROWS`] / [`ACTIVE_DOCUMENT_ROWS`] /
-//!   [`ACTIVE_COLD_ROWS`]: a row of another model — or of none, written before V101 — is never
+//!   [`ACTIVE_COLD_ROWS`]: a row of another model — or of none, written before V102 — is never
 //!   scored against a query.
 //! - **The embed job writes the active space and re-embeds the rest.** [`activate`] switches the
 //!   space to the job's model; rows of any other model then read as pending and are re-embedded
@@ -21,7 +21,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-const SCHEMA_SQL: &str = include_str!("migrations/V101__embedding_spaces.sql");
+const SCHEMA_SQL: &str = include_str!("migrations/V102__embedding_spaces.sql");
 
 /// The model id of a vector written without naming its model (tests, direct
 /// [`crate::vector::upsert`] callers). It is a space like any other: a real model never shares it.
@@ -50,7 +50,7 @@ pub struct Space {
     pub dim: usize,
 }
 
-/// Re-create the V101 objects if a projection rebuild dropped the triggers on `search_documents`.
+/// Re-create the V102 objects if a projection rebuild dropped the triggers on `search_documents`.
 pub fn ensure_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(SCHEMA_SQL)
 }

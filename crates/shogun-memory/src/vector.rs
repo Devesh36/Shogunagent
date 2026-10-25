@@ -6,7 +6,7 @@
 //! registration, the store/delete, and the KNN query that produces the ranked id list the
 //! search layer fuses with FTS (via RRF).
 //!
-//! Every stored vector names the model that wrote it (`vector_models`, V101) and every KNN only
+//! Every stored vector names the model that wrote it (`vector_models`, V102) and every KNN only
 //! considers rows of the store's active model ([`crate::embedding_space`]), so vectors of two
 //! models are never ranked against each other.
 

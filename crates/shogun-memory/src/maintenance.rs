@@ -621,7 +621,7 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // embeddings (Warm vec0 + Cold int8) then the event log (its AD trigger clears event_fts)
     tx.execute("DELETE FROM event_vec", [])?;
     tx.execute("DELETE FROM cold_embeddings", [])?;
-    // V101: which model wrote each vector (ids only); the active space itself is a setting.
+    // V102: which model wrote each vector (ids only); the active space itself is a setting.
     tx.execute("DELETE FROM vector_models", [])?;
     // Dashboard usage is metadata-only, but it is still a record of user activity. Credits would
     // cascade with event_log; delete both tables explicitly so the full-wipe contract stays
@@ -2779,7 +2779,7 @@ mod tests {
             // V81 back-fill cursor: a row id, no content.
             "event_grams_backfill",
             "writing_voice_settings",
-            // V101: the store's active embedding model (a model id, no content).
+            // V102: the store's active embedding model (a model id, no content).
             "embedding_space",
         ];
         // Emptied by ON DELETE CASCADE from a wiped parent, or by a trigger on one.

@@ -1,9 +1,9 @@
--- Rollback: docs/migrations/V101-rollback.md
--- V101 (ShogunAgent E24): which embedding model produced each stored vector, so a model change can
+-- Rollback: docs/migrations/V102-rollback.md
+-- V102 (ShogunAgent E24): which embedding model produced each stored vector, so a model change can
 -- never silently mix vector spaces. `embedding_space` is the store's one active space (the model
 -- the embed job writes and search reads); `vector_models` records, per vector row, the model that
 -- wrote it. Search only considers rows of the active model, and the embed job re-embeds every row
--- of another model (or of none: vectors written before V101) instead of comparing across spaces.
+-- of another model (or of none: vectors written before V102) instead of comparing across spaces.
 -- Ids and model names only: no text, no vector bytes.
 --
 -- Written with IF NOT EXISTS so `embedding_space::ensure_schema` can re-run it after the search

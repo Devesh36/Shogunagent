@@ -44,7 +44,7 @@ pub fn demote(conn: &mut Connection, event_id: i64, ts_ms: i64) -> Result<bool, 
         params![event_id, partition, scale as f64, dim, blob],
     )?;
     tx.execute("DELETE FROM event_vec WHERE rowid = ?1", params![event_id])?;
-    // The archived codes keep the model that wrote them (V101), so the Cold scan can skip a row
+    // The archived codes keep the model that wrote them (V102), so the Cold scan can skip a row
     // from another embedding space instead of scoring it.
     tx.execute(
         "INSERT INTO vector_models (vec_table, row_id, model_id)

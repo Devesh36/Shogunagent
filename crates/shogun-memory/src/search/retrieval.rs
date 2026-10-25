@@ -1105,7 +1105,7 @@ pub fn search_cold_partitions(
 
     // Min-heap of size ≤ k: the weakest of the current top-k sits on top and is evicted first.
     let mut heap: BinaryHeap<Reverse<ColdHit>> = BinaryHeap::with_capacity(k + 1);
-    // Only rows archived in the active embedding space are scored (V101): a row from another
+    // Only rows archived in the active embedding space are scored (V102): a row from another
     // model is skipped, not compared.
     let mut stmt = conn.prepare(&format!(
         "SELECT c.event_id, c.scale, c.codes FROM cold_embeddings c

@@ -21,7 +21,7 @@ pub enum EmbedJobError {
 }
 
 /// Event ids (with their content) that need embedding in the active space, oldest first, capped
-/// at `limit`: no Warm vector yet, or one written by another model (or before V101, with no model
+/// at `limit`: no Warm vector yet, or one written by another model (or before V102, with no model
 /// recorded) — the re-embed half of a model switch. Events archived to Cold are left there.
 pub fn pending(conn: &Connection, limit: usize) -> Result<Vec<(i64, String)>, rusqlite::Error> {
     let mut stmt = conn.prepare(
@@ -198,7 +198,7 @@ mod tests {
         assert!(pending(&conn, 10).unwrap().is_empty());
     }
 
-    /// Vectors written before V101 carry no model: once an embedder runs they are re-embedded.
+    /// Vectors written before V102 carry no model: once an embedder runs they are re-embedded.
     #[test]
     fn unattributed_vectors_are_re_embedded() {
         let mut conn = crate::open_in_memory().unwrap();

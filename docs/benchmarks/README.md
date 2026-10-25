@@ -232,7 +232,7 @@ harness hands one embedder instance to every suite and seed, each per-run report
 
 `model` is the vector-space id: the model's name and the stored width (nomic's 768-wide output is
 stored as its 384-wide Matryoshka prefix). The store records the same id on every vector row and
-never ranks rows of two models against each other (V101, `shogun_memory::embedding_space`).
+never ranks rows of two models against each other (V102, `shogun_memory::embedding_space`).
 
 One seed at 600 events (release build, in memory, this container), for orientation only:
 
