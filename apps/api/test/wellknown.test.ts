@@ -195,7 +195,11 @@ describe("/openapi.json (E10-T6 scaffolding)", () => {
     expect(doc.openapi).toBe("3.1.0");
     for (const p of ["/.well-known/pricing.json", "/.well-known/mcp/server-card.json", "/.well-known/agent-card.json", "/.well-known/status.json", "/health", "/openapi.json", "/llms.txt",
       "/v1/agents/challenge", "/v1/agents", "/v1/agents/me", "/v1/keys/{id}/revoke", "/v1/keys/{id}", "/v1/wallet", "/v1/wallet/topup", "/v1/stripe/webhook", "/v1/quote", "/v1/receipts", "/v1/receipts/{id}/dispute", "/mcp",
-      "/v1/router/discover", "/v1/router/inspect", "/v1/router/run"]) {
+      "/v1/router/discover", "/v1/router/inspect", "/v1/router/run",
+      // E19, E3-T2, E23
+      "/v1/statements", "/v1/commit", "/v1/agents/me/licence", "/v1/admin/commits", "/v1/admin/adjustments", "/v1/admin/disputes/{id}/resolve",
+      "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token", "/oauth/revoke",
+      "/privacy", "/terms"]) {
       expect(doc.paths[p], p).toBeDefined();
     }
     expect(Object.keys(doc.paths["/mcp"] ?? {}).sort()).toEqual(["delete", "get", "post"]);

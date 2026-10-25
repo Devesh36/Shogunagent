@@ -17,6 +17,9 @@ invariant 12: these are derived from code and config; the human docs derive from
 | CLI | `npx shogunagent` (`packages/cli`) | — | `shogunagent help --json` names commands, endpoints and the skill version |
 | Skill | `SKILL.md` (root), `https://shogunagent.dev/SKILL.md` | hand-written (E10-T5); the selection eval (E11) gates edits | — |
 | Benchmarks | `benchmarks.json` | E10-T8, from `crates/memory-bench` (E12) | not in this slice |
+| OAuth metadata | `GET /.well-known/oauth-protected-resource[/mcp]`, `GET /.well-known/oauth-authorization-server` | `apps/api/src/oauth/app.ts` | `identity.ts` + the scope list; served with `AGENT_OAUTH_SECRET` ([oauth.md](oauth.md)) |
+| Privacy policy / terms | `GET /privacy`, `GET /terms` | `scripts/gen-legal-pages.mjs` (`--check` in CI) → `legal-content.generated.ts` | `docs/legal/*.md` (DRAFT for legal review) |
+| Directory listings | `docs/directories/anthropic.md`, `docs/directories/openai.md` | hand-written submission packages (E23) | the rows above |
 
 ## What is fixture-driven until E4 lands
 

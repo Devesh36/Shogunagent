@@ -33,12 +33,25 @@ Conventions:
 | PATCH | `/v1/keys/{id}` | any (lower); `admin` (raise) | Set a key's hard caps |
 | GET | `/v1/wallet` | `read` | Balance, reserved, spendable, caps, this day's / month's spend |
 | POST | `/v1/wallet/topup` | `write` | Create a Stripe Checkout session (card rail) |
-| POST | `/v1/stripe/webhook` | Stripe signature | Credit the wallet when a Checkout completes (idempotent by event id) |
-| POST | `/v1/quote` | `read` | The exact cost of a call, nothing reserved |
+| POST | `/v1/stripe/webhook` | Stripe signature | Credit a completed Checkout (by event id), close an expired one, debit a `charge.refunded` (by charge high-water mark) |
+| POST | `/v1/quote` | `read` | The exact cost of a call, nothing reserved (discounted under a commit, with the list price) |
 | GET | `/v1/receipts?since=&limit=` | `read` | Per-call receipts, oldest first |
 | POST | `/v1/receipts/{id}/dispute` | `write` | Open a dispute on a receipt (one per receipt) |
 | POST | `/v1/handoff` | `read` | An A2A state-of-work handoff for a task, built from one recall through the core (free; `docs/api/handoff.md`) |
+| GET | `/v1/statements?month=&format=` | `read` | The month's statement, JSON or CSV; immutable once the month closes ([billing](../../docs/api/billing.md)) |
+| GET | `/v1/commit` | `read` | The active annual commit: discount, drawn, remaining, overage |
+| POST | `/v1/agents/me/licence` | `write` (key only) | Link a ShogunAI licence; Pro earns $20 a month |
+| POST | `/v1/admin/commits` | `admin` key, Idempotency-Key | Create an annual commit (10–25% off) |
+| POST | `/v1/admin/adjustments` | `admin` key, Idempotency-Key | Credit or refund (a ledger entry; optional Stripe refund) |
+| POST | `/v1/admin/disputes/{id}/resolve` | `admin` key | Resolve a dispute: credit or reject |
+| GET | `/.well-known/oauth-protected-resource[/mcp]`, `/.well-known/oauth-authorization-server` | none | OAuth metadata ([oauth](../../docs/api/oauth.md)); only with `AGENT_OAUTH_SECRET` |
+| GET, POST | `/oauth/authorize` | none (consent page) | Authorization code + PKCE S256; the person pastes the principal's key once |
+| POST | `/oauth/token`, `/oauth/revoke` | none (public client + PKCE) | Code exchange, rotated refresh, revocation |
+| GET | `/privacy`, `/terms` | none | Privacy policy and terms (DRAFT for legal review) |
 | ALL | `/mcp` | by unit (see below) | The metered MCP Streamable HTTP proxy |
+
+Everywhere a key is accepted, an OAuth access token (`sat_…`) is accepted too, as the consenting
+key with at most its scopes — except key management, licence linking and admin routes.
 
 ## 1. Register
 
@@ -168,7 +181,7 @@ curl -s -X POST $BASE/v1/wallet/topup -H "Authorization: Bearer $KEY" -H 'conten
   "next_action": "approve_at_url", "instructions": "Open url in a browser and pay. …" }
 ```
 
-Hand `url` to a human once. Stripe calls `POST /v1/stripe/webhook` (configure the endpoint for
+Hand `url` to a human once. Stripe calls `POST /v1/stripe/webhook` (configure the endpoint for `checkout.session.expired`, `charge.refunded` and
 `checkout.session.completed`; `Stripe-Signature` is verified with `STRIPE_WEBHOOK_SECRET`); the
 wallet is credited `amount_total` once per event id. Then retry the `402`'d call unchanged.
 Without `STRIPE_SECRET_KEY` the route answers `503 topup_unavailable`.
@@ -237,5 +250,15 @@ tables.
 
 Not in this slice: the core behind `/mcp` (E4 wires `mcpUpstream`; until then `/mcp` answers
 `503 upstream_unavailable` before reserving), the router's `runPricer`, storage billing (the
-rate is published; the sweep that books it comes with the core's usage report), and OAuth/CIMD
-(E3-T2).
+rate is published; the sweep that books it comes with the core's usage report), and webhook
+delivery of the billing events (`wallet.low_balance`, `cap.reached` go to the in-memory notifier
+until E15 adds per-principal webhooks; shapes in `docs/api/billing.md`).
+
+## 7. Statements, commits and OAuth
+
+- Monthly statements, annual commits, refunds, credits, dispute resolution, the ShogunAI Pro
+  bundle and the billing events: [`docs/api/billing.md`](../../docs/api/billing.md).
+- OAuth 2.1 with Client ID Metadata Documents for MCP clients (no dynamic registration):
+  [`docs/api/oauth.md`](../../docs/api/oauth.md).
+- Operations (schema, Stripe events, the overage price, the admin key, `AGENT_OAUTH_SECRET`):
+  `DEPLOY.md` §9.1.

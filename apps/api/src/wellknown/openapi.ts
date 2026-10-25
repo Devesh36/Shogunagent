@@ -26,6 +26,11 @@ const micro = (description: string): Json => ({ type: "integer", minimum: 0, des
 const components: Json = {
   securitySchemes: {
     agentKey: { type: "http", scheme: "bearer", bearerFormat: "sa_live_<key>", description: "An agent key from POST /v1/agents. Scopes: read, write, run, admin (admin implies all)." },
+    oauth: {
+      type: "oauth2",
+      description: "OAuth 2.1 for MCP clients (docs/api/oauth.md): authorization code with PKCE S256; the client_id is the URL of a Client ID Metadata Document; no dynamic registration. Access tokens (sat_…) act as the consenting key, with at most its scopes and never admin.",
+      flows: { authorizationCode: { authorizationUrl: "/oauth/authorize", tokenUrl: "/oauth/token", refreshUrl: "/oauth/token", scopes: { read: "Read state and memory (free)", write: "Ingest and write notes (metered)", run: "Run tools (metered; L3 waits for approval)" } } },
+    },
   },
   parameters: {
     McpMethod: { name: "Mcp-Method", in: "header", required: true, schema: { type: "string" }, description: "The JSON-RPC method (MCP 2026-07-28 Streamable HTTP). Anything but tools/call is free protocol traffic." },
@@ -151,6 +156,43 @@ const components: Json = {
       },
     },
     Receipts: { type: "object", required: ["receipts", "next_since"], properties: { receipts: { type: "array", items: ref("Receipt") }, next_since: { type: ["string", "null"], format: "date-time" } } },
+    Statement: {
+      type: "object", description: "shogunagent/statement/v1. Amounts are integer micro-USD; `hash` is sha256 over the canonical JSON (RFC 8785) of every other field.",
+      required: ["schema", "statement_id", "principal_id", "month", "status", "usage", "totals", "credits", "adjustments", "disputes", "commit", "hash"],
+      properties: {
+        schema: { type: "string", enum: ["shogunagent/statement/v1"] }, statement_id: { type: "string" }, principal_id: { type: "string" }, month: { type: "string" },
+        status: { type: "string", enum: ["open", "closed"] },
+        usage: { type: "array", items: { type: "object", properties: { unit: { type: "string" }, calls: { type: "integer" }, quantity: { type: "integer" }, list_micro_usd: micro("At list price"), charged_micro_usd: micro("Charged"), discount_micro_usd: micro("Commit discount"), commit_funded_micro_usd: micro("Drawn from a commit"), wallet_funded_micro_usd: micro("Drawn from the wallet"), free: { type: "boolean" } } } },
+        totals: { type: "object" }, credits: { type: "array", items: { type: "object" } }, adjustments: { type: "array", items: { type: "object" } },
+        disputes: { type: "array", items: { type: "object", properties: { dispute_id: { type: "string" }, receipt_id: { type: "string" }, status: { type: "string", enum: ["open", "resolved", "rejected"] }, credit_micro_usd: micro("Credited"), opened_at: { type: "string" }, resolved_at: { type: ["string", "null"] } } } },
+        commit: { oneOf: [{ type: "object" }, { type: "null" }] }, unsettled_receipts: { type: "integer" }, generated_at: { type: "string", format: "date-time" },
+        hash: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+      },
+    },
+    Commit: {
+      type: "object",
+      properties: {
+        commit_id: { type: "string", pattern: "^cmt_" }, subject: { type: "string", enum: ["principal", "tenant"] }, subject_id: { type: "string" },
+        discount_bps: { type: "integer", minimum: 1000, maximum: 2500 }, amount_micro_usd: micro("Committed spend"), drawn_micro_usd: micro("Drawn so far (discounted)"),
+        remaining_micro_usd: micro("amount − drawn"), overage_micro_usd: micro("Drawn above the amount"), overage_reported_micro_usd: micro("Reported to Stripe"),
+        overage_billing: { type: "boolean" }, active: { type: "boolean" }, starts_at: { type: "string", format: "date-time" }, ends_at: { type: "string", format: "date-time" },
+      },
+    },
+    CommitRequest: {
+      type: "object", required: ["subject_id", "amount_micro_usd", "discount_bps", "starts_at", "ends_at"],
+      properties: {
+        subject: { type: "string", enum: ["principal", "tenant"], default: "principal" }, subject_id: { type: "string" }, amount_micro_usd: micro("Committed spend"),
+        discount_bps: { type: "integer", minimum: 1000, maximum: 2500 }, starts_at: { type: "string", format: "date-time" }, ends_at: { type: "string", format: "date-time" },
+        stripe_customer_id: { type: "string", pattern: "^cus_" },
+      },
+    },
+    AdjustmentRequest: {
+      type: "object", required: ["principal_id", "kind", "amount_micro_usd"],
+      properties: {
+        principal_id: { type: "string" }, kind: { type: "string", enum: ["credit", "refund"] }, amount_micro_usd: micro("Positive amount"),
+        reason: { type: "string", enum: ["goodwill", "dispute", "service_credit", "refund", "chargeback", "correction"] }, charge_id: { type: "string", pattern: "^(ch|py)_" }, ref: { type: "string" },
+      },
+    },
     DisputeRequest: { type: "object", required: ["reason"], properties: { reason: { type: "string", minLength: 1, maxLength: 1000 } } },
     Dispute: { type: "object", required: ["dispute_id", "receipt_id", "status", "ts"], properties: { dispute_id: { type: "string", pattern: "^dsp_" }, receipt_id: { type: "string" }, status: { type: "string", enum: ["open", "resolved", "rejected"] }, ts: { type: "string", format: "date-time" } } },
     DryRun: { type: "object", required: ["dry_run", "quote", "usage", "latency_ms", "next_action"], properties: { result: { type: "null" }, dry_run: { type: "boolean", enum: [true] }, quote: ref("Usage"), usage: ref("Usage"), balance_micro_usd: micro("Spendable now"), sufficient: { type: "boolean" }, latency_ms: { type: "integer" }, next_action: { type: "null" } } },
@@ -172,7 +214,9 @@ interface Route {
   summary: string;
   description?: string;
   security: "none" | "key" | "stripe" | "pow";
-  scope?: "read" | "write" | "run" | "any";
+  scope?: "read" | "write" | "run" | "admin" | "any";
+  /** Takes the agent key itself, never an OAuth access token. */
+  keyOnly?: boolean;
   parameters?: Json[];
   requestBody?: Json;
   responses: Record<string, Json>;
@@ -206,8 +250,8 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     },
     { method: "get", path: "/v1/agents/me", tag: "agents", security: "key", scope: "read", summary: "The key's principal, scopes, expiry and caps.", responses: { "200": jsonBody(ref("Me")), "401": errorResponse("Invalid key"), "403": errorResponse("insufficient_scope") } },
     // --- keys ---
-    { method: "post", path: "/v1/keys/{id}/revoke", tag: "keys", security: "key", scope: "any", summary: "Revoke a key (own key; admin for others).", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": jsonBody({ type: "object", properties: { key_id: { type: "string" }, revoked: { type: "boolean" } } }), "404": errorResponse("key_not_found (unknown and someone else's answer the same)") } },
-    { method: "patch", path: "/v1/keys/{id}", tag: "keys", security: "key", scope: "any", summary: "Set a key's hard caps. Lowering: any key; raising above the defaults: admin.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: jsonBody(ref("CapsPatch")), responses: { "200": jsonBody({ type: "object", properties: { key_id: { type: "string" }, caps: ref("Caps") } }), "400": errorResponse("invalid_caps | invalid_json"), "403": errorResponse("caps_above_default"), "404": errorResponse("key_not_found") } },
+    { method: "post", path: "/v1/keys/{id}/revoke", tag: "keys", security: "key", scope: "any", keyOnly: true, summary: "Revoke a key (own key; admin for others).", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": jsonBody({ type: "object", properties: { key_id: { type: "string" }, revoked: { type: "boolean" } } }), "404": errorResponse("key_not_found (unknown and someone else's answer the same)") } },
+    { method: "patch", path: "/v1/keys/{id}", tag: "keys", security: "key", scope: "any", keyOnly: true, summary: "Set a key's hard caps. Lowering: any key; raising above the defaults: admin.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: jsonBody(ref("CapsPatch")), responses: { "200": jsonBody({ type: "object", properties: { key_id: { type: "string" }, caps: ref("Caps") } }), "400": errorResponse("invalid_caps | invalid_json"), "403": errorResponse("caps_above_default"), "404": errorResponse("key_not_found") } },
     // --- wallet ---
     { method: "get", path: "/v1/wallet", tag: "wallet", security: "key", scope: "read", summary: "Balance, reserved, spendable, caps, this day's and month's spend.", responses: { "200": jsonBody(ref("Wallet")) } },
     { method: "post", path: "/v1/wallet/topup", tag: "wallet", security: "key", scope: "write", summary: "A Stripe Checkout session (card rail). Hand the URL to a human once.", parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }], requestBody: jsonBody(ref("TopupRequest")), responses: { "201": jsonBody(ref("TopupSession")), "400": errorResponse("invalid_amount | invalid_idempotency_key | invalid_json"), "503": errorResponse("topup_unavailable") } },
@@ -224,6 +268,29 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
       requestBody: jsonBody(ref("HandoffRequest")),
       responses: { "200": jsonBody(ref("HandoffResponse")), "400": errorResponse("missing_task | invalid_to_agent | invalid_from_agent | invalid_budget_tokens | invalid_ttl_seconds | invalid_json"), "403": errorResponse("insufficient_scope"), "502": errorResponse("upstream_error | memory_update_pending: the core refused the recall"), "503": errorResponse("upstream_unavailable, with Retry-After") },
     },
+    // --- E19: statements, commits, operator billing ---
+    {
+      method: "get", path: "/v1/statements", tag: "billing", security: "key", scope: "read",
+      summary: "The month's statement: usage per unit (free units at $0), credits, adjustments, disputes and their resolution, commit drawdown. Immutable once the month closes (stored, with a SHA-256).",
+      parameters: [{ name: "month", in: "query", schema: { type: "string", pattern: "^\\d{4}-(0[1-9]|1[0-2])$" }, description: "YYYY-MM (UTC). Default: the current month." }, { name: "format", in: "query", schema: { type: "string", enum: ["json", "csv"], default: "json" } }],
+      responses: { "200": { description: "The statement; X-Statement-Hash repeats its hash.", content: { "application/json": { schema: ref("Statement") }, "text/csv": { schema: { type: "string" } } } }, "400": errorResponse("invalid_month | month_not_started | invalid_format") },
+    },
+    { method: "get", path: "/v1/commit", tag: "billing", security: "key", scope: "read", summary: "The active annual commit for this principal (or its tenant): discount, amount, drawn, remaining, overage. null when none.", responses: { "200": jsonBody({ type: "object", properties: { commit: { oneOf: [ref("Commit"), { type: "null" }] }, next_action: { type: "null" } } }) } },
+    { method: "post", path: "/v1/agents/me/licence", tag: "billing", security: "key", scope: "write", keyOnly: true, summary: "Link a ShogunAI licence (X-Shogun-Licence header). A Pro licence earns $20 of credit per month.", parameters: [{ name: "X-Shogun-Licence", in: "header", required: true, schema: { type: "string" } }], responses: { "200": jsonBody({ type: "object" }), "400": errorResponse("licence_missing"), "401": errorResponse("invalid_licence"), "403": errorResponse("licence_plan_not_eligible | oauth_not_allowed") } },
+    { method: "post", path: "/v1/admin/commits", tag: "admin", security: "key", scope: "admin", summary: "Create an annual commit (10–25% off) for a principal or tenant; optional Stripe customer for metered overage.", parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }], requestBody: jsonBody(ref("CommitRequest")), responses: { "201": jsonBody({ type: "object", properties: { commit: ref("Commit"), created: { type: "boolean" } } }), "200": jsonBody({ type: "object" }), "400": errorResponse("idempotency_key_required | invalid_subject | invalid_amount | invalid_discount | invalid_period | invalid_customer | overage_billing_unavailable"), "403": errorResponse("insufficient_scope | oauth_not_allowed"), "409": errorResponse("commit_overlap") } },
+    { method: "post", path: "/v1/admin/adjustments", tag: "admin", security: "key", scope: "admin", summary: "Credit or refund a principal: one ledger entry per Idempotency-Key; a refund with charge_id also refunds the card through Stripe.", parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }], requestBody: jsonBody(ref("AdjustmentRequest")), responses: { "201": jsonBody({ type: "object" }), "200": jsonBody({ type: "object" }), "400": errorResponse("idempotency_key_required | invalid_kind | invalid_amount | invalid_reason | invalid_charge | refunds_unavailable"), "404": errorResponse("principal_not_found") } },
+    { method: "post", path: "/v1/admin/disputes/{id}/resolve", tag: "admin", security: "key", scope: "admin", summary: "Resolve a dispute: credit (default: the receipt's cost) or reject. Once.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: jsonBody({ type: "object", required: ["outcome"], properties: { outcome: { type: "string", enum: ["credit", "reject"] }, amount_micro_usd: micro("Credit amount") } }), responses: { "200": jsonBody({ type: "object" }), "404": errorResponse("dispute_not_found") } },
+    // --- E3-T2: OAuth 2.1 + Client ID Metadata Documents ---
+    { method: "get", path: "/.well-known/oauth-protected-resource", tag: "oauth", security: "none", summary: "RFC 9728 Protected Resource Metadata for /mcp (also at /.well-known/oauth-protected-resource/mcp).", responses: { "200": jsonBody({ type: "object" }) } },
+    { method: "get", path: "/.well-known/oauth-protected-resource/mcp", tag: "oauth", security: "none", summary: "RFC 9728 Protected Resource Metadata, path-suffixed form for /mcp.", responses: { "200": jsonBody({ type: "object" }) } },
+    { method: "get", path: "/.well-known/oauth-authorization-server", tag: "oauth", security: "none", summary: "RFC 8414 Authorization Server Metadata: code + PKCE S256, client_id_metadata_document_supported, no registration endpoint.", responses: { "200": jsonBody({ type: "object" }) } },
+    { method: "get", path: "/oauth/authorize", tag: "oauth", security: "none", summary: "Validate the client (its metadata document) and redirect_uri, then render the consent page.", responses: { "200": { description: "The consent page.", content: { "text/html": { schema: { type: "string" } } } }, "302": { description: "An error returned to the validated redirect_uri." }, "400": { description: "An HTML error page; never a redirect." } } },
+    { method: "post", path: "/oauth/authorize", tag: "oauth", security: "none", summary: "The human's decision (form post from the consent page) → 302 to redirect_uri with code, state and iss.", responses: { "302": { description: "code or error" }, "400": { description: "invalid_consent" }, "401": { description: "The key was not accepted; the page is shown again." } } },
+    { method: "post", path: "/oauth/token", tag: "oauth", security: "none", summary: "grant_type=authorization_code (PKCE S256) or refresh_token (rotated; reuse revokes the family). Form-encoded.", responses: { "200": jsonBody({ type: "object", properties: { access_token: { type: "string", pattern: "^sat_" }, token_type: { type: "string", enum: ["Bearer"] }, expires_in: { type: "integer" }, refresh_token: { type: "string", pattern: "^sar_" }, scope: { type: "string" } } }), "400": jsonBody({ type: "object", properties: { error: { type: "string" }, error_description: { type: "string" } } }), "401": jsonBody({ type: "object" }) } },
+    { method: "post", path: "/oauth/revoke", tag: "oauth", security: "none", summary: "RFC 7009: revoke a token and everything minted from the same consent. Always 200.", responses: { "200": { description: "Revoked, or nothing to revoke." } } },
+    // --- E23: legal pages ---
+    { method: "get", path: "/privacy", tag: "well-known", security: "none", summary: "Privacy policy (DRAFT pending legal review), rendered from docs/legal/privacy-policy.md.", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
+    { method: "get", path: "/terms", tag: "well-known", security: "none", summary: "Terms of service (DRAFT pending legal review), rendered from docs/legal/terms.md.", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
     // --- the metered MCP proxy ---
     {
       method: "all", path: "/mcp", tag: "mcp", security: "key", scope: "any",
@@ -257,7 +324,12 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       ...(route.parameters ? { parameters: route.parameters } : {}),
       ...(route.requestBody ? { requestBody: route.requestBody } : {}),
       responses: route.responses,
-      security: route.security === "key" ? [{ agentKey: route.scope && route.scope !== "any" ? [route.scope] : [] }] : [],
+      // An OAuth access token is accepted wherever a key is, except on admin routes and key /
+      // licence management, which take the key itself.
+      security: route.security === "key"
+        ? [{ agentKey: route.scope && route.scope !== "any" ? [route.scope] : [] },
+          ...(route.scope !== "admin" && !route.keyOnly ? [{ oauth: route.scope && route.scope !== "any" ? [route.scope] : [] }] : [])]
+        : [],
       ...(route.security === "none" ? { "x-anonymous": true } : {}),
       ...(route.security === "pow" ? { "x-proof-of-work": true } : {}),
       ...(route.security === "stripe" ? { "x-webhook-signature": "Stripe-Signature" } : {}),
@@ -287,8 +359,10 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       { name: "agents", description: "Self-registration and identity." },
       { name: "keys", description: "Key caps and revocation." },
       { name: "wallet", description: "Prepaid micro-USD wallet (Stripe card rail)." },
-      { name: "billing", description: "Quotes, receipts, disputes." },
+      { name: "billing", description: "Quotes, receipts, disputes, statements, commits." },
       { name: "a2a", description: "State-of-work handoff between agents (docs/api/handoff.md)." },
+      { name: "admin", description: "Operator routes (admin key only): commits, credits and refunds, dispute resolution." },
+      { name: "oauth", description: "OAuth 2.1 + Client ID Metadata Documents for MCP clients. No dynamic registration." },
       { name: "mcp", description: "The metered MCP Streamable HTTP proxy." },
       { name: "router", description: "discover / inspect / run (apps/router)." },
     ],

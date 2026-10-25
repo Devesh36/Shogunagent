@@ -12,6 +12,8 @@
     "registry:validate": "node scripts/validate-server-json.mjs",
     "llms:gen": "node scripts/gen-llms-txt.mjs --write",
     "llms:check": "node scripts/gen-llms-txt.mjs --check",
+    "legal:gen": "node scripts/gen-legal-pages.mjs --write",
+    "legal:check": "node scripts/gen-legal-pages.mjs --check",
     "agent-skills:gen": "node scripts/gen-agent-skills.mjs --write",
     "agent-skills:check": "node scripts/gen-agent-skills.mjs --check"
   },

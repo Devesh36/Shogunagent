@@ -113,3 +113,117 @@ CREATE TABLE IF NOT EXISTS agent_pow_spent (
   expires_at      BIGINT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS agent_pow_spent_expires ON agent_pow_spent (expires_at);
+
+-- ---------------------------------------------------------------------------------------------
+-- E19: usage billing to production grade (src/billing/ledger.ts). Additive: re-applying this file
+-- to a database provisioned before E19 adds the columns and tables below and changes nothing else.
+-- ---------------------------------------------------------------------------------------------
+
+-- Receipts carry the list price next to the (possibly discounted) settled cost, how the call was
+-- funded (`wallet` | `commit`; NULL on rows written before E19 = wallet) and the commit applied.
+ALTER TABLE agent_receipts ADD COLUMN IF NOT EXISTS list_cost BIGINT;
+ALTER TABLE agent_receipts ADD COLUMN IF NOT EXISTS funding TEXT;
+ALTER TABLE agent_receipts ADD COLUMN IF NOT EXISTS commit_id TEXT;
+CREATE INDEX IF NOT EXISTS agent_receipts_principal_month ON agent_receipts (principal_id, month);
+
+-- Dispute resolution: status moves open → resolved | rejected once; `credit_micros` is what the
+-- resolution credited (the ledger entry is `dispute:<dispute_id>` in agent_adjustments).
+ALTER TABLE agent_disputes ADD COLUMN IF NOT EXISTS credit_micros BIGINT;
+ALTER TABLE agent_disputes ADD COLUMN IF NOT EXISTS resolved_at BIGINT;
+
+-- Annual commit contracts. One subject (`principal` | `tenant`) has at most one commit per
+-- instant (the admin route refuses overlaps). `drawn` is discounted, commit-funded settled spend;
+-- `overage` the part of it above `amount`; `overage_reported` how much of that has become Stripe
+-- usage records (whole cents).
+CREATE TABLE IF NOT EXISTS agent_commits (
+  commit_id                 TEXT   PRIMARY KEY,
+  subject_kind              TEXT   NOT NULL,
+  subject_id                TEXT   NOT NULL,
+  amount_micros             BIGINT NOT NULL CHECK (amount_micros >= 0),
+  discount_bps              BIGINT NOT NULL CHECK (discount_bps >= 1000 AND discount_bps <= 2500),
+  starts_at                 BIGINT NOT NULL,
+  ends_at                   BIGINT NOT NULL,
+  drawn_micros              BIGINT NOT NULL DEFAULT 0 CHECK (drawn_micros >= 0),
+  overage_micros            BIGINT NOT NULL DEFAULT 0 CHECK (overage_micros >= 0),
+  overage_reported_micros   BIGINT NOT NULL DEFAULT 0 CHECK (overage_reported_micros >= 0),
+  created_at                BIGINT NOT NULL,
+  stripe_customer_id        TEXT,
+  stripe_subscription_item  TEXT
+);
+CREATE INDEX IF NOT EXISTS agent_commits_subject ON agent_commits (subject_kind, subject_id, starts_at);
+
+-- Commit overage turned into Stripe usage records. `report_id` is the Stripe Idempotency-Key and
+-- is derived from the commit and the reported high-water mark, so a retried claim cannot double.
+CREATE TABLE IF NOT EXISTS agent_commit_overage_reports (
+  report_id             TEXT   PRIMARY KEY,
+  commit_id             TEXT   NOT NULL,
+  subscription_item     TEXT   NOT NULL,
+  cents                 BIGINT NOT NULL CHECK (cents > 0),
+  ts                    BIGINT NOT NULL,
+  sent_at               BIGINT
+);
+CREATE INDEX IF NOT EXISTS agent_commit_overage_unsent ON agent_commit_overage_reports (sent_at, ts);
+
+-- Signed ledger entries: operator credits (+) and refunds (−). The primary key is the idempotency
+-- key. `applied_micros` is what the wallet moved by (a debit stops at zero). `reason` is a fixed
+-- code (src/billing/ledger.ts ADJUSTMENT_REASONS), never free text.
+CREATE TABLE IF NOT EXISTS agent_adjustments (
+  entry_id        TEXT   PRIMARY KEY,
+  principal_id    TEXT   NOT NULL,
+  micros          BIGINT NOT NULL,
+  applied_micros  BIGINT NOT NULL,
+  kind            TEXT   NOT NULL,
+  reason          TEXT   NOT NULL,
+  ref             TEXT,
+  ts              BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_adjustments_principal ON agent_adjustments (principal_id, ts);
+
+-- Per-charge refunded high-water mark (Stripe `charge.refunded` and the admin refund route converge
+-- on it, so a refund is debited once whichever arrives first).
+CREATE TABLE IF NOT EXISTS agent_charge_refunds (
+  charge_id        TEXT   PRIMARY KEY,
+  principal_id     TEXT   NOT NULL,
+  refunded_micros  BIGINT NOT NULL CHECK (refunded_micros >= 0)
+);
+
+-- Which principal a Stripe PaymentIntent paid for (written when its Checkout completes), so a later
+-- refund event finds the wallet without trusting metadata alone.
+CREATE TABLE IF NOT EXISTS agent_stripe_payments (
+  payment_intent  TEXT   PRIMARY KEY,
+  principal_id    TEXT   NOT NULL,
+  session_id      TEXT   NOT NULL,
+  micros          BIGINT NOT NULL CHECK (micros >= 0),
+  ts              BIGINT NOT NULL
+);
+
+-- Checkout sessions the top-up route created: open → completed | expired, once.
+CREATE TABLE IF NOT EXISTS agent_checkout_sessions (
+  session_id    TEXT   PRIMARY KEY,
+  principal_id  TEXT   NOT NULL,
+  micros        BIGINT NOT NULL CHECK (micros >= 0),
+  status        TEXT   NOT NULL,
+  created_at    BIGINT NOT NULL,
+  updated_at    BIGINT NOT NULL
+);
+
+-- Closed monthly statements: the rendered JSON (ids, units, counters, amounts — no reason text,
+-- no bodies) and its SHA-256. Written once; never updated.
+CREATE TABLE IF NOT EXISTS agent_statements (
+  principal_id  TEXT   NOT NULL,
+  month         TEXT   NOT NULL,
+  body          TEXT   NOT NULL,
+  hash          TEXT   NOT NULL,
+  closed_at     BIGINT NOT NULL,
+  PRIMARY KEY (principal_id, month)
+);
+
+-- E14-T3: a ShogunAI licence subject (a licence id or `account:<acc>`) linked to a principal, with
+-- the plan and when a token proving it last verified. The monthly Pro grant reads this.
+CREATE TABLE IF NOT EXISTS agent_licence_links (
+  licence_subject  TEXT   PRIMARY KEY,
+  principal_id     TEXT   NOT NULL,
+  plan             TEXT   NOT NULL,
+  verified_at      BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_licence_links_plan ON agent_licence_links (plan, verified_at);

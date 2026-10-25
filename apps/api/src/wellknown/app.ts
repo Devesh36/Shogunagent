@@ -9,18 +9,20 @@
  *   GET /health                             E10-T7  the short form (503 in a major incident)
  *   GET /openapi.json                       E10-T6  OpenAPI 3.1 of the REST face
  *   GET /llms.txt, /llms-full.txt           E10-T4  generated from the docs
+ *   GET /privacy, /terms                    E23     generated from docs/legal/*.md (DRAFT)
  *
  * Every document is computed from code and config (invariant 12) and cached per process; none
  * reads a request body. `observe()` is the middleware the agent app puts in front of its routes
  * so the status window sees the metered traffic.
  */
-import { Hono, type MiddlewareHandler } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import type { KeyObject } from "node:crypto";
 
 import incidentsJson from "../../incidents.json" with { type: "json" };
 import toolTableJson from "../../fixtures/tool-table.json" with { type: "json" };
 import { agentCard, signAgentCard } from "./agent-card.js";
 import type { WellknownContext } from "./identity.js";
+import { PRIVACY_HTML, TERMS_HTML } from "./legal-content.generated.js";
 import { LLMS_FULL_TXT, LLMS_TXT } from "./llms-content.generated.js";
 import { mcpConfigDocument } from "./mcp-config.js";
 import { openapiDocument } from "./openapi.js";
@@ -90,6 +92,10 @@ export function createWellknown(deps: WellknownDeps): Wellknown {
   app.get("/openapi.json", (c) => c.body(once(() => openapi, (v) => { openapi = v; }, () => openapiDocument(table, ctx)), 200, { ...JSON_CACHE, "content-type": "application/json; charset=utf-8" }));
   app.get("/llms.txt", (c) => c.text(LLMS_TXT, 200, TEXT_CACHE));
   app.get("/llms-full.txt", (c) => c.text(LLMS_FULL_TXT, 200, TEXT_CACHE));
+  // E23: the privacy policy and terms, rendered from docs/legal/*.md (gen-legal-pages.mjs).
+  const legal = (html: string) => (c: Context) => c.html(html, 200, { ...TEXT_CACHE, "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'", "x-content-type-options": "nosniff" });
+  app.get("/privacy", legal(PRIVACY_HTML));
+  app.get("/terms", legal(TERMS_HTML));
 
   // Live: never cached beyond a few seconds.
   const statusDeps = { window, incidents, now, ctx };

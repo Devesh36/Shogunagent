@@ -52,7 +52,12 @@ export interface LogVars {
     | "wallet_unavailable" | "capacity_exhausted" | "dry_run" | "run_price_unavailable" | "upstream_unavailable" | "upstream_failure"
     | "stripe_unavailable" | "stripe_failure" | "topup_session_created" | "topup_credited" | "topup_duplicate" | "webhook_rejected"
     // `POST /v1/handoff` (handoff.ts, plan E16).
-    | "handoff_built";
+    | "handoff_built"
+    // E19 billing (billing/routes.ts, the Stripe webhook): fixed words.
+    | "statement_closed" | "commit_created" | "adjustment_applied" | "refund_debited" | "dispute_resolved" | "licence_linked" | "topup_expired"
+    // E3-T2 OAuth (oauth/app.ts): fixed words, never a client id, a code or a token.
+    | "oauth_consent_shown" | "oauth_code_issued" | "oauth_denied" | "oauth_token_issued" | "oauth_refresh_rotated" | "oauth_refresh_reuse"
+    | "oauth_code_reuse" | "oauth_invalid_request" | "oauth_client_rejected" | "oauth_revoked";
   /** Server-chosen provider and model of the accepted batch (ids, not content). */
   relayLogModel?: string;
   /** License id (an opaque token id, not user content). */
@@ -73,7 +78,12 @@ export function routeTemplate(pathname: string): string {
     "/v1/stripe/webhook", "/v1/quote", "/v1/receipts", "/v1/handoff", "/mcp", "/.well-known/pricing.json"].includes(pathname)) return pathname;
   // The agent-readable documents (plan E10, wellknown/app.ts): fixed paths, no ids.
   if (["/.well-known/mcp/server-card.json", "/.well-known/agent-card.json", "/.well-known/status.json", "/.well-known/mcp-config",
-    "/health", "/openapi.json", "/llms.txt", "/llms-full.txt"].includes(pathname)) return pathname;
+    "/health", "/openapi.json", "/llms.txt", "/llms-full.txt", "/privacy", "/terms"].includes(pathname)) return pathname;
+  // E19 billing and E3-T2 OAuth: fixed paths; ids collapsed below.
+  if (["/v1/statements", "/v1/commit", "/v1/agents/me/licence", "/v1/admin/commits", "/v1/admin/adjustments",
+    "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server",
+    "/oauth/authorize", "/oauth/token", "/oauth/revoke"].includes(pathname)) return pathname;
+  if (/^\/v1\/admin\/disputes\/[^/]+\/resolve$/.test(pathname)) return "/v1/admin/disputes/:id/resolve";
   if (/^\/v1\/keys\/[^/]+\/revoke$/.test(pathname)) return "/v1/keys/:id/revoke";
   if (/^\/v1\/keys\/[^/]+$/.test(pathname)) return "/v1/keys/:id";
   if (/^\/v1\/receipts\/[^/]+\/dispute$/.test(pathname)) return "/v1/receipts/:id/dispute";

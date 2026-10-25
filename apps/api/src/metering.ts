@@ -23,9 +23,11 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { randomUUID } from "node:crypto";
 
-import { agentError, agentMeterSubject, hasScopes, resolveAgentKey, type AgentPrincipal, type AgentScope, type AgentVars } from "./agent-keys.js";
+import { agentError, agentMeterSubject, hasScopes, resolveAgentKey, type AgentKeyLookup, type AgentPrincipal, type AgentScope, type AgentVars } from "./agent-keys.js";
 import type { AgentStore, ReserveOutcome } from "./agent-store.js";
 import { paymentRequiredResponse } from "./billing/402.js";
+import { commitTerms, discounted, type CommitTerms } from "./billing/ledger.js";
+import { LOW_BALANCE_THRESHOLD_MICROS, capReachedEvent, crossedLowBalance, lowBalanceEvent, type Notifier } from "./billing/notify.js";
 import { DEFAULT_CAPS, capsFor, periodsOf, secsUntilPeriodReset, type CapSet } from "./caps.js";
 import type { LogFn } from "./logging.js";
 import { classifyCall, quoteCost, usageOf, type MeterUnit, type Quote } from "./pricing.js";
@@ -67,6 +69,39 @@ export interface MeteringDeps {
    * against the same day as the Batch lane. Absent = not booked (development). */
   usage?: UsageStore;
   spendBreaker?: SpendBreaker;
+  /** Where `wallet.low_balance` / `cap.reached` go (E19, billing/notify.ts). Absent = not emitted. */
+  notifier?: Notifier;
+  /** Spendable balance (µ$) under which a settlement emits `wallet.low_balance`. */
+  lowBalanceThresholdMicros?: number;
+  /** How a bearer resolves to a principal. Default: `store` (agent keys only); the agent app
+   * passes a lookup that also resolves OAuth access tokens (E3-T2, oauth/app.ts). */
+  keyLookup?: AgentKeyLookup;
+  /** The Protected Resource Metadata URL a 401 points MCP clients at (RFC 9728 §5.1), when OAuth
+   * is served. */
+  resourceMetadataUrl?: string;
+}
+
+/** The `WWW-Authenticate` of a 401 on a metered route: names the resource metadata when OAuth is
+ * on, so an MCP client can discover the authorization server from the 401 alone. */
+export function wwwAuthenticate(deps: Pick<MeteringDeps, "resourceMetadataUrl">): string {
+  return deps.resourceMetadataUrl ? `Bearer realm="shogunagent", resource_metadata="${deps.resourceMetadataUrl}"` : 'Bearer realm="shogunagent"';
+}
+
+/** The commit pricing of one call: the discounted charge, and the commit terms when one applies. */
+export interface CallPrice {
+  /** µ$ the call is charged (equals the list quote without a commit). */
+  charged: number;
+  terms?: CommitTerms;
+}
+
+/** Price a list quote for a principal: an active commit discounts it (E19). Throws when the store
+ * cannot be read — a commit customer must never be charged list price by accident. */
+export async function priceCall(deps: Pick<MeteringDeps, "store">, principal: AgentPrincipal, quote: Quote, nowMs: number): Promise<CallPrice> {
+  if (quote.cost_micro_usd <= 0) return { charged: 0 };
+  const commit = await deps.store.activeCommit(principal.principalId, principal.tenantId, nowMs);
+  if (!commit) return { charged: quote.cost_micro_usd };
+  const terms = commitTerms(commit);
+  return { charged: discounted(quote.cost_micro_usd, terms.discountBps), terms };
 }
 
 /** What one classified request is, before any money moves. */
@@ -150,27 +185,44 @@ export async function reserveCall(
   call: Pick<ClassifiedCall, "method" | "name">,
   quote: Quote,
   startedMs: number,
-): Promise<{ ok: true; receiptId: string } | { ok: false; response: Response }> {
+): Promise<{ ok: true; receiptId: string; price: CallPrice } | { ok: false; response: Response }> {
   const now = (deps.now ?? (() => new Date()))();
   const nowMs = now.getTime();
   const { day, month } = periodsOf(nowMs);
   const receiptId = `rcpt_${randomUUID()}`;
+  const unavailable = (): { ok: false; response: Response } => {
+    c.set("relayLogEvent", "wallet_unavailable");
+    return { ok: false, response: agentError(c, 503, "wallet_unavailable", "The wallet store is unavailable. Retry shortly.", "retry_after", { "retry-after": "1" }) };
+  };
+  let price: CallPrice;
+  try {
+    price = await priceCall(deps, principal, quote, nowMs);
+  } catch {
+    return unavailable();
+  }
   const principalRow = await deps.store.principal(principal.principalId).catch(() => undefined);
   const caps = capsFor(deps.caps ?? DEFAULT_CAPS, principal, principalRow ?? {});
   const outcome = await deps.store.reserve({
     receiptId, principalId: principal.principalId, keyId: principal.keyId, method: call.method,
     ...(call.name !== undefined ? { name: call.name } : {}),
-    unit: quote.unit, quantity: quote.quantity, micros: quote.cost_micro_usd, ts: nowMs, day, month, caps,
+    unit: quote.unit, quantity: quote.quantity, micros: price.charged, ts: nowMs, day, month, caps,
+    ...(price.terms ? { listMicros: quote.cost_micro_usd, commit: price.terms } : {}),
   });
-  if (outcome.kind === "unavailable") {
-    c.set("relayLogEvent", "wallet_unavailable");
-    return { ok: false, response: agentError(c, 503, "wallet_unavailable", "The wallet store is unavailable. Retry shortly.", "retry_after", { "retry-after": "1" }) };
+  if (outcome.kind === "unavailable") return unavailable();
+  if (outcome.kind !== "ok") {
+    if (outcome.kind === "cap_exceeded" && deps.notifier) {
+      const event = capReachedEvent(principal.principalId, principal.keyId, {
+        scope: outcome.scope, period: outcome.period, periodKey: outcome.period === "day" ? day : month,
+        limitMicros: outcome.limitMicros, spentMicros: outcome.spentMicros, retryAfterSecs: secsUntilPeriodReset(outcome.period, nowMs),
+      }, nowMs);
+      await deps.notifier.emit(event).catch(() => undefined);
+    }
+    return { ok: false, response: refusalResponse(c, outcome, { ...quote, cost_micro_usd: price.charged }, deps, nowMs, startedMs) };
   }
-  if (outcome.kind !== "ok") return { ok: false, response: refusalResponse(c, outcome, quote, deps, nowMs, startedMs) };
   // The company's global breaker (E3-T4): the same day row the Batch lane books against.
-  if (quote.cost_micro_usd > 0 && deps.usage && deps.spendBreaker) {
+  if (price.charged > 0 && deps.usage && deps.spendBreaker) {
     const booked = await deps.usage.tryReserve(agentMeterSubject(principal), utcDate(now), 1, Number.MAX_SAFE_INTEGER, undefined, {
-      batchId: receiptId, micros: quote.cost_micro_usd, capMicros: deps.spendBreaker.capMicros,
+      batchId: receiptId, micros: price.charged, capMicros: deps.spendBreaker.capMicros,
     });
     if (booked !== "ok") {
       await deps.store.settle(receiptId, 0).catch(() => deps.log("agent_settle_failure"));
@@ -179,13 +231,30 @@ export async function reserveCall(
       return { ok: false, response: agentError(c, 503, booked === "spend_capped" ? "capacity_exhausted" : "metering_unavailable", booked === "spend_capped" ? "The service's daily capacity is exhausted. Retry after the UTC day rolls over." : "Metering is unavailable. Retry shortly.", "retry_after", { "retry-after": String(retry) }) };
     }
   }
-  return { ok: true, receiptId };
+  return { ok: true, receiptId, price };
 }
 
-/** Settle a reservation at `actualMicros`, once, on both ledgers. Never throws. */
-export async function settleCall(deps: MeteringDeps, receiptId: string, actualMicros: number): Promise<void> {
-  await deps.store.settle(receiptId, actualMicros).catch(() => deps.log("agent_settle_failure"));
+/** Settle a reservation at `actualMicros` (`listMicros` at list price), once, on both ledgers,
+ * and emit `wallet.low_balance` when this charge took the wallet under the threshold. Never throws. */
+export async function settleCall(deps: MeteringDeps, receiptId: string, actualMicros: number, listMicros: number = actualMicros, principal?: Pick<AgentPrincipal, "principalId">, funding: "wallet" | "commit" = "wallet"): Promise<void> {
+  await deps.store.settle(receiptId, actualMicros, listMicros).catch(() => deps.log("agent_settle_failure"));
   if (deps.usage && deps.spendBreaker) await deps.usage.settleSpend(receiptId, actualMicros).catch(() => deps.log("spend_settle_failure"));
+  if (deps.notifier && principal && funding === "wallet" && actualMicros > 0) {
+    const threshold = deps.lowBalanceThresholdMicros ?? LOW_BALANCE_THRESHOLD_MICROS;
+    const wallet = await deps.store.wallet(principal.principalId).catch(() => undefined);
+    if (wallet) {
+      const available = Math.max(0, wallet.balanceMicros - wallet.reservedMicros);
+      if (crossedLowBalance(available, actualMicros, threshold)) {
+        const nowMs = (deps.now ?? (() => new Date()))().getTime();
+        await deps.notifier.emit(lowBalanceEvent(principal.principalId, available, threshold, topupUrl(deps), nowMs)).catch(() => undefined);
+      }
+    }
+  }
+}
+
+/** The settled figures of a call whose list charge is `listMicros`: discounted under a commit. */
+export function settledPrice(price: CallPrice, listMicros: number): { charged: number; list: number } {
+  return { charged: price.terms ? discounted(listMicros, price.terms.discountBps) : listMicros, list: listMicros };
 }
 
 /**
@@ -201,10 +270,10 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
       : classifyRequest(c);
     if ("error" in classified) return agentError(c, 400, "invalid_metering_header", classified.error);
     const call: ClassifiedCall = classified;
-    const resolved = await resolveAgentKey(c.req.header("authorization"), deps.store, startedMs);
+    const resolved = await resolveAgentKey(c.req.header("authorization"), deps.keyLookup ?? deps.store, startedMs);
     if (!resolved.ok) {
       c.set("relayLogEvent", "agent_key_rejected");
-      return agentError(c, 401, resolved.code, "Send a valid agent key as `Authorization: Bearer sa_live_…` (register with POST /v1/agents).", "register", { "www-authenticate": 'Bearer realm="shogunagent"' });
+      return agentError(c, 401, resolved.code, "Send a valid agent key as `Authorization: Bearer sa_live_…` (register with POST /v1/agents), or an OAuth access token.", "register", { "www-authenticate": wwwAuthenticate(deps) });
     }
     const principal = resolved.principal;
     c.set("relayLogAgentKey", principal.keyId);
@@ -220,9 +289,13 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
       c.set("relayLogEvent", "dry_run");
       const wallet = await deps.store.wallet(principal.principalId).catch(() => undefined);
       const available = wallet ? Math.max(0, wallet.balanceMicros - wallet.reservedMicros) : undefined;
+      const price = await priceCall(deps, principal, quote, startedMs).catch(() => undefined);
+      if (!price) return agentError(c, 503, "wallet_unavailable", "The wallet store is unavailable. Retry shortly.", "retry_after", { "retry-after": "1" });
+      const commitFunded = price.terms?.funding === "commit";
       return c.json({
-        result: null, dry_run: true, quote: usageOf(quote), usage: { unit: quote.unit, quantity: 0, cost_micro_usd: 0 },
-        ...(available !== undefined ? { balance_micro_usd: available, sufficient: available >= quote.cost_micro_usd } : {}),
+        result: null, dry_run: true, quote: { ...usageOf(quote), cost_micro_usd: price.charged, ...(price.terms ? { list_cost_micro_usd: quote.cost_micro_usd, commit_id: price.terms.commitId, discount_bps: price.terms.discountBps } : {}) },
+        usage: { unit: quote.unit, quantity: 0, cost_micro_usd: 0 },
+        ...(available !== undefined ? { balance_micro_usd: available, sufficient: commitFunded || available >= price.charged } : {}),
         latency_ms: Math.max(0, now().getTime() - startedMs), next_action: null,
       }, 200, { "cache-control": "no-store" });
     }
@@ -240,10 +313,11 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
       c.set("relayLogEvent", "upstream_failure");
       return agentError(c, 503, "upstream_unavailable", "The core did not answer. Nothing was charged. Retry shortly.", "retry_after", { "retry-after": "5" });
     }
-    const charged = upstream.status >= 200 && upstream.status < 300 ? quote.cost_micro_usd : 0;
-    await settleCall(deps, reserved.receiptId, charged);
+    const { charged, list } = settledPrice(reserved.price, upstream.status >= 200 && upstream.status < 300 ? quote.cost_micro_usd : 0);
+    await settleCall(deps, reserved.receiptId, charged, list, principal, reserved.price.terms?.funding ?? "wallet");
     const headers = new Headers(upstream.headers);
     for (const [k, v] of Object.entries(usageHeaders(reserved.receiptId, { ...quote, cost_micro_usd: charged }))) headers.set(k, v);
+    if (reserved.price.terms) headers.set("x-usage-list-cost-micro-usd", String(list));
     headers.set("x-latency-ms", String(Math.max(0, now().getTime() - startedMs)));
     return new Response(upstream.body, { status: upstream.status, headers });
   };

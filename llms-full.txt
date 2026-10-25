@@ -1,6 +1,6 @@
 # ShogunAgent — full documentation for agents
 
-Generated from README.md, SKILL.md, apps/api/README-agent-api.md, docs/api/402.md, docs/api/agent-surfaces.md, docs/api/core-tools.md, docs/api/deprecation-policy.md, docs/api/export-v1.md, docs/api/handoff.md, docs/api/tool-table.json.md by scripts/gen-llms-txt.mjs. The index is llms.txt. Each section below is one file, verbatim.
+Generated from README.md, SKILL.md, apps/api/README-agent-api.md, docs/api/402.md, docs/api/agent-surfaces.md, docs/api/billing.md, docs/api/core-tools.md, docs/api/deprecation-policy.md, docs/api/export-v1.md, docs/api/handoff.md, docs/api/oauth.md, docs/api/tool-table.json.md by scripts/gen-llms-txt.mjs. The index is llms.txt. Each section below is one file, verbatim.
 
 ---
 
@@ -383,12 +383,25 @@ Conventions:
 | PATCH | `/v1/keys/{id}` | any (lower); `admin` (raise) | Set a key's hard caps |
 | GET | `/v1/wallet` | `read` | Balance, reserved, spendable, caps, this day's / month's spend |
 | POST | `/v1/wallet/topup` | `write` | Create a Stripe Checkout session (card rail) |
-| POST | `/v1/stripe/webhook` | Stripe signature | Credit the wallet when a Checkout completes (idempotent by event id) |
-| POST | `/v1/quote` | `read` | The exact cost of a call, nothing reserved |
+| POST | `/v1/stripe/webhook` | Stripe signature | Credit a completed Checkout (by event id), close an expired one, debit a `charge.refunded` (by charge high-water mark) |
+| POST | `/v1/quote` | `read` | The exact cost of a call, nothing reserved (discounted under a commit, with the list price) |
 | GET | `/v1/receipts?since=&limit=` | `read` | Per-call receipts, oldest first |
 | POST | `/v1/receipts/{id}/dispute` | `write` | Open a dispute on a receipt (one per receipt) |
 | POST | `/v1/handoff` | `read` | An A2A state-of-work handoff for a task, built from one recall through the core (free; `docs/api/handoff.md`) |
+| GET | `/v1/statements?month=&format=` | `read` | The month's statement, JSON or CSV; immutable once the month closes ([billing](../../docs/api/billing.md)) |
+| GET | `/v1/commit` | `read` | The active annual commit: discount, drawn, remaining, overage |
+| POST | `/v1/agents/me/licence` | `write` (key only) | Link a ShogunAI licence; Pro earns $20 a month |
+| POST | `/v1/admin/commits` | `admin` key, Idempotency-Key | Create an annual commit (10–25% off) |
+| POST | `/v1/admin/adjustments` | `admin` key, Idempotency-Key | Credit or refund (a ledger entry; optional Stripe refund) |
+| POST | `/v1/admin/disputes/{id}/resolve` | `admin` key | Resolve a dispute: credit or reject |
+| GET | `/.well-known/oauth-protected-resource[/mcp]`, `/.well-known/oauth-authorization-server` | none | OAuth metadata ([oauth](../../docs/api/oauth.md)); only with `AGENT_OAUTH_SECRET` |
+| GET, POST | `/oauth/authorize` | none (consent page) | Authorization code + PKCE S256; the person pastes the principal's key once |
+| POST | `/oauth/token`, `/oauth/revoke` | none (public client + PKCE) | Code exchange, rotated refresh, revocation |
+| GET | `/privacy`, `/terms` | none | Privacy policy and terms (DRAFT for legal review) |
 | ALL | `/mcp` | by unit (see below) | The metered MCP Streamable HTTP proxy |
+
+Everywhere a key is accepted, an OAuth access token (`sat_…`) is accepted too, as the consenting
+key with at most its scopes — except key management, licence linking and admin routes.
 
 ## 1. Register
 
@@ -518,7 +531,7 @@ curl -s -X POST $BASE/v1/wallet/topup -H "Authorization: Bearer $KEY" -H 'conten
   "next_action": "approve_at_url", "instructions": "Open url in a browser and pay. …" }
 ```
 
-Hand `url` to a human once. Stripe calls `POST /v1/stripe/webhook` (configure the endpoint for
+Hand `url` to a human once. Stripe calls `POST /v1/stripe/webhook` (configure the endpoint for `checkout.session.expired`, `charge.refunded` and
 `checkout.session.completed`; `Stripe-Signature` is verified with `STRIPE_WEBHOOK_SECRET`); the
 wallet is credited `amount_total` once per event id. Then retry the `402`'d call unchanged.
 Without `STRIPE_SECRET_KEY` the route answers `503 topup_unavailable`.
@@ -587,8 +600,18 @@ tables.
 
 Not in this slice: the core behind `/mcp` (E4 wires `mcpUpstream`; until then `/mcp` answers
 `503 upstream_unavailable` before reserving), the router's `runPricer`, storage billing (the
-rate is published; the sweep that books it comes with the core's usage report), and OAuth/CIMD
-(E3-T2).
+rate is published; the sweep that books it comes with the core's usage report), and webhook
+delivery of the billing events (`wallet.low_balance`, `cap.reached` go to the in-memory notifier
+until E15 adds per-principal webhooks; shapes in `docs/api/billing.md`).
+
+## 7. Statements, commits and OAuth
+
+- Monthly statements, annual commits, refunds, credits, dispute resolution, the ShogunAI Pro
+  bundle and the billing events: [`docs/api/billing.md`](../../docs/api/billing.md).
+- OAuth 2.1 with Client ID Metadata Documents for MCP clients (no dynamic registration):
+  [`docs/api/oauth.md`](../../docs/api/oauth.md).
+- Operations (schema, Stripe events, the overage price, the admin key, `AGENT_OAUTH_SECRET`):
+  `DEPLOY.md` §9.1.
 
 ---
 
@@ -729,6 +752,9 @@ invariant 12: these are derived from code and config; the human docs derive from
 | CLI | `npx shogunagent` (`packages/cli`) | — | `shogunagent help --json` names commands, endpoints and the skill version |
 | Skill | `SKILL.md` (root), `https://shogunagent.dev/SKILL.md` | hand-written (E10-T5); the selection eval (E11) gates edits | — |
 | Benchmarks | `benchmarks.json` | E10-T8, from `crates/memory-bench` (E12) | not in this slice |
+| OAuth metadata | `GET /.well-known/oauth-protected-resource[/mcp]`, `GET /.well-known/oauth-authorization-server` | `apps/api/src/oauth/app.ts` | `identity.ts` + the scope list; served with `AGENT_OAUTH_SECRET` ([oauth.md](oauth.md)) |
+| Privacy policy / terms | `GET /privacy`, `GET /terms` | `scripts/gen-legal-pages.mjs` (`--check` in CI) → `legal-content.generated.ts` | `docs/legal/*.md` (DRAFT for legal review) |
+| Directory listings | `docs/directories/anthropic.md`, `docs/directories/openai.md` | hand-written submission packages (E23) | the rows above |
 
 ## What is fixture-driven until E4 lands
 
@@ -761,6 +787,129 @@ long descriptions, provider and URLs. `apps/api/test/wellknown.test.ts` pins `se
 - `apps/api/incidents.json` — the public incident history: `[{ id: "inc_<slug>", title, severity:
   "minor" | "major", started_at, resolved_at | null, affected: [route templates], updates: [{ at,
   text }] }]`. An open `major` incident makes `/health` answer 503.
+
+---
+
+<!-- file: docs/api/billing.md -->
+
+# Billing: statements, commits, adjustments and events
+
+How the hosted gateway bills beyond the per-call wallet of `docs/api/402.md`: monthly statements,
+annual commit contracts, refunds and credits, the ShogunAI Pro bundle, and the two billing events.
+Implementation: `apps/api/src/billing/` (`ledger.ts` rules, `routes.ts` routes, `jobs.ts` sweep
+jobs, `notify.ts` events); tests: `apps/api/test/billing.test.ts`. Plan: E19 and E14-T3. Amounts
+are integer micro-USD (1 USD = 1,000,000). Reads, export and deletion are free (invariant 10).
+
+## Statements
+
+`GET /v1/statements?month=YYYY-MM&format=json|csv` (`read` scope; default: this month, JSON; an
+`Accept: text/csv` header also selects CSV).
+
+- **Usage per unit**: `calls`, `quantity`, `list_micro_usd`, `charged_micro_usd`,
+  `discount_micro_usd`, `commit_funded_micro_usd`, `wallet_funded_micro_usd`, `free`. Free units
+  (`read`, `protocol`) are listed with their call counts at `0`.
+- **Credits** (Stripe top-ups, the signup allowance, the Pro bundle), **adjustments** (operator
+  credits, refunds) and **disputes** with their resolution (`open` / `resolved` / `rejected`,
+  `credit_micro_usd`). A dispute's free-text reason never appears in a statement.
+- **Commit**: the commit in force during the month, with its drawdown.
+- **`hash`**: `sha256:` over the canonical JSON (RFC 8785) of every other field; the same value is
+  in the `X-Statement-Hash` header and the CSV's last row.
+
+A month **closes** one hour after it ends (UTC). The first request after that stores the
+statement; every later request returns the stored copy byte for byte, whatever happens to the
+ledger afterwards. Receipts are deleted after 400 days; closed statements are kept.
+
+```sh
+curl -s "$BASE/v1/statements?month=2026-10" -H "Authorization: Bearer $KEY"
+curl -s "$BASE/v1/statements?month=2026-10&format=csv" -H "Authorization: Bearer $KEY" -o statement-2026-10.csv
+```
+
+CSV columns: `section,key,calls,quantity,list_micro_usd,amount_micro_usd,discount_micro_usd,status,ref,ts`
+with sections `usage`, `credit`, `adjustment`, `dispute`, `total` and `hash`.
+
+## Annual commits
+
+An enterprise contract: an amount of spend over a period (at most 367 days) at 10–25% off
+(`discount_bps` 1000–2500), for one principal or a whole tenant (a principal's own commit wins over
+its tenant's). Created by an operator:
+
+```sh
+curl -s -X POST $BASE/v1/admin/commits -H "Authorization: Bearer $ADMIN_KEY" -H 'Idempotency-Key: acme-2027' \
+  -H 'content-type: application/json' \
+  -d '{"subject":"tenant","subject_id":"ten_acme","amount_micro_usd":12000000000,"discount_bps":2000,
+       "starts_at":"2027-01-01T00:00:00Z","ends_at":"2028-01-01T00:00:00Z","stripe_customer_id":"cus_…"}'
+```
+
+`201 { commit, created: true }`; the same Idempotency-Key answers `200` with the same commit; a
+period overlapping another commit of the same subject is `409 commit_overlap`.
+
+While a commit is active:
+
+- Every metered call is charged `list − floor(list × bps / 10000)`. Quotes (`POST /v1/quote`,
+  `Mcp-Dry-Run`) show `cost_micro_usd` (discounted), `list_cost_micro_usd`, `commit_id` and
+  `discount_bps`; the real call settles at exactly the dry-run figure. `/mcp` responses add
+  `X-Usage-List-Cost-Micro-Usd`; receipts keep both prices.
+- A call is **commit-funded** while the commit has headroom, or past it when overage billing is
+  configured: nothing is held on the wallet, the discounted cost is drawn down from the commit.
+  Past the amount without overage billing, calls fall back to the wallet, still discounted.
+- **Overage** (drawn above the amount) is reported to Stripe as usage records on the customer's
+  metered subscription item (`STRIPE_COMMIT_OVERAGE_PRICE_ID`, one unit = one cent), in whole
+  cents, by the sweep. Each report's id is its Stripe Idempotency-Key.
+- Hard caps still apply: a commit is not a blank cheque for a leaked key.
+
+`GET /v1/commit` (`read`) returns the active commit: `discount_bps`, `amount_micro_usd`,
+`drawn_micro_usd`, `remaining_micro_usd`, `overage_micro_usd`, `overage_billing`, the period.
+
+## Refunds, credits and disputes
+
+- `POST /v1/admin/adjustments` (`admin`, Idempotency-Key required):
+  `{ principal_id, kind: "credit" | "refund", amount_micro_usd, reason, charge_id?, ref? }`.
+  `reason` is one of `goodwill`, `dispute`, `service_credit`, `refund`, `chargeback`,
+  `correction`. A credit adds to the wallet; a refund without `charge_id` is a ledger debit; with
+  `charge_id` it also refunds the card through Stripe. A debit never takes the balance below zero
+  (the entry records what it applied).
+- `charge.refunded` (Stripe webhook) debits the increase of the charge's refunded total. The admin
+  route and the webhook converge on that total, so a refund is debited once whichever arrives
+  first, and a later dashboard refund debits only the difference.
+- `checkout.session.expired` closes a top-up session that was never paid; a completed session is
+  never marked expired.
+- `POST /v1/admin/disputes/{id}/resolve` (`admin`): `{ outcome: "credit" | "reject",
+  amount_micro_usd? }`. A credit defaults to the receipt's cost and is the ledger entry
+  `dispute:<id>`. Resolving twice changes nothing.
+
+Admin routes take an `admin` agent key, never an OAuth access token.
+
+## ShogunAI Pro bundle
+
+`POST /v1/agents/me/licence` with `X-Shogun-Licence: <the ShogunAI licence token>` links the
+licence's subject (the licence id, or `account:<acc>`) to the calling principal. A **Pro** licence
+earns `$20` of credit per UTC month, keyed `grant:shogunai-pro:<subject>:<YYYY-MM>`: granted at
+link time and by the sweep for every Pro link verified in the last 35 days, once per subject per
+month whichever principal it is linked to. Takes the principal's own key (not an OAuth token).
+
+## Events
+
+There is no per-principal webhook module yet (E15 brings webhooks); events go to a pluggable
+`Notifier` (`apps/api/src/billing/notify.ts`). The default keeps the newest events per principal in
+memory and never logs them. Ids are deterministic, so a notifier dedupes and a redelivery is safe.
+
+```json
+{ "type": "wallet.low_balance", "id": "wallet.low_balance:prn_…:2026-10-25", "principal_id": "prn_…",
+  "created_at": "2026-10-25T12:00:05.000Z",
+  "data": { "balance_micro_usd": 500000, "threshold_micro_usd": 1000000, "topup_url": "https://…/v1/wallet/topup" } }
+```
+
+Emitted when a wallet-funded settlement takes the spendable balance below the threshold ($1) from
+at or above it; at most once per principal per UTC day.
+
+```json
+{ "type": "cap.reached", "id": "cap.reached:key:ak_…:2026-10-25", "principal_id": "prn_…",
+  "created_at": "2026-10-25T12:00:05.000Z",
+  "data": { "scope": "key", "period": "day", "period_key": "2026-10-25", "limit_micro_usd": 1000000,
+            "spent_micro_usd": 999600, "key_id": "ak_…", "retry_after": 43200 } }
+```
+
+Emitted when a hard cap refuses a call (`402 cap_exceeded`); once per counter per period.
 
 ---
 
@@ -1111,6 +1260,88 @@ entity and fact (Medium ones keep the `possibly:` prefix, the quotes and event i
 text), and the idempotency key `handoff:<handoff_id>:<n>`, so accepting the same handoff twice
 replays instead of appending. The receiver then reads it back with
 `memory.recall({ include_scratch: true })`.
+
+---
+
+<!-- file: docs/api/oauth.md -->
+
+# OAuth 2.1 for MCP clients
+
+How Claude Code, Cursor and other MCP clients connect to the hosted server without pasting a key
+into their config. Implementation: `apps/api/src/oauth/` (`app.ts` endpoints, `cimd.ts` client
+metadata, `store.ts` hashed codes and tokens); tests: `apps/api/test/oauth.test.ts`. Plan: E3-T2.
+Served when the deployment sets `AGENT_OAUTH_SECRET`.
+
+The gateway is both the protected resource (`/mcp` and the REST routes) and its authorization
+server. It follows the MCP 2026-07-28 authorization profile: **Client ID Metadata Documents
+replace Dynamic Client Registration**, so there is no registration endpoint.
+
+## Discovery
+
+1. A request to `/mcp` without a valid token answers `401` with
+   `WWW-Authenticate: Bearer realm="shogunagent", resource_metadata="<origin>/.well-known/oauth-protected-resource/mcp"`.
+2. `GET /.well-known/oauth-protected-resource/mcp` (RFC 9728; also without the `/mcp` suffix):
+   `resource` (the MCP URL), `authorization_servers` (this origin), `scopes_supported`
+   (`read`, `write`, `run`), `bearer_methods_supported: ["header"]`.
+3. `GET /.well-known/oauth-authorization-server` (RFC 8414): `authorization_endpoint`
+   `/oauth/authorize`, `token_endpoint` `/oauth/token`, `revocation_endpoint` `/oauth/revoke`,
+   `code_challenge_methods_supported: ["S256"]`, `token_endpoint_auth_methods_supported: ["none"]`,
+   `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported:
+   true`. No `registration_endpoint`.
+
+## Clients are their metadata document
+
+The `client_id` is an HTTPS URL; the JSON there registers the client:
+
+```json
+{ "client_id": "https://client.example.com/oauth/client.json",
+  "client_name": "Example MCP Client",
+  "logo_uri": "https://client.example.com/logo.png",
+  "redirect_uris": ["http://127.0.0.1/callback", "https://client.example.com/cb"],
+  "token_endpoint_auth_method": "none" }
+```
+
+The fetch is guarded against server-side request forgery: `https` only, a path required, no
+userinfo, fragment or dot segments; hosts that are `localhost`, single labels, `.local` /
+`.internal` / `.home.arpa`, or IP literals in private, loopback, link-local, CGNAT, multicast,
+documentation or reserved ranges (IPv4 and IPv6, including mapped / NAT64 / 6to4 forms) are
+refused; on Node every address the name resolves to is checked too. Redirects are not followed,
+the body is capped at 5 KiB, the request times out after 5 s, and the content type must be JSON.
+The document must name itself, list 1–20 redirect URIs (`https:`, or `http:` on a loopback host),
+and claim no client secret. Valid documents are cached for their `max-age` (60 s – 24 h).
+
+`redirect_uri` must equal a listed URI exactly; the one exception (RFC 8252 §7.3) is the port of an
+`http:` loopback URI.
+
+## The flow
+
+1. **Authorize.** `GET /oauth/authorize?response_type=code&client_id=…&redirect_uri=…&code_challenge=…&code_challenge_method=S256&state=…&scope=read%20write&resource=<mcp url>`.
+   A bad client or redirect URI gets an HTML error page (never a redirect). Other errors return to
+   the redirect URI (`invalid_request`, `unsupported_response_type`, `invalid_scope`,
+   `invalid_target`). Otherwise the consent page names the client, where it returns to and what
+   each scope allows.
+2. **Consent.** The person pastes the principal's agent key (`sa_live_…`): that is what says which
+   account to connect. The grant is the requested scopes intersected with the key's; `admin` is
+   never grantable; an OAuth access token cannot consent to another grant. Approve redirects with
+   `code`, `state` and `iss`; deny redirects with `error=access_denied`.
+3. **Token.** `POST /oauth/token` (form-encoded) with `grant_type=authorization_code`, `code`,
+   `redirect_uri`, `client_id`, `code_verifier` (43–128 characters, S256 only). Answers
+   `{ access_token: "sat_…", token_type: "Bearer", expires_in: 900, refresh_token: "sar_…", scope }`.
+   Codes live 60 seconds and work once; a second exchange of the same code revokes everything the
+   first one issued.
+4. **Refresh.** `grant_type=refresh_token` with `refresh_token` and `client_id` (and optionally a
+   narrower `scope`). Every refresh rotates the refresh token; presenting a rotated one again
+   revokes the whole grant (reuse detection). Refresh tokens live 30 days.
+5. **Revoke.** `POST /oauth/revoke` with `token` (RFC 7009): revokes the grant; always `200`.
+
+## What an access token can do
+
+Everywhere an `sa_` key works, with the consenting key's principal, wallet and caps, and at most
+its scopes. It stops working when it expires, when its grant is revoked, and when the key behind it
+is revoked or expires. It cannot revoke or re-cap keys, link a licence, or call admin routes.
+
+Codes, access tokens and refresh tokens are stored only as SHA-256 hashes; none of them, nor the
+client id or redirect URI, appears in a log line.
 
 ---
 

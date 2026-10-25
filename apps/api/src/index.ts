@@ -20,8 +20,11 @@
  */
 import { serve } from "@hono/node-server";
 
+import { lookup } from "node:dns/promises";
+
 import { InMemoryAgentStore } from "./agent-store.js";
-import { BootError, SERVER_TIMEOUTS, agentLaneLine, createRelay, formLaneLine, intFromEnv, postgresStore, relayConfigFromEnv, startPeriodicSweep, trialLaneLine, type RelayStore } from "./boot.js";
+import { InMemoryOAuthStore } from "./oauth/store.js";
+import { BootError, SERVER_TIMEOUTS, agentLaneLine, billingJobs, createRelay, formLaneLine, intFromEnv, postgresStore, relayConfigFromEnv, startPeriodicSweep, trialLaneLine, type RelayStore } from "./boot.js";
 import { operational } from "./logging.js";
 import { TokenBucketLimiter } from "./ratelimit.js";
 import { postgresClient } from "./sql.js";
@@ -59,6 +62,13 @@ operational.info(trialLaneLine(config));
 operational.info(formLaneLine(config));
 operational.info(agentLaneLine(config));
 
+/** Every address a Client ID Metadata Document host resolves to, so the CIMD fetch can refuse a
+ * public name that points into a private range (oauth/cimd.ts). Node only; on Workers the
+ * platform's fetch cannot reach private networks. */
+async function resolveAllAddresses(hostname: string): Promise<string[]> {
+  return (await lookup(hostname, { all: true, verbatim: true })).map((a) => a.address);
+}
+
 async function openStore(): Promise<RelayStore> {
   if (databaseUrl) {
     // The production store (FR-SVC-04): every instance reserves against the same rows. Refuse to
@@ -67,10 +77,11 @@ async function openStore(): Promise<RelayStore> {
     try {
       await store.usage.checkSchema();
       if (config.agent) await store.agent.checkSchema();
+      if (config.agent?.oauthSecret) await store.oauth.checkSchema();
     } catch (e) {
       refuse(e instanceof Error ? e.message : "shared store unavailable");
     }
-    return store;
+    return { ...store, resolveHost: resolveAllAddresses };
   }
   // Development only. The caps, the idempotency tombstones and the spend ledger live in this
   // process and vanish with it: a restart forgets every reservation and would let a replayed
@@ -80,7 +91,7 @@ async function openStore(): Promise<RelayStore> {
     usage: new InMemoryUsageStore(),
     rateLimit: new TokenBucketLimiter(config.rateBurst, config.ratePerMin),
     // Keys, wallets and receipts vanish with the process too.
-    ...(config.agent ? { agent: new InMemoryAgentStore() } : {}),
+    ...(config.agent ? { agent: new InMemoryAgentStore(), oauth: new InMemoryOAuthStore(), resolveHost: resolveAllAddresses } : {}),
     close: () => Promise.resolve(),
   };
 }
@@ -106,7 +117,14 @@ if (metricsEverySec > 0) {
 // The periodic sweep (audit M9): store retention maintenance, then book the provider's actual
 // usage for ended batches whose results the client never read, so the day's spend is real, not an
 // upper bound. Counts only in the log.
-const stopSweep = startPeriodicSweep(relay.settlementDeps, config.settleEverySec);
+const stopSettle = startPeriodicSweep(relay.settlementDeps, config.settleEverySec);
+// The billing jobs (Pro bundle grants, commit overage reports, OAuth retention) on the same period;
+// the Worker runs them inside `relay.sweep` from its Cron Trigger.
+const billingTimer = config.agent && config.settleEverySec > 0
+  ? setInterval(() => { void billingJobs(config, store, Date.now()); }, config.settleEverySec * 1000)
+  : undefined;
+billingTimer?.unref();
+const stopSweep = (): void => { stopSettle(); if (billingTimer) clearInterval(billingTimer); };
 
 // Shorter than Node's defaults so a trickled body cannot hold a connection for minutes (boot.ts).
 const server = serve({ fetch: relay.app.fetch, port, ...(host ? { hostname: host } : {}), serverOptions: { ...SERVER_TIMEOUTS } }, (info) => {
