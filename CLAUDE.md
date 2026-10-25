@@ -18,7 +18,7 @@ The state layer for AI agents: a typed, provenance-backed model of a person's wo
 8. **Migrations are additive and frozen.** V1–V91 are never edited, renamed or renumbered. New schema goes in `V<max+1>__*.sql` with a rollback note in `docs/migrations/`. `scripts/check-migrations.py` and the upgrade-lineage test must pass.
 9. **One HTTP egress.** Only `shogun-core` depends on an HTTP or WebSocket client (`scripts/check-http-egress.py`).
 10. **Reads are free.** `state.*`, `memory.get_context_pack`, `memory.recall`, `memory.search` and remote approvals are metered for observability (`Mcp-Method` / `Mcp-Name`) and never billed. Billing attaches to ingest, model-invoking operations, tool runs and storage only.
-11. **Wire names are frozen.** The core 22 tool names, their input schemas and their MCP annotations are snapshot-tested (`wire-freeze`). Changing one requires a new name and a deprecation entry, never an in-place change.
+11. **Wire names are frozen.** The 21 core tool names, their input schemas and their MCP annotations are snapshot-tested (`wire-freeze`). Changing one requires a new name and a deprecation entry, never an in-place change.
 12. **Agent-readable surfaces are generated, not hand-written.** `server-card.json`, `openapi.json`, `pricing.json`, tool descriptions' annotations and `llms.txt` are derived from code and config. Human docs derive from them, never the reverse.
 13. **No self-preferencing in the router.** First-party connectors are ranked by the same published score as third-party ones, labeled `first_party`, with price inside `scoreBreakdown`.
 

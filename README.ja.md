@@ -148,7 +148,7 @@ AI 前提で開発する。フェーズは順序と出口条件だけで定義�
 
 | フェーズ | 到達点 | 出口条件（推定） |
 |---|---|---|
-| **1. コアとルーター骨格** | `shogunagent-core` を Linux で単体起動（テナント別 SQLite）。Streamable HTTP MCP core 22 本。API key 認証。`/memories` 射影。エクスポート形式 v1。OSS 公開。ルーター：discover / inspect / run、Monid 互換コネクタ、hosted パススルー、記憶・状態カテゴリ、キー別上限、全 run に L1/L2/L3。プリペイド・クレジットと 402。SKILL.md、Claude Code プラグイン、MCP Registry と Glama 掲載。同一ハーネス結果公開。ShogunAI Mac の Memory API をブランド統合 | 外部エージェントからの `tools/call` が継続的に流れる。design partner 契約。ベンチマーク公開 1 本。ルーター → 状態層の転換率が計測できている |
+| **1. コアとルーター骨格** | `shogunagent-core` を Linux で単体起動（テナント別 SQLite）。Streamable HTTP MCP core 21 本。API key 認証。`/memories` 射影。エクスポート形式 v1。OSS 公開。ルーター：discover / inspect / run、Monid 互換コネクタ、hosted パススルー、記憶・状態カテゴリ、キー別上限、全 run に L1/L2/L3。プリペイド・クレジットと 402。SKILL.md、Claude Code プラグイン、MCP Registry と Glama 掲載。同一ハーネス結果公開。ShogunAI Mac の Memory API をブランド統合 | 外部エージェントからの `tools/call` が継続的に流れる。design partner 契約。ベンチマーク公開 1 本。ルーター → 状態層の転換率が計測できている |
 | **2. 承認・SDK・課金・カタログ** | 遠隔 L2/L3 承認（Web、Slack、webhook）。A2A Agent Card。TS/Python SDK と `withShogunAgent()`。agent-scratch 名前空間と ACL・監査。Stripe 従量課金とウォレット。個別化 `discover`。プロバイダのセルフサーブ掲載。Anthropic と OpenAI のディレクトリ。ローカル埋め込み | 有料ウォレット利用者が増え続ける。ingest 粗利が原価の 3 倍以上。LLM 原価 ≤ 売上の 15%。転換率が改善 |
 | **3. Enterprise・標準・決済** | Enterprise コミット契約（BYOC、SSO/SCIM、監査エクスポート、ZDR）。W3C memory interop CG とエクスポート形式 v2。open-loop ベンチ v1 の公開。プロバイダ支払いとカタログ一般公開。x402 の判断。資金調達 | Enterprise 契約。NRR > 110%。同一ハーネスで multi-session / temporal 上位 3。自前コネクタ比率の上昇 |
 

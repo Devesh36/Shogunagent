@@ -149,13 +149,13 @@
 | E3-T4 | Ed25519 の既存トークン（ShogunAI ライセンス）を `meterSubject` として併存させ、Mac アプリからの sync に使う | `apps/api/src/auth.ts` | 既存トークンでの `/v1/review` が従来どおり通る |
 | E3-T5 | 鍵 → principal → ファイルの解決をキャッシュし p95 を測る | `shogun-core/src/tenancy/` | 解決 p95 < 5ms（memory-bench に項目追加） |
 
-### E4. Streamable HTTP MCP（2026-07-28）と core 22 の凍結
+### E4. Streamable HTTP MCP（2026-07-28）と core 21 の凍結
 
 | T | 内容 | 触る場所 | 受け入れ条件 |
 |---|---|---|---|
 | E4-T1 | Streamable HTTP トランスポート：ステートレス、`Mcp-Method`/`Mcp-Name` 必須、`ttlMs`/`cacheScope` を list/read に付与 | `crates/shogun-mcp/src/mcp.rs`, `server.rs` | MCP 公式 conformance テストが通る |
 | E4-T2 | MRTR：L2 を `resultType: "input_required"` で返し、`inputResponses` で再試行。L3 は URL モード elicitation で承認 URL を返す | `shogun-mcp/src/mcp.rs`, `shogun-agents/src/approval.rs` | `actions.execute` で L2 がフォーム確認、L3 が URL を返す（テスト） |
-| E4-T3 | core 22 の確定：既存 Core 20（`memory.search`, `memory.get_context`, `memory.get_context_pack`, `memory.get_events`, `memory.read_session`, `memory.get_wrap`, `calendar.upcoming`, `memory.get_periods`, `memory.append_note`, `profile.whoami`, `state.commitments.list`, `state.open_loops.list`, `state.people.list`, `state.projects.list`, `state.people.get`, `state.projects.get`, `wiki.evidence`, `actions.execute`, `actions.status` ＋ 会議系 4 本は `desktop` へ移動）＋ `memory.ingest` ＋ `memory.recall`。wire name を `docs/api/core-tools.md` に凍結 | `shogun-mcp/src/memory_api.rs`（`tool_group`）, `toolsets.rs`, `docs/api/core-tools.md` (new) | `SHOGUN_MCP_TOOLSETS=core` のツール数が 22。名前のスナップショットテスト |
+| E4-T3 | core 21 の確定：既存 Core（会議系を除く 19 本：`memory.search`, `memory.get_context`, `memory.get_context_pack`, `memory.get_events`, `memory.read_session`, `memory.get_wrap`, `calendar.upcoming`, `memory.get_periods`, `memory.append_note`, `profile.whoami`, `state.commitments.list`, `state.open_loops.list`, `state.people.list`, `state.projects.list`, `state.people.get`, `state.projects.get`, `wiki.evidence`, `actions.execute`, `actions.status` ＋ 会議系 4 本は `desktop` へ移動）＋ `memory.ingest` ＋ `memory.recall`。wire name を `docs/api/core-tools.md` に凍結 | `shogun-mcp/src/memory_api.rs`（`tool_group`）, `toolsets.rs`, `docs/api/core-tools.md` (new) | `SHOGUN_MCP_TOOLSETS=core` のツール数が 22。名前のスナップショットテスト |
 | E4-T4 | ツール説明文をエージェント向けに書き直す（タスク名指し、除外、コスト）。`readOnlyHint`/`destructiveHint`/`openWorldHint` を `ApiLevel` から機械生成 | `shogun-mcp/src/tool_catalog.rs` | アノテーションが `tool_level` と 1 対 1（テスト）。説明文は E11 の選択 eval で評価 |
 | E4-T5 | 非推奨ポリシーを文書化し、`deprecated` フィールドをツール定義に追加 | `docs/api/deprecation-policy.md` (new) | レビュー |
 | E4-T6 | デスクトップ固有ツール約 100 本を feature `desktop` の下に移す | `shogun-mcp/src/memory_api.rs` | 既定 feature の `Toolsets::all()` が core + import + state + wiki のみ |
@@ -300,7 +300,7 @@
 
 ## 7. API 仕様の骨子
 
-### 7.1 core 22（wire name 凍結）
+### 7.1 core 21（wire name 凍結）
 
 読み取り（L1、無料）：`memory.search`, `memory.get_context`, `memory.get_context_pack`, `memory.get_events`, `memory.read_session`, `memory.get_wrap`, `memory.get_periods`, `memory.recall`, `calendar.upcoming`, `profile.whoami`, `state.commitments.list`, `state.open_loops.list`, `state.people.list`, `state.projects.list`, `state.people.get`, `state.projects.get`, `wiki.evidence`, `actions.status`
 書き込み（L1、従量）：`memory.append_note`, `memory.ingest`
@@ -356,7 +356,7 @@ x402 の `payment-required` ヘッダ形式と互換のフィールド名を使�
 | `ci.yml` | clippy（deny）、test、feature matrix、ガード 6 種、relay の vitest | 全 PR |
 | `migration-safety.yml` | V1〜V91 凍結、全版アップグレード原子性 | 全 PR |
 | `tenant-boundary` | principal 跨ぎの読み取りが 0 件（`tests/invariant_tenant.rs`） | 全 PR |
-| `wire-freeze` | core 22 の名前・スキーマ・アノテーションのスナップショット | 全 PR |
+| `wire-freeze` | core 21 の名前・スキーマ・アノテーションのスナップショット | 全 PR |
 | `zero-retention` | ログ・DB・メトリクスに本文が無いことのスキャン（`check-log-hygiene.py` 拡張） | 全 PR |
 | `selection-eval` | 選択率が落ちない | 説明文・SKILL.md・掲載文を触る PR |
 | `memory-bench` | p95、temporal、abstention、dedup、pii | 週次と release |
@@ -384,4 +384,4 @@ x402 の `payment-required` ヘッダ形式と互換のフィールド名を使�
 - **actor**：書き込みの主体（agent または人）。全書き込みに付く。
 - **world / agent_scratch**：名前空間。world は principal の仕事の状態、agent_scratch はエージェントの作業メモ。
 - **L1 / L2 / L3**：即時 / 一押し確認 / 専用の人間承認。外部送信と決済は型で L3。
-- **core 22**：凍結した wire name のツール集合。
+- **core 21**：凍結した wire name のツール集合。
