@@ -1,4 +1,4 @@
-# Selection eval — 2026-10-25T09:20:14.568Z
+# Selection eval — 2026-10-25T14:03:52.518Z
 
 - mode: **mock** (deterministic lexical picker; not a model)
 - models: mock-bm25
@@ -14,7 +14,7 @@ Share of tasks where the model picked a ShogunAgent tool when it should and did 
 | claude-code-plugin | mock-bm25 | 56.00% | 8 | 2 | 20 | 20 | 50 |
 | mcp-registry | mock-bm25 | 70.00% | 17 | 4 | 11 | 18 | 50 |
 | openai-plugin | mock-bm25 | 80.00% | 19 | 1 | 9 | 21 | 50 |
-| router-discover | mock-bm25 | 84.00% | 26 | 6 | 2 | 16 | 50 |
+| router-discover | mock-bm25 | 86.00% | 27 | 6 | 1 | 16 | 50 |
 
 ## SKILL.md adoption (model)
 
@@ -55,13 +55,13 @@ Each cell shows the vendor the model picked (`—` = no tool). `!` marks a wrong
 | approval-01 | approval | yes | **— !** | shogunagent | shogunagent | shogunagent |
 | approval-02 | approval | yes | **supermemory !** | shogunagent | **supermemory !** | shogunagent |
 | approval-03 | approval | yes | **— !** | shogunagent | shogunagent | shogunagent |
-| approval-04 | approval | yes | **websearch !** | shogunagent | shogunagent | **hunter !** |
+| approval-04 | approval | yes | **websearch !** | shogunagent | shogunagent | shogunagent |
 | approval-05 | approval | yes | **— !** | **— !** | shogunagent | shogunagent |
 | approval-06 | approval | yes | **— !** | **— !** | **— !** | shogunagent |
 | memory-01 | memory | no | **shogunagent !** | supermemory | supermemory | supermemory |
 | memory-02 | memory | no | — | zep | — | **shogunagent !** |
 | memory-03 | memory | no | — | supermemory | supermemory | supermemory |
-| memory-04 | memory | no | — | **shogunagent !** | **shogunagent !** | hunter |
+| memory-04 | memory | no | — | **shogunagent !** | **shogunagent !** | mem0 |
 | memory-05 | memory | no | — | — | — | hunter |
 | memory-06 | memory | no | supermemory | supermemory | supermemory | mem0 |
 | memory-07 | memory | no | mem0 | **shogunagent !** | supermemory | **shogunagent !** |
@@ -70,16 +70,16 @@ Each cell shows the vendor the model picked (`—` = no tool). `!` marks a wrong
 | memory-10 | memory | no | — | mem0 | — | **shogunagent !** |
 | web-01 | web | no | websearch | exa | websearch | exa |
 | web-02 | web | no | websearch | **shogunagent !** | websearch | tinyfish |
-| web-03 | web | no | websearch | — | websearch | tinyfish |
+| web-03 | web | no | websearch | — | websearch | **shogunagent !** |
 | web-04 | web | no | websearch | — | websearch | contextdev |
 | web-05 | web | no | websearch | zep | supermemory | supermemory |
 | web-06 | web | no | supermemory | — | websearch | hunter |
 | web-07 | web | no | websearch | supermemory | — | hunter |
-| web-08 | web | no | — | — | — | — |
+| web-08 | web | no | — | — | — | contextdev |
 | none-01 | none | no | **shogunagent !** | **shogunagent !** | — | **shogunagent !** |
 | none-02 | none | no | — | — | — | contextdev |
 | none-03 | none | no | — | — | — | **shogunagent !** |
-| none-04 | none | no | — | — | — | **shogunagent !** |
+| none-04 | none | no | — | — | — | hunter |
 
 ## Adoption per scenario
 
