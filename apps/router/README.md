@@ -1,0 +1,138 @@
+# @shogunagent/router
+
+The ShogunAgent router — "OpenRouter for Agents" (README §7, §11): one base URL where an agent **discovers** a tool for a task, **inspects** its schema and price, and **runs** it with the user's permission tiers applied, metered usage settled and the result ready to become state. TypeScript on Hono, deployed as a Cloudflare Worker next to `apps/api` (decision: `docs/decisions/0001-router-engine.md`). E8 skeleton: the engine, the connector format, the first-party connector, the Monid passthrough and both faces are here; the wallet (E9), the conformant MCP transport (E4) and the `tool_runs` sink in the state layer are wired behind the interfaces this package exports.
+
+## What it guarantees
+
+- **Zero retention** (invariant 2). The only logger accepts a closed set of fields (route, status, latency, tool id, outcome, counts); the run record has no body field; `test/zero-retention.test.ts` drives sentinel strings through REST, MCP and the passthrough and asserts none reaches a log or a record.
+- **No credential in the engine** (invariant 7). Provider keys are named by environment variable and injected in `src/transport.ts`, the only module that calls `fetch`. Hooks and the engine receive a request type with no credential field (`test/transport.test.ts`).
+- **L1/L2/L3 on every run** (invariant 3). `src/scope.ts`: an operation not in the table is denied; sends and payments are L3 (approval URL, never executed directly); user-data writes are L2 (`input_required` once); reads are L1.
+- **No self-preferencing** (invariant 13). First-party tools are scored by the same published formula, labeled `first_party`, with price inside `scoreBreakdown`. Task fit multiplies the quality terms, so a $0 first-party read cannot outrank a better-fitting paid tool on price alone.
+- **Three faces, one behavior** (invariant 4). REST and MCP go through one dispatcher (`src/engine.ts`); the CLI face wraps REST (E13).
+- **Every response is self-describing** (README §11). `usage`, `latency_ms`, `hints`, and on error `next_action`.
+
+## Verbs
+
+| Verb | REST | MCP tool | Auth | Price |
+|---|---|---|---|---|
+| discover | `POST /v1/router/discover` | `router.discover` | none | $0 |
+| inspect | `POST /v1/router/inspect` | `router.inspect` | none | $0 |
+| run | `POST /v1/router/run` | `router.run` | bearer for metered or first-party tools | the tool's quote; failures and empty results $0 |
+
+Also: `GET /health`, `GET /v1/router/catalog` (the content-hashed manifest), `POST /mcp` (JSON-RPC: `initialize`, `ping`, `tools/list`, `tools/call`). Every response carries `Mcp-Method` and, for a tool call, `Mcp-Name`, which is what `apps/api` meters on without reading bodies (invariant 10).
+
+### discover
+
+```bash
+curl -s -X POST http://localhost:8787/v1/router/discover \
+  -H 'content-type: application/json' \
+  -d '{"task":"what did the user commit to","limit":3}'
+```
+
+```json
+{
+  "result": {
+    "candidates": [
+      {
+        "tool_id": "shogunagent.state.commitments.list",
+        "provider_id": "shogunagent",
+        "first_party": true,
+        "summary": "Find what the user committed to: promises, deliverables and deadlines they made to others.",
+        "categories": ["state", "memory"],
+        "permission_level": "L1",
+        "score": 0.787,
+        "scoreBreakdown": { "task_fit": 0.8089, "price": 1, "health": 0.999, "latency": 0.8929, "personal": 0 },
+        "price": { "model": "per_call", "unit": "call", "cost_micro_usd": 0, "quote_micro_usd": 0 },
+        "p50_ms": 40,
+        "p95_ms": 120
+      }
+    ],
+    "ranking": {
+      "formula": "score = task_fit × (0.45*price + 0.30*health + 0.25*latency + 0*personal). …",
+      "weights": { "price": 0.45, "health": 0.3, "latency": 0.25, "personal": 0 }
+    },
+    "catalog_hash": "…",
+    "considered": 17
+  },
+  "usage": { "unit": "call", "quantity": 1, "cost_micro_usd": 0 },
+  "latency_ms": 1,
+  "hints": [],
+  "next_action": null
+}
+```
+
+Ranking (`src/discover.ts`): `task_fit` is BM25 over id, summary (×2), categories (×2), description and notes, normalised by the query's bound to [0, 1), with exclusion text left out of the index; `price = 1 / (1 + ln(1 + quote_micro_usd / 1000))` ($0 → 1, strictly decreasing); `health` = observed success rate (declared baseline until 20 runs); `latency = 1 / (1 + p95_ms / 1000)`; `personal` = 0 until Phase 2 reads `tool_runs`. Ties break on lower quote, then `tool_id`. `budget_micro_usd` drops tools whose quote exceeds it; `categories` restricts; `limit` ≤ 50.
+
+### inspect
+
+```bash
+curl -s -X POST http://localhost:8787/v1/router/inspect \
+  -H 'content-type: application/json' \
+  -d '{"tool_id":"monid.strale.x402.url-to-text"}'
+```
+
+Returns the catalog entry (schemas, categories, notes, examples), `price` (`quote_micro_usd`, `failures_cost: 0`, `empty_results_cost: 0`), `permission` (class, level and what the level means for the caller), live `health` with its source, a `run_example`, and `hints` — cheaper endpoints in the same category, cheapest first, whoever provides them (here `monid.contextdev.web.scrape.markdown` at $0.000945 against $0.024948).
+
+### run
+
+```bash
+curl -s -X POST http://localhost:8787/v1/router/run \
+  -H 'content-type: application/json' -H 'authorization: Bearer sa_…' \
+  -d '{"tool_id":"monid.tinyfish.web-search","input":{"query":"shogunagent"},"idempotency_key":"7b1c…","task_hint":"search the web for a company"}'
+```
+
+| Outcome | `resultType` | status | `next_action` |
+|---|---|---|---|
+| L1 executed | `result` (+ `run_id`, `replayed`) | 200 | `null` |
+| `dryRun: true` | `quote` | 200 | per level |
+| L2, not yet confirmed | `input_required` (MRTR shape: `inputRequests`, retry with `inputResponses: { confirm: true }`) | 200 | `provide_input` |
+| L3 | `approval_required` (`approval.url`, 15-minute expiry) | 200 | `approve_at_url` |
+| schema mismatch | `error` `invalid_input` (+ `details`) | 400 | `fix_input` |
+| unknown tool / not in table | `error` `tool_not_found` / `operation_denied` | 404 / 403 | `discover` |
+| no key for a metered or first-party tool | `error` `authentication_required` | 401 | `authenticate` |
+| wallet short | `error` `payment_required` + x402-shaped `payment` | 402 | `top_up` |
+| provider failed / unreachable | `error` `upstream_error` ($0) | 502 | `try_alternative` / `retry_after` |
+| provider not configured | `error` `provider_unavailable` | 503 | `try_alternative` |
+| repeated `idempotency_key`, same input | the stored `result`, `replayed: true`, usage 0 | 200 | `null` |
+| repeated key, different input | `error` `idempotency_conflict` | 409 | `fix_input` |
+
+Each run emits one `ToolRunRecord { ts, actor, tool_id, task_hint, outcome, cost_micro_usd, latency_ms, hint_followed }` to the `RunLogSink` (no bodies; `actor` is a hash of the key).
+
+### MCP
+
+```bash
+curl -s -X POST http://localhost:8787/mcp -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"router.discover","arguments":{"task":"read a web page"}}}'
+```
+
+`tools/list` returns the three tools with input schemas generated from `src/verbs.ts` and annotations (`readOnlyHint` true for discover/inspect, `openWorldHint` true for run). `tools/call` returns `content[0].text` and `structuredContent` with the same body the REST face returns; `isError` mirrors the HTTP status.
+
+## Connectors
+
+Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the content-hashed catalog with `pnpm --filter @shogunagent/router build:catalog` (writes `dist/catalog.json` and `dist/catalog.<hash12>.json`; the compiler rejects duplicate ids, unknown categories, missing scope class or health, bad usage numbers and fixtures that fail their schema).
+
+- `shogunagent` (first-party, `caller_bearer` auth to the state REST face; base URL from `SHOGUNAGENT_API_BASE_URL`): `state.commitments.list`, `state.open_loops.list`, `state.people.get`, `memory.recall` — reads, L1, $0 — and `actions.execute` — `external_send`, L3, $0.002.
+- `monid` (passthrough, `src/passthrough/monid.ts`): endpoints imported from a Monid-style catalog JSON, executed through Monid's `POST /v1/run` with the router's `MONID_API_KEY` injected at the transport, priced at Monid's price + 5%. The fixture catalog holds 12 endpoints from 11 upstream providers (search, scrape, enrichment, SEO, image generation, and one L3 `provision-numbers`).
+
+## Pluggable seams (what apps/api and the state layer wire later)
+
+| Interface | Default | Production home |
+|---|---|---|
+| `MeteringClient` (`identify`, `reserve`, `settle`) | `InMemoryMeteringClient` — `sa_` keys, $1 default balance, 401 for anonymous metered runs, x402-shaped 402 | apps/api wallet (E9) |
+| `RunLogSink` | `InMemoryRunLogSink` | `tool_runs` (V94) in the principal's store |
+| `IdempotencyStore` | `InMemoryIdempotencyStore` (24 h TTL, bounded) | the principal's store — never a hosted DB (invariant 2) |
+| `HealthStore` | `InMemoryHealthStore` (observed after 20 runs) | shared status store (`/.well-known/status.json`) |
+| `Transport` | `createFetchTransport({ env })` | same; `createReplayTransport` for tests |
+| `Logger` | `consoleLogger` (closed field set) | Workers Logs, invocation logs off |
+
+## Develop
+
+```bash
+pnpm install
+pnpm --filter @shogunagent/router typecheck
+pnpm --filter @shogunagent/router test
+pnpm --filter @shogunagent/router build:catalog
+pnpm --filter @shogunagent/router dev          # wrangler dev on :8787 (no route bound in wrangler.jsonc; workers_dev: false)
+```
+
+Secrets are set with `wrangler secret put` and documented in `src/env.ts`; non-secrets are `vars` in `wrangler.jsonc`. Nothing in this package is live until E9 wires the wallet and a route is bound.
