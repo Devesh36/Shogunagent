@@ -1107,7 +1107,8 @@ impl Db {
         if hits.is_empty() && options.per_source_limit < 100 && within_budget {
             options.per_source_limit = 100;
             let retry_query = query_plan.retry_query.as_deref().unwrap_or(query);
-            let retry_embedding = self.query_embedding(retry_query);
+            // The connection is held here: check the space on it, never re-lock (E24).
+            let retry_embedding = self.query_embedding_on(&conn, retry_query);
             if let Ok(retry) = shogun_memory::search::search_federated(
                 &conn,
                 retry_query,

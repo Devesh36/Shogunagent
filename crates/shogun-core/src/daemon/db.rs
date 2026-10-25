@@ -1196,6 +1196,16 @@ impl Db {
         embedder.embed_query(text).ok()
     }
 
+    /// [`Self::query_embedding`] for a caller that already holds the connection lock (taking it
+    /// again would deadlock).
+    pub(crate) fn query_embedding_on(&self, conn: &Connection, text: &str) -> Option<Vec<f32>> {
+        let embedder = self.embedder.as_deref()?;
+        if !shogun_memory::embedding_space::matches(conn, embedder.model_id()).unwrap_or(false) {
+            return None;
+        }
+        embedder.embed_query(text).ok()
+    }
+
     /// Embed canonical events and clean distilled memory that lack vectors. Both stay off the
     /// write path, so a slow model never delays capture or state persistence.
     pub fn embed_pending(&self, limit: usize) -> usize {
