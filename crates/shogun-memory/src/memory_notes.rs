@@ -30,14 +30,14 @@ pub fn get(conn: &Connection, id: i64) -> Result<Option<Note>, MemoryError> {
 
 // shortcut: list and history show 100 recent entries; add cursor pagination when longer lists need browsing.
 pub fn list(conn: &Connection) -> Result<Vec<Note>, MemoryError> {
-    let mut stmt=conn.prepare("SELECT id,text,revision,forgotten,created_at,updated_at FROM user_memory_notes ORDER BY updated_at DESC,id DESC LIMIT 100")?;
+    let mut stmt=conn.prepare(&format!("SELECT id,text,revision,forgotten,created_at,updated_at FROM user_memory_notes WHERE {} ORDER BY updated_at DESC,id DESC LIMIT 100", crate::actor::current_read().predicate("")))?;
     let rows = stmt.query_map([], row)?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 /// Small, complete notes travel with chat even when the question uses different words.
 pub fn recent_context(conn: &Connection, budget: usize) -> rusqlite::Result<Vec<Note>> {
-    let mut stmt = conn.prepare("SELECT id,text,revision,forgotten,created_at,updated_at FROM user_memory_notes WHERE forgotten=0 AND length(text)<=?1 ORDER BY updated_at DESC,id DESC LIMIT 8")?;
+    let mut stmt = conn.prepare(&format!("SELECT id,text,revision,forgotten,created_at,updated_at FROM user_memory_notes WHERE forgotten=0 AND length(text)<=?1 AND {} ORDER BY updated_at DESC,id DESC LIMIT 8", crate::actor::current_read().predicate("")))?;
     let notes = stmt
         .query_map([budget as i64], row)?
         .collect::<Result<Vec<_>, _>>()?;
@@ -71,7 +71,7 @@ pub fn search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Note>,
             .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
             .collect::<Vec<_>>()
             .join(" OR ");
-        let mut stmt=conn.prepare("SELECT n.id,n.text,n.revision,n.forgotten,n.created_at,n.updated_at FROM user_memory_notes_fts f JOIN user_memory_notes n ON n.id=f.rowid WHERE user_memory_notes_fts MATCH ?1 AND n.forgotten=0 ORDER BY rank,n.id LIMIT ?2")?;
+        let mut stmt=conn.prepare(&format!("SELECT n.id,n.text,n.revision,n.forgotten,n.created_at,n.updated_at FROM user_memory_notes_fts f JOIN user_memory_notes n ON n.id=f.rowid WHERE user_memory_notes_fts MATCH ?1 AND n.forgotten=0 AND {} ORDER BY rank,n.id LIMIT ?2", crate::actor::current_read().predicate("n.")))?;
         let rows = stmt
             .query_map(params![expression, limit.min(100) as i64], row)?
             .collect::<Result<Vec<_>, _>>()?;
@@ -83,7 +83,7 @@ pub fn search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Note>,
         .map(|(i, _)| format!("instr(lower(text),?{}) > 0", i + 1))
         .collect::<Vec<_>>()
         .join(" OR ");
-    let sql=format!("SELECT id,text,revision,forgotten,created_at,updated_at FROM user_memory_notes WHERE forgotten=0 AND ({predicates}) ORDER BY updated_at DESC,id DESC LIMIT {}",limit.min(100));
+    let sql=format!("SELECT id,text,revision,forgotten,created_at,updated_at FROM user_memory_notes WHERE forgotten=0 AND ({predicates}) AND {} ORDER BY updated_at DESC,id DESC LIMIT {}",crate::actor::current_read().predicate(""),limit.min(100));
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(terms), row)?
@@ -113,6 +113,31 @@ pub fn clean_text(text: &str) -> Option<String> {
     (clean.text == text).then(|| text.to_owned())
 }
 
+/// The ids among `ids` whose note is outside `scope` (E2-T5): an agent's scratch notes under the
+/// default world-only scope. Empty when scratch is included.
+pub fn out_of_scope_ids(
+    conn: &Connection,
+    ids: &[i64],
+    scope: crate::actor::ReadScope,
+) -> Result<std::collections::HashSet<i64>, rusqlite::Error> {
+    let mut out = std::collections::HashSet::new();
+    if scope.include_scratch || ids.is_empty() {
+        return Ok(out);
+    }
+    for chunk in ids.chunks(500) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id FROM user_memory_notes WHERE id IN ({marks}) AND NOT ({})",
+            scope.predicate("")
+        ))?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| row.get::<_, i64>(0))?;
+        for id in rows {
+            out.insert(id?);
+        }
+    }
+    Ok(out)
+}
+
 /// `action` is a closed host-side operation, not SQL or a model-generated instruction.
 pub fn change(
     conn: &mut Connection,
@@ -123,6 +148,7 @@ pub fn change(
     now: i64,
 ) -> Result<serde_json::Value, MemoryError> {
     use serde_json::json;
+    let ctx = crate::actor::current_write();
     let tx = conn.transaction()?;
     let note = if action == "save" {
         let Some(text) = text.and_then(clean_text) else {
@@ -130,8 +156,8 @@ pub fn change(
         };
         let existing: Option<i64> = tx
             .query_row(
-                "SELECT id FROM user_memory_notes WHERE forgotten=0 AND text=?1",
-                [&text],
+                "SELECT id FROM user_memory_notes WHERE forgotten=0 AND text=?1 AND namespace=?2",
+                params![&text, ctx.namespace_sql()],
                 |r| r.get(0),
             )
             .optional()?;
@@ -139,8 +165,8 @@ pub fn change(
             return Ok(json!({"note":get(&tx,id)?,"changed":false}));
         }
         tx.execute(
-            "INSERT INTO user_memory_notes(text,revision,created_at,updated_at) VALUES(?1,1,?2,?2)",
-            params![text, now],
+            "INSERT INTO user_memory_notes(text,revision,created_at,updated_at,actor,namespace) VALUES(?1,1,?2,?2,?3,?4)",
+            params![text, now, ctx.actor_sql(), ctx.namespace_sql()],
         )?;
         get(&tx, tx.last_insert_rowid())?
     } else {
@@ -167,13 +193,13 @@ pub fn change(
             }
             _ => return Ok(json!({"error":"invalid_change"})),
         };
-        tx.execute("UPDATE user_memory_notes SET text=?1,forgotten=?2,revision=revision+1,updated_at=?3 WHERE id=?4",params![text,forgotten,now,old.id])?;
+        tx.execute("UPDATE user_memory_notes SET text=?1,forgotten=?2,revision=revision+1,updated_at=?3,actor=?5 WHERE id=?4",params![text,forgotten,now,old.id,ctx.actor_sql()])?;
         get(&tx, old.id)?
     };
     let Some(note) = note else {
         return Ok(json!({"error":"not_found"}));
     };
-    tx.execute("INSERT INTO user_memory_note_versions(note_id,revision,text,forgotten,changed_at) VALUES(?1,?2,?3,?4,?5)",params![note.id,note.revision,note.text,note.forgotten,now])?;
+    tx.execute("INSERT INTO user_memory_note_versions(note_id,revision,text,forgotten,changed_at,actor) VALUES(?1,?2,?3,?4,?5,?6)",params![note.id,note.revision,note.text,note.forgotten,now,ctx.actor_sql()])?;
     tx.commit()?;
     Ok(json!({"note":note,"changed":true}))
 }

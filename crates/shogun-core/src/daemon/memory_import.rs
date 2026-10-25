@@ -43,13 +43,24 @@ impl Db {
     /// Persist the selected items of a request under a new import record (L1, local). Returns
     /// `{"import_id","provenance","stored","linked"}` or an `error` payload.
     pub fn memory_import_commit(&self, body: &str, via: Via) -> Result<Value, String> {
+        self.memory_import_commit_as(body, via, &shogun_memory::actor::current_write())
+    }
+
+    /// [`Self::memory_import_commit`] as `ctx` (E2-T4): the rows the import creates record
+    /// `ctx.actor` as their writer.
+    pub fn memory_import_commit_as(
+        &self,
+        body: &str,
+        via: Via,
+        ctx: &shogun_memory::actor::WriteContext,
+    ) -> Result<Value, String> {
         let request = match memory_import::parse_request(body) {
             Ok(r) => r,
             Err(e) => return refusal(e).map_err(|_| "memory import failed".to_string()),
         };
         let now = self.now_ms();
         self.with_conn_mut("memory_import.commit", |c| {
-            match memory_import::commit(c, &request, via, now) {
+            match memory_import::store::commit_as(c, &request, via, now, ctx) {
                 Ok(outcome) => Ok(serde_json::to_value(outcome).unwrap_or_else(|_| json!({ "error": "unavailable" }))),
                 Err(e) => refusal(e),
             }

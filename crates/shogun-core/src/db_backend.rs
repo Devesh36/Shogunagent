@@ -2310,8 +2310,16 @@ impl CurrentContextProvider for ReplyContextProvider {
     }
 }
 
+/// `include_scratch` from a request, folded with the scope the face set for this call (E2-T5):
+/// a request may widen reads to the agents' scratch namespaces, never narrow a scope already set.
+fn read_scope(include_scratch: bool) -> shogun_memory::actor::ReadScope {
+    let current = shogun_memory::actor::current_read();
+    shogun_memory::actor::ReadScope { include_scratch: current.include_scratch || include_scratch }
+}
+
 impl MemoryBackend for DbBackend {
     fn search(&self, request: &SearchRequestV1) -> Result<MemorySearchResponse, MemorySearchError> {
+        shogun_memory::actor::with_read_scope(read_scope(request.include_scratch), || {
         let response = self
             .db
             .search_request(request)
@@ -2364,6 +2372,7 @@ impl MemoryBackend for DbBackend {
             cold_partitions_visited: response.cold_partitions_visited,
             cold_vectors_scanned: response.cold_vectors_scanned,
             elapsed_ms: response.elapsed_ms,
+        })
         })
     }
 
@@ -2442,7 +2451,9 @@ impl MemoryBackend for DbBackend {
         use shogun_memory::memory_import::Via;
         let value = match operation {
             MemoryImportOperation::Preview { body } => self.db.memory_import_preview(&body)?,
-            MemoryImportOperation::Commit { body } => self.db.memory_import_commit(&body, Via::Api)?,
+            MemoryImportOperation::Commit { body } => {
+                self.db.memory_import_commit_as(&body, Via::Api, &shogun_memory::actor::current_write())?
+            }
             MemoryImportOperation::List { id, include_low } => self.db.memory_import_list(id, include_low)?,
             MemoryImportOperation::Delete { id } => self.db.memory_import_delete(id)?,
         };
@@ -2482,6 +2493,8 @@ impl MemoryBackend for DbBackend {
     }
 
     fn read(&self, tool: Tool, params: &ReadParams) -> Vec<ReadItem> {
+        // E2-T5: `include_scratch` widens the call's read scope to the agents' scratch namespaces.
+        shogun_memory::actor::with_read_scope(read_scope(params.include_scratch), || {
         // A single row `Option` → a 0/1-length result (for the `get` variants).
         fn one<T>(row: Option<T>, f: impl Fn(T) -> ReadItem) -> Vec<ReadItem> {
             row.into_iter().map(f).collect()
@@ -2762,6 +2775,7 @@ impl MemoryBackend for DbBackend {
             | Tool::ExportFoldersList
             | Tool::ExportFoldersRemove => Vec::new(),
         }
+        })
     }
 
     fn read_structured(&self, tool: Tool, params: &ReadParams) -> Option<String> {
@@ -3360,17 +3374,17 @@ impl MemoryBackend for DbBackend {
             }
             // Correct / delete one state record (issue #290, L1) — the World model pane's own
             // edit and delete, through the one shared request parser.
-            Tool::StateUpdate => match self.db.state_update(body)? {
+            Tool::StateUpdate => match self.db.state_update_as(body, &shogun_memory::actor::current_write())? {
                 true => Ok(None),
                 false => Err("state record not found".to_string()),
             },
-            Tool::StateDelete => match self.db.state_delete(body)? {
+            Tool::StateDelete => match self.db.state_delete_as(body, &shogun_memory::actor::current_write())? {
                 true => Ok(None),
                 false => Err("state record not found".to_string()),
             },
             // Split a wrong merge (FR-ST-10, L1): the new record's id comes back.
             // Quick-add a commitment / open loop (L1): the new row's id comes back.
-            Tool::StateCreate => match self.db.state_create(body)? {
+            Tool::StateCreate => match self.db.state_create_as(body, &shogun_memory::actor::current_write())? {
                 Some(id) => Ok(Some(id)),
                 None => Err("person not found".to_string()),
             },

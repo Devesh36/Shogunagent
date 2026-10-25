@@ -128,6 +128,7 @@ impl KeywordSearcher for DbKeywordSearcher<'_> {
             depth: if range.is_some() { SearchDepthV1::Auto } else { SearchDepthV1::Warm },
             range,
             source_kind: None,
+            include_scratch: false,
         };
         let response = self.db.search_request(&request).map_err(|e| e.as_str())?;
         let excluded = self.excluded_events(&response.federated_hits);

@@ -573,7 +573,6 @@ pub fn search_federated(
             .total_cmp(&left.1)
             .then_with(|| left.0.cmp(&right.0))
     });
-    raw_event_ranks.truncate(limit);
 
     let mut clusters: BTreeMap<ClusterKey, Vec<Candidate>> = BTreeMap::new();
     for candidate in candidates.into_values().filter(|candidate| {
@@ -589,6 +588,8 @@ pub fn search_federated(
         .map(|cluster| merge_cluster(query, options.excerpt_chars, cluster))
         .filter(|hit| focus_accepts(options.focus, &hit.source_kind))
         .collect::<Vec<_>>();
+    scope_hits(conn, crate::actor::current_read(), &mut hits, &mut raw_event_ranks)?;
+    raw_event_ranks.truncate(limit);
     hits.sort_by(|left, right| {
         right
             .fused_score
@@ -607,6 +608,74 @@ pub fn search_federated(
         cold: cold.stats,
         elapsed_micros: elapsed_micros(started),
     })
+}
+
+/// Every event id a hit rests on: its own, its collapsed sources', and its evidence.
+pub fn hit_event_ids(hit: &FederatedHit) -> impl Iterator<Item = i64> + '_ {
+    let own = match hit.source_id {
+        FederatedSourceId::Event(id) => Some(id),
+        _ => None,
+    };
+    let sources = hit.sources.iter().filter_map(|source| match source.id {
+        FederatedSourceId::Event(id) => Some(id),
+        _ => None,
+    });
+    let evidence = hit.evidence_ids.iter().filter_map(|id| match id {
+        CanonicalEvidenceId::Event(id) => Some(*id),
+        _ => None,
+    });
+    own.into_iter().chain(sources).chain(evidence)
+}
+
+/// E2-T5: leave out every hit (and raw event rank) resting on an event outside the call's read
+/// scope — an agent's scratch row under the default world-only scope. Runs before the limit cut,
+/// so a scratch hit never costs a world result its place. A hit that touches one scratch event
+/// goes whole: its excerpt may quote it.
+fn scope_hits(
+    conn: &Connection,
+    scope: crate::actor::ReadScope,
+    hits: &mut Vec<FederatedHit>,
+    raw_event_ranks: &mut Vec<(i64, f64)>,
+) -> Result<(), rusqlite::Error> {
+    if scope.include_scratch {
+        return Ok(());
+    }
+    let ids: BTreeSet<i64> = hits
+        .iter()
+        .flat_map(hit_event_ids)
+        .chain(raw_event_ranks.iter().map(|(id, _)| *id))
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let out = crate::event_log::out_of_scope_ids(conn, &ids.into_iter().collect::<Vec<_>>(), scope)?;
+    let note_ids: Vec<i64> = hits.iter().flat_map(hit_note_ids).collect();
+    let notes_out = crate::memory_notes::out_of_scope_ids(conn, &note_ids, scope)?;
+    if out.is_empty() && notes_out.is_empty() {
+        return Ok(());
+    }
+    hits.retain(|hit| {
+        !hit_event_ids(hit).any(|id| out.contains(&id)) && !hit_note_ids(hit).any(|id| notes_out.contains(&id))
+    });
+    raw_event_ranks.retain(|(id, _)| !out.contains(id));
+    Ok(())
+}
+
+/// Every user-note id a hit rests on: its own, its collapsed sources', and its evidence.
+fn hit_note_ids(hit: &FederatedHit) -> impl Iterator<Item = i64> + '_ {
+    let own = match hit.source_id {
+        FederatedSourceId::UserNote(id) => Some(id),
+        _ => None,
+    };
+    let sources = hit.sources.iter().filter_map(|source| match source.id {
+        FederatedSourceId::UserNote(id) => Some(id),
+        _ => None,
+    });
+    let evidence = hit.evidence_ids.iter().filter_map(|id| match id {
+        CanonicalEvidenceId::UserNote(id) => Some(*id),
+        _ => None,
+    });
+    own.into_iter().chain(sources).chain(evidence)
 }
 
 fn elapsed_micros(started: Instant) -> u64 {

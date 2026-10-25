@@ -73,6 +73,49 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // `principal import` (ShogunAgent E2-T6) runs locally: it copies a single-user store into the
+    // principal layout and applies the pending migrations. No server, no token.
+    if let command::Command::Principal(command::PrincipalCommand::Import { from, root, principal }) =
+        &invocation.command
+    {
+        use shogun_core::tenancy::{import_single_user_store, EnvKeyProvider, PrincipalId};
+        let principal = match PrincipalId::parse(principal) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let keys = match EnvKeyProvider::from_env() {
+            Ok(keys) => keys,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(1);
+            }
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            .unwrap_or(0);
+        return match import_single_user_store(
+            std::path::Path::new(from),
+            std::path::Path::new(root),
+            &principal,
+            &keys,
+            now_ms,
+        ) {
+            Ok(report) => {
+                // log-hygiene-ok: paths and schema versions the user asked for, never a row
+                println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(1)
+            }
+        };
+    }
+
     // `voice-dictionary import <file|->` reads its rows here, before the call is built.
     let command = match wire::resolve_import_source(invocation.command) {
         Ok(command) => command,

@@ -472,6 +472,7 @@ fn canonical_explicit_warm_range_remains_range_bounded() {
                 to_ms: now,
             }),
             source_kind: None,
+            include_scratch: false,
         })
         .unwrap();
 
@@ -640,6 +641,7 @@ fn canonical_search_rejects_invalid_depth_and_range_combinations() {
             depth: SearchDepthV1::All,
             range: None,
             source_kind: None,
+            include_scratch: false,
         })
         .unwrap_err();
     assert_eq!(
@@ -657,6 +659,7 @@ fn canonical_search_rejects_invalid_depth_and_range_combinations() {
                 to_ms: 1_001,
             }),
             source_kind: None,
+            include_scratch: false,
         })
         .unwrap_err();
     assert_eq!(
@@ -682,6 +685,7 @@ fn canonical_search_auto_resolves_from_complete_range_not_hit_count() {
                 to_ms: now,
             }),
             source_kind: None,
+            include_scratch: false,
         })
         .unwrap();
 
@@ -727,6 +731,7 @@ fn canonical_search_all_finds_demoted_semantic_only_memory() {
                 to_ms: now,
             }),
             source_kind: None,
+            include_scratch: false,
         })
         .unwrap();
 
@@ -774,6 +779,7 @@ fn canonical_search_applies_cold_cap_only_when_vector_scan_can_run() {
                 to_ms: now,
             }),
             source_kind: None,
+            include_scratch: false,
         })
         .unwrap_err();
 
@@ -794,6 +800,7 @@ fn canonical_search_applies_cold_cap_only_when_vector_scan_can_run() {
                     to_ms: now,
                 }),
                 source_kind: None,
+                include_scratch: false,
             })
             .unwrap();
         assert_eq!(lexical.hits.len(), 7);

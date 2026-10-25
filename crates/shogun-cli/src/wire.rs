@@ -727,7 +727,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
                 serde_json::json!({ "enabled": enabled }).to_string(),
             ),
         },
-        Command::Help | Command::Config { .. } => return None,
+        Command::Help | Command::Config { .. } | Command::Principal(_) => return None,
     })
 }
 

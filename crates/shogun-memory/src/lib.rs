@@ -14,6 +14,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub mod about_profile;
+pub mod actor;
 pub mod ai_session;
 pub mod activity;
 pub mod backup;
@@ -110,6 +111,13 @@ pub enum MemoryError {
     /// A state row was asked to be inserted with no provenance (FR-ST-02 forbids it).
     #[error("state row insert requires at least one provenance event (FR-ST-02)")]
     EmptyProvenance,
+    /// A write was asked for with no actor (E2-T4 forbids it; every row records its writer).
+    #[error("write requires a non-empty actor (`<kind>:<id>`, e.g. `agent:<id>`)")]
+    EmptyActor,
+    /// An actor that is not `<kind>:<id>`, or carries whitespace / control characters, or is too
+    /// long. Carries no value.
+    #[error("actor must be `<kind>:<id>` without whitespace, at most 128 characters")]
+    InvalidActor,
     /// refinery panicked reading `refinery_schema_history` (a checksum that is not a u64, an
     /// `applied_on` that is not RFC 3339). Nothing was migrated. Carries refinery's own panic
     /// message only, which names the field, never a stored value.
@@ -385,6 +393,20 @@ pub fn is_plaintext_db(path: impl AsRef<Path>) -> bool {
     &head == b"SQLite format 3\0"
 }
 
+/// A plaintext store at `path` migrated only up to `version`: the shape a user of an older build
+/// has on disk. For tests and tooling that exercise the upgrade path (the principal import, E2-T6);
+/// never a product entry point.
+#[doc(hidden)]
+pub fn open_plaintext_at_version(path: impl AsRef<Path>, version: u32) -> Result<Connection, MemoryError> {
+    vector::register_extension();
+    let mut conn = Connection::open(path)?;
+    apply_pragmas(&conn, true)?;
+    embedded::runner()
+        .set_target(refinery::Target::Version(version))
+        .run(&mut conn)?;
+    Ok(conn)
+}
+
 /// Open an in-memory database, migrated to the latest schema — for tests and ephemeral use.
 ///
 /// The migrations run once per process, into a template that every call copies page for page
@@ -420,7 +442,7 @@ pub fn open_in_memory() -> Result<Connection, MemoryError> {
 /// The highest migration bundled in `src/migrations`. Tests assert against this rather than a
 /// literal so that adding a migration updates one place, not five — and so a *drop* in version
 /// (a migration file lost in a merge) still fails loudly.
-pub const LATEST_SCHEMA_VERSION: u32 = 91;
+pub const LATEST_SCHEMA_VERSION: u32 = 98;
 
 /// The schema version the migrations bring the database to (max applied version), or `None`
 /// if no migrations are recorded.
@@ -463,6 +485,8 @@ mod fts_compact_tests;
 
 #[cfg(test)]
 mod event_link_index_tests;
+#[cfg(test)]
+mod actor_tests;
 
 /// Encryption at rest. These tests assert the property that matters — the file on disk is not
 /// readable without the key — rather than just that the API returns Ok.

@@ -780,8 +780,11 @@ impl Db {
         read: &[i64],
         now_ms: i64,
     ) -> Option<shogun_memory::loops::Applied> {
+        // E2-T4: the consolidator is the engine's own writer, never the caller that happened to
+        // trigger the hourly review.
+        let ctx = shogun_memory::actor::WriteContext::world(shogun_memory::actor::Actor::system("consolidator"));
         let applied = self
-            .with_conn_mut("loops.apply", |c| shogun_memory::loops::apply(c, answer, events, read, now_ms))
+            .with_conn_mut("loops.apply", |c| shogun_memory::loops::apply_as(c, answer, events, read, now_ms, &ctx))
             .ok()?;
         if applied.opened + applied.relisted + applied.resolved + applied.merged > 0 {
             super::maintenance::notify_state_changed();

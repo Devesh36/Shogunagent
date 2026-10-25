@@ -171,6 +171,27 @@ fn load_token_registry() -> Result<TokenRegistry, String> {
 /// The name every stderr line starts with.
 const FACE: &str = "shogun-api";
 
+/// The principal root when this process runs multi-principal (E2-T2): `--multi [<root>]` on the
+/// command line (the root then defaults to `SHOGUN_MULTI_ROOT`, else `./principals`), or
+/// `SHOGUN_MULTI_ROOT` alone. `None` is the single-principal server, unchanged.
+fn multi_root(args: impl IntoIterator<Item = String>) -> Option<std::path::PathBuf> {
+    let mut args = args.into_iter();
+    let env_root = std::env::var_os("SHOGUN_MULTI_ROOT")
+        .filter(|root| !root.is_empty())
+        .map(std::path::PathBuf::from);
+    while let Some(arg) = args.next() {
+        if arg == "--multi" {
+            return args
+                .next()
+                .filter(|next| !next.starts_with("--"))
+                .map(std::path::PathBuf::from)
+                .or(env_root)
+                .or_else(|| Some(std::path::PathBuf::from("./principals")));
+        }
+    }
+    env_root
+}
+
 /// Exit unless the Memory API is on, naming the settings file checked and why it failed
 /// (issue #744). The decision and the exit status (1) are unchanged.
 fn gate_or_exit(db_path: &str, db_env_set: bool) {
@@ -193,8 +214,53 @@ fn gate_or_exit(db_path: &str, db_env_set: bool) {
     }
 }
 
+/// Multi-principal mode (ShogunAgent E2-T2): `--multi` on the command line, or `SHOGUN_MULTI_ROOT`
+/// set. One process serves `<root>/<principal>/memory.db` for every principal the bearer map
+/// names, opening each file on demand (`SHOGUN_MULTI_MAX_OPEN`, default 64) with the key from
+/// `SHOGUN_DB_KEY_<PRINCIPAL>` or `SHOGUN_DB_KEY`. Tokens come from
+/// `SHOGUN_PRINCIPAL_TOKENS="principal:token[:agent_id],…"` until `apps/api` issues agent keys
+/// (E3). None of the desktop gates (memory_api.json, plan files, Keychain, heartbeat) apply.
+async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
+    use shogun_core::tenancy::{EnvKeyProvider, PrincipalStore, TokenPrincipalMap};
+    let keys = EnvKeyProvider::from_env().unwrap_or_else(|e| {
+        eprintln!("{FACE}: {e}");
+        std::process::exit(1);
+    });
+    let resolver = TokenPrincipalMap::from_env().unwrap_or_else(|e| {
+        eprintln!("{FACE}: {e}");
+        std::process::exit(1);
+    });
+    if resolver.is_empty() {
+        eprintln!(
+            "{FACE}: no principal tokens loaded ({}) — every memory call is 401 until one is set",
+            TokenPrincipalMap::ENV_VAR
+        );
+    }
+    let max_open = std::env::var("SHOGUN_MULTI_MAX_OPEN")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(64);
+    let clock = wall_clock();
+    let store = Arc::new(PrincipalStore::new(root.clone(), Arc::new(keys), clock.clone(), max_open));
+    let state = shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), clock);
+    let port = std::env::var("SHOGUN_API_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
+    let listener = bind_local(port).await?;
+    let addr = listener.local_addr()?;
+    println!(
+        "shogun-memory-api listening on http://{addr}  (multi-principal root: {}, max open: {max_open})",
+        root.display()
+    );
+    serve_on(listener, state.with_port(addr.port())).await
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    if let Some(root) = multi_root(std::env::args().skip(1)) {
+        return serve_multi(root).await;
+    }
     // Audit 2026-10-20 M7: plan resolution reads the Keychain mirrors of the trial stamp and the
     // time high-water mark, so editing onboarding.json / billing.json cannot stretch the plan.
     // The Mac app's build only (feature `desktop`); the server has no Keychain to mirror.

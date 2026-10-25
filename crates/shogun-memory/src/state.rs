@@ -8,6 +8,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::actor::{current_read, current_write, ReadScope, WriteContext};
 use crate::MemoryError;
 
 /// The four state tables (FR-ST-01).
@@ -86,7 +87,38 @@ pub fn insert_with_provenance<F>(
 where
     F: FnOnce(&Connection) -> Result<i64, rusqlite::Error>,
 {
-    insert_with_quote(conn, table, provenance, None, insert_row)
+    insert_with_quote(conn, table, provenance, None, &current_write(), insert_row)
+}
+
+/// [`insert_with_provenance`] as `ctx` (E2-T4): the row's `actor_last` and `namespace` (V93)
+/// record the writer and where it lands. [`insert_with_provenance`] itself writes as the call's
+/// current context ([`current_write`]: the owner unless a face set one).
+pub fn insert_with_provenance_as<F>(
+    conn: &mut Connection,
+    table: StateTable,
+    provenance: &[Provenance],
+    ctx: &WriteContext,
+    insert_row: F,
+) -> Result<i64, MemoryError>
+where
+    F: FnOnce(&Connection) -> Result<i64, rusqlite::Error>,
+{
+    insert_with_quote(conn, table, provenance, None, ctx, insert_row)
+}
+
+/// Stamp the writer and namespace on a freshly inserted state row (V93). Every INSERT into a
+/// state table funnels through here or writes the two columns itself.
+pub(crate) fn stamp_writer(
+    conn: &Connection,
+    table: StateTable,
+    id: i64,
+    ctx: &WriteContext,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        &format!("UPDATE {} SET actor_last = ?2, namespace = ?3 WHERE id = ?1", table.as_str()),
+        params![id, ctx.actor_sql(), ctx.namespace_sql()],
+    )?;
+    Ok(())
 }
 
 /// Insert a validated quote with its existing provenance links in the same savepoint.
@@ -95,6 +127,7 @@ pub(crate) fn insert_with_quote<F>(
     table: StateTable,
     provenance: &[Provenance],
     quote: Option<&str>,
+    ctx: &WriteContext,
     insert_row: F,
 ) -> Result<i64, MemoryError>
 where
@@ -105,6 +138,7 @@ where
     }
     let tx = conn.savepoint()?;
     let id = insert_row(&tx)?;
+    stamp_writer(&tx, table, id, ctx)?;
     for p in provenance {
         tx.execute(
             "INSERT INTO state_provenance (state_table, state_id, event_id, weight)
@@ -291,7 +325,7 @@ pub(crate) fn insert_commitment_with_quote(
     provenance: &[Provenance],
     quote: Option<&str>,
 ) -> Result<i64, MemoryError> {
-    let id = insert_with_quote(conn, StateTable::Commitments, provenance, quote, |tx| {
+    let id = insert_with_quote(conn, StateTable::Commitments, provenance, quote, &current_write(), |tx| {
         tx.execute(
             "INSERT INTO commitments
                (direction, counterparty_id, description, due_at, status, project_id,
@@ -370,7 +404,7 @@ pub(crate) fn insert_open_loop_with_quote(
     provenance: &[Provenance],
     quote: Option<&str>,
 ) -> Result<i64, MemoryError> {
-    let id = insert_with_quote(conn, StateTable::OpenLoops, provenance, quote, |tx| {
+    let id = insert_with_quote(conn, StateTable::OpenLoops, provenance, quote, &current_write(), |tx| {
         tx.execute(
             "INSERT INTO open_loops
                (kind, description, counterparty_id, project_id, opened_at, staleness_days,
@@ -489,7 +523,13 @@ impl CommitmentRow {
 /// A commitment in an open contradiction (issue #253) is read back with its confidence capped
 /// under the fact band ([`crate::disputes::DISPUTED_CONFIDENCE_CAP`]), so Fusion passes it weakly.
 pub fn list_commitments(conn: &Connection) -> Result<Vec<CommitmentRow>, rusqlite::Error> {
-    commitments_where(conn, LISTED, 1)
+    list_commitments_scoped(conn, current_read())
+}
+
+/// [`list_commitments`] within `scope` (E2-T5): world rows only unless `include_scratch`.
+/// [`list_commitments`] itself reads the call's current scope ([`current_read`]).
+pub fn list_commitments_scoped(conn: &Connection, scope: ReadScope) -> Result<Vec<CommitmentRow>, rusqlite::Error> {
+    commitments_where(conn, LISTED, 1, scope)
 }
 
 /// Rows the lists show: not aged by the horizon timer, not folded into another row (V83).
@@ -497,13 +537,14 @@ const LISTED: &str = "?1 = 1 AND aged_at IS NULL AND merged_into IS NULL";
 /// Same-day items first, then the most recently seen.
 const DISPLAY_ORDER: &str = "(horizon IS 'same_day') DESC, last_evidence_at DESC, id DESC";
 
-fn commitments_where(conn: &Connection, predicate: &str, value: i64) -> Result<Vec<CommitmentRow>, rusqlite::Error> {
+fn commitments_where(conn: &Connection, predicate: &str, value: i64, scope: ReadScope) -> Result<Vec<CommitmentRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, description, due_at, status, {},
                 NULL, deferred_until, updated_at
-         FROM commitments WHERE {predicate}
+         FROM commitments WHERE ({predicate}) AND {}
          ORDER BY {DISPLAY_ORDER}",
-        crate::disputes::COMMITMENT_CONFIDENCE_SQL
+        crate::disputes::COMMITMENT_CONFIDENCE_SQL,
+        scope.predicate("")
     ))?;
     let rows = stmt.query_map([value], |r| {
         Ok(CommitmentRow {
@@ -560,6 +601,7 @@ pub fn list_commitments_active_since(
         conn,
         "status NOT IN ('done', 'cancelled') AND updated_at >= ?1 AND aged_at IS NULL AND merged_into IS NULL",
         since,
+        current_read(),
     )
 }
 
@@ -633,7 +675,12 @@ fn open_loop_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<OpenLoopRow> {
 /// List open loops with their source event, in the display order of [`list_commitments`] (Brief
 /// takes the top-N). Aged and merged rows are left out.
 pub fn list_open_loops(conn: &Connection) -> Result<Vec<OpenLoopRow>, rusqlite::Error> {
-    open_loops_where(conn, LISTED, 1, DISPLAY_ORDER)
+    list_open_loops_scoped(conn, current_read())
+}
+
+/// [`list_open_loops`] within `scope` (E2-T5): world rows only unless `include_scratch`.
+pub fn list_open_loops_scoped(conn: &Connection, scope: ReadScope) -> Result<Vec<OpenLoopRow>, rusqlite::Error> {
+    open_loops_where_scoped(conn, LISTED, 1, DISPLAY_ORDER, scope)
 }
 
 /// Open loops with activity since `since`, still open (Wrap "Still open"). Display order; aged
@@ -672,6 +719,16 @@ fn open_loops_where(
     since: i64,
     order_sql: &str,
 ) -> Result<Vec<OpenLoopRow>, rusqlite::Error> {
+    open_loops_where_scoped(conn, where_sql, since, order_sql, current_read())
+}
+
+fn open_loops_where_scoped(
+    conn: &Connection,
+    where_sql: &str,
+    since: i64,
+    order_sql: &str,
+    scope: ReadScope,
+) -> Result<Vec<OpenLoopRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, kind, description, staleness_days, status, confidence,
                 NULL,
@@ -679,8 +736,9 @@ fn open_loops_where(
                 {OPEN_LOOP_INFERRED_SQL},
                 deferred_until, updated_at
          FROM open_loops
-         WHERE {where_sql}
-         ORDER BY {order_sql}"
+         WHERE ({where_sql}) AND {}
+         ORDER BY {order_sql}",
+        scope.predicate("")
     ))?;
     let rows = stmt.query_map([since], open_loop_row)?;
     let mut visible = Vec::new();
@@ -715,13 +773,19 @@ pub fn list_people(conn: &Connection) -> Result<Vec<PersonRow>, rusqlite::Error>
 
 /// Ranked SQL page for the desktop viewer.
 pub fn list_people_page(conn: &Connection, limit: i64, offset: i64) -> Result<Vec<PersonRow>, rusqlite::Error> {
+    list_people_page_scoped(conn, limit, offset, current_read())
+}
+
+/// [`list_people_page`] within `scope` (E2-T5).
+pub fn list_people_page_scoped(conn: &Connection, limit: i64, offset: i64, scope: ReadScope) -> Result<Vec<PersonRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, display_name, {},
                 NULL, last_evidence_at,
                 (SELECT COUNT(*) FROM state_provenance WHERE state_table='people' AND state_id=people.id)
-         FROM people WHERE {} ORDER BY {} LIMIT ?1 OFFSET ?2",
+         FROM people WHERE ({}) AND {} ORDER BY {} LIMIT ?1 OFFSET ?2",
         crate::entity_pages::listed_confidence_sql(StateTable::People, "people"),
         crate::entity_pages::visible_sql(StateTable::People, "people"),
+        scope.predicate("people."),
         crate::entity_pages::rank_sql(StateTable::People, "people"),
     ))?;
     let rows = stmt.query_map(params![limit, offset], |r| {
@@ -740,12 +804,18 @@ pub fn list_people_page(conn: &Connection, limit: i64, offset: i64) -> Result<Ve
 
 /// Fetch one person by id.
 pub fn get_person(conn: &Connection, id: i64) -> Result<Option<PersonRow>, rusqlite::Error> {
+    get_person_scoped(conn, id, current_read())
+}
+
+/// [`get_person`] within `scope` (E2-T5): a scratch row reads as absent under the world scope.
+pub fn get_person_scoped(conn: &Connection, id: i64, scope: ReadScope) -> Result<Option<PersonRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, display_name, {},
                 NULL, last_evidence_at,
                 (SELECT COUNT(*) FROM state_provenance WHERE state_table='people' AND state_id=people.id)
-         FROM people WHERE id = ?1",
+         FROM people WHERE id = ?1 AND {}",
         crate::entity_pages::listed_confidence_sql(StateTable::People, "people"),
+        scope.predicate("people."),
     ))?;
     let mut rows = stmt.query_map([id], |r| {
         Ok(PersonRow { id: r.get(0)?, display_name: r.get(1)?, confidence: r.get(2)?, first_event_id: r.get(3)?, last_evidence_at: r.get(4)?, evidence_count: r.get(5)? })
@@ -811,13 +881,19 @@ pub fn list_projects(conn: &Connection) -> Result<Vec<ProjectRow>, rusqlite::Err
 
 /// Ranked SQL page for the desktop viewer.
 pub fn list_projects_page(conn: &Connection, limit: i64, offset: i64) -> Result<Vec<ProjectRow>, rusqlite::Error> {
+    list_projects_page_scoped(conn, limit, offset, current_read())
+}
+
+/// [`list_projects_page`] within `scope` (E2-T5).
+pub fn list_projects_page_scoped(conn: &Connection, limit: i64, offset: i64, scope: ReadScope) -> Result<Vec<ProjectRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, name, status, {},
                 NULL, last_evidence_at,
                 (SELECT COUNT(*) FROM state_provenance WHERE state_table='projects' AND state_id=projects.id)
-         FROM projects WHERE {} ORDER BY {} LIMIT ?1 OFFSET ?2",
+         FROM projects WHERE ({}) AND {} ORDER BY {} LIMIT ?1 OFFSET ?2",
         crate::entity_pages::listed_confidence_sql(StateTable::Projects, "projects"),
         crate::entity_pages::visible_sql(StateTable::Projects, "projects"),
+        scope.predicate("projects."),
         crate::entity_pages::rank_sql(StateTable::Projects, "projects"),
     ))?;
     let rows = stmt.query_map(params![limit, offset], |r| {
@@ -844,12 +920,18 @@ pub fn list_projects_page(conn: &Connection, limit: i64, offset: i64) -> Result<
 
 /// Fetch one project by id.
 pub fn get_project(conn: &Connection, id: i64) -> Result<Option<ProjectRow>, rusqlite::Error> {
+    get_project_scoped(conn, id, current_read())
+}
+
+/// [`get_project`] within `scope` (E2-T5): a scratch row reads as absent under the world scope.
+pub fn get_project_scoped(conn: &Connection, id: i64, scope: ReadScope) -> Result<Option<ProjectRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, name, status, {},
                 NULL, last_evidence_at,
                 (SELECT COUNT(*) FROM state_provenance WHERE state_table='projects' AND state_id=projects.id)
-         FROM projects WHERE id = ?1",
+         FROM projects WHERE id = ?1 AND {}",
         crate::entity_pages::listed_confidence_sql(StateTable::Projects, "projects"),
+        scope.predicate("projects."),
     ))?;
     let mut rows = stmt.query_map([id], |r| {
         Ok(ProjectRow {
@@ -874,12 +956,22 @@ pub fn get_project(conn: &Connection, id: i64) -> Result<Option<ProjectRow>, rus
 
 /// Fetch one commitment by id.
 pub fn get_commitment(conn: &Connection, id: i64) -> Result<Option<CommitmentRow>, rusqlite::Error> {
-    Ok(commitments_where(conn, "id = ?1", id)?.into_iter().next())
+    get_commitment_scoped(conn, id, current_read())
+}
+
+/// [`get_commitment`] within `scope` (E2-T5): a scratch row reads as absent under the world scope.
+pub fn get_commitment_scoped(conn: &Connection, id: i64, scope: ReadScope) -> Result<Option<CommitmentRow>, rusqlite::Error> {
+    Ok(commitments_where(conn, "id = ?1", id, scope)?.into_iter().next())
 }
 
 /// Fetch one open loop by id.
 pub fn get_open_loop(conn: &Connection, id: i64) -> Result<Option<OpenLoopRow>, rusqlite::Error> {
-    Ok(open_loops_where(conn, "id = ?1", id, DISPLAY_ORDER)?.into_iter().next())
+    get_open_loop_scoped(conn, id, current_read())
+}
+
+/// [`get_open_loop`] within `scope` (E2-T5): a scratch row reads as absent under the world scope.
+pub fn get_open_loop_scoped(conn: &Connection, id: i64, scope: ReadScope) -> Result<Option<OpenLoopRow>, rusqlite::Error> {
+    Ok(open_loops_where_scoped(conn, "id = ?1", id, DISPLAY_ORDER, scope)?.into_iter().next())
 }
 
 /// Match contiguous source text using the same AX whitespace rule at ingestion and read time.

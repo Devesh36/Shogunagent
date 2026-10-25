@@ -54,6 +54,8 @@ pub mod daemon;
 pub mod daily_delivery;
 #[cfg(feature = "db")]
 pub mod db_backend;
+#[cfg(feature = "db")]
+pub mod tenancy;
 #[cfg(all(feature = "desktop", any(feature = "db", feature = "net")))]
 pub mod plan_mirrors;
 pub mod settings_seal;

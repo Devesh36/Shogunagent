@@ -461,7 +461,7 @@ fn loop_kind(conn: &Connection, kind: &str, event_id: i64) -> Result<&'static st
 
 /// One `open` item: re-list (by id, or by the same text) or store a new row. `Some(true)` =
 /// re-listed, `Some(false)` = new, `None` = refused.
-fn open_item(conn: &mut Connection, item: &Value, events: &[i64], now: i64) -> Result<Option<bool>, rusqlite::Error> {
+fn open_item(conn: &mut Connection, item: &Value, events: &[i64], now: i64, ctx: &crate::actor::WriteContext) -> Result<Option<bool>, rusqlite::Error> {
     let confidence = item.get("confidence").and_then(Value::as_f64).unwrap_or(0.0);
     let (Some(kind), Some(horizon), Some(text)) = (str_of(item, "kind"), str_of(item, "horizon"), str_of(item, "text")) else {
         return Ok(None);
@@ -513,10 +513,11 @@ fn open_item(conn: &mut Connection, item: &Value, events: &[i64], now: i64) -> R
                     "UPDATE {t} SET horizon = ?2, last_evidence_at = MAX(last_evidence_at, ?6), updated_at = ?3,
                             confidence = CASE WHEN user_pinned = 1 THEN confidence ELSE ?4 END,
                             base_confidence = CASE WHEN user_pinned = 1 THEN base_confidence ELSE ?4 END,
-                            description = CASE WHEN user_pinned = 1 OR wording_edited = 1 THEN description ELSE ?5 END
+                            description = CASE WHEN user_pinned = 1 OR wording_edited = 1 THEN description ELSE ?5 END,
+                            actor_last = ?7
                       WHERE id = ?1"
                 ),
-                params![id, horizon, now, confidence, text, seen],
+                params![id, horizon, now, confidence, text, seen, ctx.actor_sql()],
             )?;
             id
         }
@@ -524,18 +525,19 @@ fn open_item(conn: &mut Connection, item: &Value, events: &[i64], now: i64) -> R
             let due = crate::due::due_at(&quote, said_at).or_else(|| crate::due::due_at(&text, said_at));
             tx.execute(
                 "INSERT INTO commitments (direction, description, due_at, status, confidence, base_confidence,
-                                          created_at, updated_at, last_evidence_at, horizon)
-                 VALUES ('mine', ?1, ?2, 'open', ?3, ?3, ?4, ?4, ?6, ?5)",
-                params![text, due, confidence, now, horizon, seen],
+                                          created_at, updated_at, last_evidence_at, horizon, actor_last, namespace)
+                 VALUES ('mine', ?1, ?2, 'open', ?3, ?3, ?4, ?4, ?6, ?5, ?7, ?8)",
+                params![text, due, confidence, now, horizon, seen, ctx.actor_sql(), ctx.namespace_sql()],
             )?;
             tx.last_insert_rowid()
         }
         None => {
             tx.execute(
                 "INSERT INTO open_loops (kind, description, opened_at, staleness_days, status, confidence,
-                                         base_confidence, created_at, updated_at, last_evidence_at, horizon)
-                 VALUES (?1, ?2, ?3, 0, 'open', ?4, ?4, ?5, ?5, ?3, ?6)",
-                params![loop_kind(&tx, kind, event_id)?, text, seen, confidence, now, horizon],
+                                         base_confidence, created_at, updated_at, last_evidence_at, horizon,
+                                         actor_last, namespace)
+                 VALUES (?1, ?2, ?3, 0, 'open', ?4, ?4, ?5, ?5, ?3, ?6, ?7, ?8)",
+                params![loop_kind(&tx, kind, event_id)?, text, seen, confidence, now, horizon, ctx.actor_sql(), ctx.namespace_sql()],
             )?;
             tx.last_insert_rowid()
         }
@@ -610,12 +612,19 @@ fn merge(conn: &mut Connection, d: &Value, now: i64) -> Result<bool, rusqlite::E
 /// ([`ConsolidationInput::events`]); anything else is refused. An unusable answer (pass
 /// `Value::Null`) still marks them read, so one bad batch cannot stall the queue.
 pub fn apply(conn: &mut Connection, answer: &Value, events: &[i64], read: &[i64], now: i64) -> Result<Applied, MemoryError> {
+    apply_as(conn, answer, events, read, now, &crate::actor::current_write())
+}
+
+/// [`apply`] as `ctx` (E2-T4): every row the consolidator opens or re-lists records `ctx.actor`
+/// as its last writer and lands in `ctx.namespace`. The engine passes
+/// [`crate::actor::Actor::system`]`("consolidator")`.
+pub fn apply_as(conn: &mut Connection, answer: &Value, events: &[i64], read: &[i64], now: i64, ctx: &crate::actor::WriteContext) -> Result<Applied, MemoryError> {
     let list = |key: &str| answer.get(key).and_then(Value::as_array).cloned().unwrap_or_default();
     let mut out = Applied::default();
     let open = list("open");
     out.dropped += open.len().saturating_sub(MAX_OPEN);
     for item in open.iter().take(MAX_OPEN) {
-        match open_item(conn, item, events, now)? {
+        match open_item(conn, item, events, now, ctx)? {
             Some(true) => out.relisted += 1,
             Some(false) => out.opened += 1,
             None => out.dropped += 1,

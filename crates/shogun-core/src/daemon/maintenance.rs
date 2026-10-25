@@ -1276,11 +1276,16 @@ impl Db {
     /// request JSON (`{"table","id",...fields}`) every face sends. `Ok(false)` when the row does
     /// not exist; `Err` is a fixed message (never row content): `invalid …` for a bad request.
     pub fn state_update(&self, body: &str) -> Result<bool, String> {
+        self.state_update_as(body, &shogun_memory::actor::current_write())
+    }
+
+    /// [`Self::state_update`] as `ctx` (E2-T4): the row's `actor_last` records the editor.
+    pub fn state_update_as(&self, body: &str, ctx: &shogun_memory::actor::WriteContext) -> Result<bool, String> {
         let (table, id, patch) =
             shogun_memory::state_edit::parse_request(body).map_err(|e| e.to_string())?;
         let now = self.now_ms();
         self.with_conn_mut("state.update", |c| {
-            match shogun_memory::state_edit::update_state(c, table, id, &patch, now) {
+            match shogun_memory::state_edit::update_state_as(c, table, id, &patch, now, ctx) {
                 Ok(changed) => Ok(Ok(changed)),
                 Err(shogun_memory::state_edit::EditError::Invalid(why)) => Ok(Err(why)),
                 Err(shogun_memory::state_edit::EditError::Db(e)) => Err(e),
@@ -1293,11 +1298,17 @@ impl Db {
     /// Add a commitment / open loop the user wrote (`state.create`, L1, local). `body` is the
     /// shared request JSON. `Ok(None)` when `person_id` names no person; `Err` is a fixed message.
     pub fn state_create(&self, body: &str) -> Result<Option<i64>, String> {
+        self.state_create_as(body, &shogun_memory::actor::current_write())
+    }
+
+    /// [`Self::state_create`] as `ctx` (E2-T4): the new row records `ctx.actor` and lands in
+    /// `ctx.namespace`.
+    pub fn state_create_as(&self, body: &str, ctx: &shogun_memory::actor::WriteContext) -> Result<Option<i64>, String> {
         let req = shogun_memory::state_edit::parse_create_request(body).map_err(|e| e.to_string())?;
         let now = self.now_ms();
         let created = self
             .with_conn_mut("state.create", |c| {
-                match shogun_memory::state_edit::create_state(c, &req, now) {
+                match shogun_memory::state_edit::create_state_as(c, &req, now, ctx) {
                     Ok(id) => Ok(Ok(id)),
                     Err(shogun_memory::state_edit::EditError::Invalid(why)) => Ok(Err(why)),
                     Err(shogun_memory::state_edit::EditError::Db(e)) => Err(e),
@@ -1315,6 +1326,11 @@ impl Db {
     /// old events cannot re-create it. Same body / result shape as [`Self::state_update`]
     /// (only `table` and `id` are read).
     pub fn state_delete(&self, body: &str) -> Result<bool, String> {
+        self.state_delete_as(body, &shogun_memory::actor::current_write())
+    }
+
+    /// [`Self::state_delete`] as `ctx` (E2-T4): the deletion marker names the actor.
+    pub fn state_delete_as(&self, body: &str, ctx: &shogun_memory::actor::WriteContext) -> Result<bool, String> {
         let (table, id, patch) =
             shogun_memory::state_edit::parse_request(body).map_err(|e| e.to_string())?;
         if patch != shogun_memory::state_edit::StatePatch::default() {
@@ -1322,7 +1338,7 @@ impl Db {
         }
         let now = self.now_ms();
         self.with_conn_mut("state.delete", |c| {
-            match shogun_memory::state_edit::delete_state(c, table, id, now) {
+            match shogun_memory::state_edit::delete_state_as(c, table, id, now, ctx) {
                 Ok(changed) => Ok(Ok(changed)),
                 Err(shogun_memory::state_edit::EditError::Invalid(why)) => Ok(Err(why)),
                 Err(shogun_memory::state_edit::EditError::Db(e)) => Err(e),

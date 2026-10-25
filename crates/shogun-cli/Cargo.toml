@@ -23,7 +23,9 @@ path = "src/main.rs"
 [dependencies]
 shogun-mcp = { path = "../shogun-mcp" }
 shogun-agents = { path = "../shogun-agents" }
-shogun-core = { path = "../shogun-core" }
+# `db` for `shogun principal import` (E2-T6): the tenancy module copies and migrates a store
+# locally, with no server involved. The storage layer is already in the graph through shogun-mcp.
+shogun-core = { path = "../shogun-core", features = ["db"] }
 serde_json = "1"
 
 # On a Mac the command finds the app's `memory.db` under `~/Library/Application Support`

@@ -100,6 +100,7 @@ impl FaultClass for shogun_memory::MemoryError {
             | shogun_memory::MemoryError::HistoryMismatch(_) => "migration",
             shogun_memory::MemoryError::Integrity(_) => "integrity",
             shogun_memory::MemoryError::EmptyProvenance => "empty_provenance",
+            shogun_memory::MemoryError::EmptyActor | shogun_memory::MemoryError::InvalidActor => "empty_actor",
         }
     }
 }
