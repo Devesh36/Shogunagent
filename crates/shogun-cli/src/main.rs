@@ -121,6 +121,31 @@ fn main() -> ExitCode {
         };
     }
 
+    // `audit verify <file>` (E26) recomputes an export's hash chain locally: no server, no token.
+    if let command::Command::AuditVerify { file } = &invocation.command {
+        let text = match std::fs::read_to_string(file) {
+            Ok(text) => text,
+            Err(e) => {
+                eprintln!("error: cannot read the export: {e}");
+                return ExitCode::from(1);
+            }
+        };
+        return match shogun_mcp::audit_export::verify(&text) {
+            Ok(report) => {
+                // log-hygiene-ok: counts and a hash of the user's own export, printed to them
+                println!(
+                    "{}",
+                    serde_json::json!({ "verified": true, "records": report.records, "head_hash": report.head_hash, "id_gaps": report.id_gaps })
+                );
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("verification failed: {e}");
+                ExitCode::from(1)
+            }
+        };
+    }
+
     // `voice-dictionary import <file|->` reads its rows here, before the call is built.
     let command = match wire::resolve_import_source(invocation.command) {
         Ok(command) => command,
@@ -161,6 +186,34 @@ fn main() -> ExitCode {
         Ok(resp) if resp.status == 0 => {
             eprintln!("empty or malformed response from the daemon on 127.0.0.1:{port}");
             ExitCode::from(3)
+        }
+        // E26: the export goes to --out (or stdout) as received, and is checked before the CLI
+        // reports success: a stream cut short has no trailer.
+        Ok(resp) if matches!(command, Command::AuditExport { .. }) && (200..300).contains(&resp.status) => {
+            let Command::AuditExport { out, .. } = &command else {
+                return ExitCode::FAILURE;
+            };
+            let verified = shogun_mcp::audit_export::verify(&resp.body);
+            match out {
+                Some(path) => {
+                    if let Err(e) = std::fs::write(path, &resp.body) {
+                        eprintln!("error: cannot write the export: {e}");
+                        return ExitCode::from(1);
+                    }
+                }
+                // log-hygiene-ok: the export the operator asked for, printed by the CLI they ran
+                None => print!("{}", resp.body),
+            }
+            match verified {
+                Ok(report) => {
+                    eprintln!("audit export: {} records, head hash {}", report.records, report.head_hash);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("audit export is incomplete: {e}");
+                    ExitCode::from(1)
+                }
+            }
         }
         Ok(resp) => {
             // `state export` prints the Markdown document itself unless `--json` asked for the

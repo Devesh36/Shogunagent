@@ -91,6 +91,9 @@ pub struct AppState {
     /// decide approvals and change grants from the CLI. Never an agent's token; the raw value is
     /// not kept.
     admin_digest: Option<[u8; 32]>,
+    /// Carries out an approved action once a human decided it (E15 follow-up). `None` in a build
+    /// without the execution path: decided approvals stay `approved` (`execute_unavailable`).
+    executor: Option<Arc<dyn crate::approval_exec::ApprovalExecutor>>,
 }
 
 /// Multi-principal mode (E2-T2): which store and which writer a bearer token names. `apps/api`
@@ -171,6 +174,7 @@ impl AppState {
             mcp: None,
             remote: crate::remote_approvals::RemoteApprovals::from_env(),
             admin_digest: std::env::var("SHOGUN_ADMIN_TOKEN").ok().and_then(|t| admin_digest(&t)),
+            executor: None,
         }
     }
 
@@ -188,6 +192,15 @@ impl AppState {
     #[must_use]
     pub fn with_admin_token(mut self, token: Option<&str>) -> Self {
         self.admin_digest = token.and_then(admin_digest);
+        self
+    }
+
+    /// Carry out approved actions with `executor` (E15 follow-up): a human's approval on the decide
+    /// route runs the action once and records `sent` / `send_failed`. Without one, a decided
+    /// approval stays `approved` with `next_action: "execute_unavailable"`.
+    #[must_use]
+    pub fn with_approval_executor(mut self, executor: Arc<dyn crate::approval_exec::ApprovalExecutor>) -> Self {
+        self.executor = Some(executor);
         self
     }
 
@@ -369,8 +382,12 @@ async fn handle_mcp(State(state): State<AppState>, req: Request) -> Response {
     ) {
         return render(403, r#"{"error":"forbidden_host"}"#.to_string());
     }
-    let Some(mcp) = state.mcp.clone() else {
-        return render(404, r#"{"error":"not_found"}"#.to_string());
+    // Multi-principal mode (E2-T2): every request resolves its own principal from its bearer
+    // through the same resolver REST uses, so the MCP face needs no handler of its own.
+    let mcp: Arc<dyn crate::mcp_http::McpHandler> = match (&state.principals, state.mcp.clone()) {
+        (Some(_), _) => Arc::new(PrincipalMcp { state: state.clone() }),
+        (None, Some(mcp)) => mcp,
+        (None, None) => return render(404, r#"{"error":"not_found"}"#.to_string()),
     };
     let method = req.method().as_str().to_string();
     let headers = req.headers().clone();
@@ -416,6 +433,59 @@ async fn handle_mcp(State(state): State<AppState>, req: Request) -> Response {
     response
         .body(Body::from(reply.body))
         .unwrap_or_else(|_| render(500, r#"{"error":"internal"}"#.to_string()))
+}
+
+/// `POST /mcp` in multi-principal mode (E2-T2 × E4-T1): one MCP server per request, over the store
+/// of the principal the request's bearer names ([`BackendResolver::resolve`], the resolver REST
+/// uses), writing as that bearer's actor, with the server's one approval queue, remote-approval
+/// ledger, plan gate and rate limiter. Same header contract and MRTR shapes as the
+/// single-principal face; approvals it queues are recorded under the principal, and another
+/// principal's approval, store or audit log is never reachable from it. A request without a bearer
+/// the resolver knows is refused before any store is opened.
+struct PrincipalMcp {
+    state: AppState,
+}
+
+impl crate::mcp_http::McpHandler for PrincipalMcp {
+    fn handle_line_as(&self, line: &str, token: Option<&str>) -> Option<String> {
+        use shogun_memory::actor::{CallScope, Namespace, ReadScope, WriteContext};
+        let id = serde_json::from_str::<serde_json::Value>(line).ok().and_then(|v| v.get("id").cloned());
+        let refuse = |code: i64, message: &str| {
+            id.clone().map(|id| {
+                serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
+            })
+        };
+        let state = &self.state;
+        let Some(resolver) = &state.principals else {
+            return refuse(-32000, "internal: no principal resolver");
+        };
+        let resolved = match token.map(|token| resolver.resolve(token)) {
+            Some(Ok(resolved)) => resolved,
+            Some(Err((503, _))) => return refuse(-32000, "memory_unavailable: the principal's store cannot be opened right now; retry."),
+            _ => {
+                return refuse(
+                    crate::mcp::TOKEN_INVALID_CODE,
+                    "unauthorized: present a principal's bearer token (Authorization: Bearer <token>).",
+                )
+            }
+        };
+        let Ok(write) = WriteContext::new(&resolved.actor, Namespace::World) else {
+            return refuse(-32000, "internal: invalid actor");
+        };
+        let clock = state.clock.clone();
+        let entitlements = state.entitlements.clone();
+        let mut server = crate::mcp::McpServer::new(resolved.backend, state.approvals.clone(), move || clock(), move || entitlements())
+            .with_remote_approvals(state.remote.clone())
+            .with_principal(resolved.principal)
+            .with_approval_execution(state.executor.is_some())
+            .with_llm_rate_limiter(state.llm_limiter.clone());
+        if let Some(token_id) = token.and_then(|token| state.tokens.current().token_id(token)) {
+            server = server.with_rate_client(crate::rate_limit::ClientKey::token(&token_id));
+        }
+        shogun_memory::actor::with_call_scope(CallScope { write, read: ReadScope { include_scratch: false } }, || {
+            server.handle_line_as(line, token)
+        })
+    }
 }
 
 /// The one handler. Adapts an axum request into a [`RestRequest`], calls [`rest::respond`], and
@@ -501,6 +571,13 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     );
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
+    // E26: the operator's hash-chained audit export, streamed (no agent bearer reaches it).
+    if path == "/v1/audit/export" {
+        return match method {
+            Some(Method::Get) => governance::audit_export(&state, token.as_deref(), raw_query, &request_id),
+            _ => render_with(405, r#"{"error":"method_not_allowed"}"#.to_string(), &request_id, None),
+        };
+    }
     let include_low = include_low_opt_in(raw_query);
     // E2-T5: `?include_scratch` widens reads to the agents' scratch namespaces for this call.
     let include_scratch = query_flag(raw_query, "include_scratch");
@@ -652,7 +729,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             let answered = shogun_memory::actor::with_call_scope(scope, || match routed {
                 // E15: the approval summaries, from the queue and the ledger (never the body).
                 Routed::Read { tool: tool @ (crate::memory_api::Tool::ApprovalsList | crate::memory_api::Tool::ApprovalsGet), id } => {
-                    governance::approvals_read(&state, tool, id, principal.as_deref())
+                    governance::approvals_read(&state, backend.as_ref(), tool, id, principal.as_deref())
                 }
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
                 // A local action is answered here, before the queue (issue #779): a search runs,
@@ -808,20 +885,10 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                         None => rest::respond_with(&rreq, &tokens, &ent, backend.as_ref()),
                     }
                 }
+                // The queue's answer, else the decision the caller's store persisted (V103);
+                // multi-principal, only for the caller's own approvals.
                 Routed::ApprovalStatus { id } => {
-                    if let Some(store) = &state.approval_store {
-                        match store.with_queue(|queue| rest::poll_approval(id, queue, (state.clock)())) {
-                            Ok(body) => (200, body),
-                            Err(why) => (500, approval_store_error(&why)),
-                        }
-                    } else {
-                        match state.approvals.lock() {
-                            Ok(mut queue) => {
-                                (200, rest::poll_approval(id, &mut queue, (state.clock)()))
-                            }
-                            Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
-                        }
-                    }
+                    governance::approval_status(&state, backend.as_ref(), id, principal.as_deref())
                 }
                 // Discovery answers with the port actually bound, when the server knows it.
                 Routed::Status => (200, rest::status_body(state.port)),

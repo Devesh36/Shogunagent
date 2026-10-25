@@ -444,6 +444,31 @@ pub enum Decision {
 /// The 10-minute L3 approval timeout (FR-AG-04).
 pub const APPROVAL_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 
+/// Why an approved action did not go out, as a fixed machine class: the only failure reasons an
+/// executed approval records (on the queue, in the principal's ledger and in the audit log).
+/// Never a provider message, a recipient or a body.
+pub const EXECUTION_FAILURE_CLASSES: &[&str] = &[
+    // The principal has no usable credential for the action's service (never connected,
+    // disconnected, or the stored grant expired).
+    "not_connected",
+    // The service gate refused the write (plan, wave, consent).
+    "not_authorized",
+    // The connection changed between the decision and the write.
+    "connection_changed",
+    // The traceability row could not be written, so nothing was sent.
+    "trace_unavailable",
+    // The action names a target no provider call can use.
+    "invalid_target",
+    // The action is a local setting the desktop applies; the sidecar has no transport for it.
+    "not_executable",
+    // The provider was reached and refused or failed.
+    "provider_error",
+    // The provider did not answer in time; delivery may still have happened.
+    "timeout",
+    // The principal's store could not record the decision, so nothing was run.
+    "ledger_unavailable",
+];
+
 /// A pending L3 request.
 #[derive(Debug, Clone)]
 struct PendingApproval {
@@ -713,6 +738,32 @@ impl ApprovalQueue {
         true
     }
 
+    /// Settle a remotely [`ApprovalStatus::Approved`] item once its executor has run it (ShogunAgent
+    /// E15 follow-up): `Approved` → `Sent` / `SendFailed` / `OutcomeUnknown`, at most once. Any
+    /// other current status (pending, rejected, timed out, already settled) is left alone and
+    /// answers `false`. `reason` is kept only when it is an allowlisted machine class
+    /// ([`EXECUTION_FAILURE_CLASSES`]).
+    pub fn settle_approved(
+        &mut self,
+        id: ApprovalId,
+        status: ApprovalStatus,
+        resolved_ms: u64,
+        reason: Option<&str>,
+    ) -> bool {
+        if !matches!(status, ApprovalStatus::Sent | ApprovalStatus::SendFailed | ApprovalStatus::OutcomeUnknown) {
+            return false;
+        }
+        let approved = self
+            .terminal
+            .iter()
+            .any(|record| record.id == id && record.status == ApprovalStatus::Approved);
+        if !approved {
+            return false;
+        }
+        self.record_terminal(id, status, resolved_ms, reason);
+        true
+    }
+
     /// Resolve crash-recovered in-flight items conservatively; never claim a send succeeded
     /// and never label unknown delivery as [`ApprovalStatus::SendFailed`] (that invites a resend).
     pub fn recover_in_flight(&mut self, now_ms: u64) -> Vec<ApprovalId> {
@@ -785,6 +836,7 @@ impl ApprovalQueue {
             resolved_ms,
             reason: match reason {
                 Some("provider_policy_stop") => Some("provider_policy_stop".to_string()),
+                Some(class) if EXECUTION_FAILURE_CLASSES.contains(&class) => Some(class.to_string()),
                 _ => None,
             },
         });
@@ -836,6 +888,31 @@ mod tests {
 
     fn preview() -> Preview {
         Preview::for_send(&email(), "Hi Alice, shipping Friday.", Route::ViaComposio)
+    }
+
+    #[test]
+    fn an_approved_item_settles_once_and_keeps_only_allowlisted_reasons() {
+        let mut queue = ApprovalQueue::new();
+        let id = queue.request(email(), preview(), ApprovalOrigin::Api, 0);
+        // Pending: nothing to settle.
+        assert!(!queue.settle_approved(id, ApprovalStatus::Sent, 1, None));
+        assert!(matches!(queue.confirm(id, ConfirmIntent::DedicatedButton, 1), Decision::Confirmed(_)));
+        assert!(queue.mark_status(id, ApprovalStatus::Approved, 1));
+        assert!(!queue.settle_approved(id, ApprovalStatus::Approved, 2, None), "only an outcome settles");
+        assert!(queue.settle_approved(id, ApprovalStatus::SendFailed, 2, Some("not_connected")));
+        assert_eq!(queue.status(id), Some(ApprovalStatus::SendFailed));
+        assert_eq!(queue.failure_reason(id), Some("not_connected"));
+        assert!(!queue.settle_approved(id, ApprovalStatus::Sent, 3, None), "settled once");
+        // A rejected item never settles as sent.
+        let rejected = queue.request(email(), preview(), ApprovalOrigin::Api, 0);
+        queue.reject(rejected, RejectCause::UserRejected, 1);
+        assert!(!queue.settle_approved(rejected, ApprovalStatus::Sent, 2, None));
+        // A free-text reason is dropped.
+        let other = queue.request(email(), preview(), ApprovalOrigin::Api, 0);
+        assert!(matches!(queue.confirm(other, ConfirmIntent::DedicatedButton, 1), Decision::Confirmed(_)));
+        queue.mark_status(other, ApprovalStatus::Approved, 1);
+        assert!(queue.settle_approved(other, ApprovalStatus::SendFailed, 2, Some("smtp said: mailbox full")));
+        assert_eq!(queue.failure_reason(other), None);
     }
 
     #[test]

@@ -331,6 +331,15 @@ one JSON-RPC request per `POST`; `GET` and `DELETE` answer 405. `server/discover
 capabilities, `tools/list` and `resources/list` carry `ttlMs` / `cacheScope` (`private`: the
 answer depends on the bearer), and a read's result carries the same hints under `_meta`.
 
+`shogun-api --multi` serves `/mcp` too: every request resolves its principal from its own bearer
+through the same resolver REST uses (`TokenPrincipalMap` until `apps/api` issues agent keys),
+reads and writes that principal's file as the bearer's agent, and shares the server's one
+approval queue, remote-approval ledger and per-token rate limit with REST. A request without a
+bearer the resolver knows answers JSON-RPC error `-32001` before any store is opened. The header
+contract and the MRTR shapes below are the same; an approval queued over MCP is recorded under the
+principal, so another principal's `actions.status`, `approvals.*` and `audit.list` never see it
+(`crates/shogun-core/tests/invariant_tenant.rs`, `the_mcp_face_keeps_principals_apart`).
+
 Every request names what it does in headers so a gateway can meter it without reading the body:
 
 ```
@@ -382,6 +391,8 @@ The sidecar's approval decision API (`crates/shogun-mcp/src/remote_approvals.rs`
 | `GET /v1/approvals/{id}` + `X-Shogun-Approval-Token` | the gateway | the same summary, authorized by the signed token |
 | `POST /v1/approvals/{id}/decide` `{decision, decided_by, nonce}` | the gateway (token) or the operator (`SHOGUN_ADMIN_TOKEN`; `shogun approvals decide <id> approve\|reject`) | approve or reject. Never an MCP tool; an agent's bearer is `403 human_only` |
 | `GET /v1/audit?since_ms=&limit=` · MCP `audit.list` · `shogun audit` | any agent key (read) | the principal's audit log |
+| `GET /v1/audit/export?since_ms=&until_ms=&format=jsonl\|csv[&principal=]` · `shogun audit export [--since-ms N] [--until-ms N] [--format jsonl\|csv] [--principal P] [--out FILE]` | the operator only (`SHOGUN_ADMIN_TOKEN`; never an MCP tool: a human-only operation) | the hash-chained audit export (E26), streamed |
+| `shogun audit verify <file>` | anyone holding the file (offline) | recompute an export's chain |
 | `GET /v1/acl` · MCP `acl.list` · `shogun acl list` | any agent key (read) | scratch and Team grants |
 | `POST /v1/acl/grant`, `/v1/acl/revoke` · `shogun acl grant\|revoke <json>` | the operator only | change a grant |
 | `GET`/`POST /v1/teams` · `shogun acl teams\|team <json>` | the operator only (multi-principal) | define teams |
@@ -391,12 +402,47 @@ The sidecar's approval decision API (`crates/shogun-mcp/src/remote_approvals.rs`
   the gateway only). Claims: approval id, principal, expiry (the approval's own 10-minute window),
   nonce. A decision repeats the nonce; the sidecar spends it, so a replay is `409 token_replayed`,
   an expired token `410 token_expired`, a forged one `403 invalid_token`.
-- **Approved** is a terminal status (`actions.status` reads `approved`): a human confirmed with the
-  dedicated button's authority; the executor that owns the action carries it out. The decision is
-  recorded with `decided_by` and the time in the ledger and in the audit log.
+- **Durable ledger** (V103 `approval_decisions`, `approval_spent_nonces`, in the principal's own
+  store). The spent nonce is written to the principal's store before anything is decided, and the
+  decision (who, when, how, tier, execution state) right after, so a restarted sidecar still
+  refuses a replayed token and still answers `approvals.get` / `actions.status` for a decided
+  approval. A store that cannot record the nonce refuses the decision (`503
+  approval_ledger_unavailable`, nothing decided). In multi-principal mode approval ids start above
+  every id an earlier process handed out, so a persisted decision never names a later approval,
+  and `actions.status` answers `unknown` for another principal's approval.
+- **Approved, then executed.** A human's approval confirms with the dedicated button's authority
+  and moves the request to `approved`. A sidecar built with the execution path (`shogun-api`,
+  feature `exec`, multi-principal) then carries the action out **once**, in the same request: the
+  principal's ledger claims it (`pending` → `executing`, a compare-and-set, so two racing
+  decisions or a second process never run it twice), `send_exec` writes the traceability row to
+  the principal's store and calls the provider with the principal's connector grant (from the
+  token store; no grant is `not_connected`), and the outcome is recorded on the approval, in the
+  ledger and in the audit log (`approvals.execute`, `sent` or `failed:<class>`). The decide
+  answer and `actions.status` read `sent`, or `send_failed` with a `reason` class
+  (`not_connected`, `not_authorized`, `connection_changed`, `trace_unavailable`,
+  `invalid_target`, `not_executable`, `provider_error`, `timeout`, `ledger_unavailable`) — never
+  the provider's message or the body. A rejected, expired or unknown approval releases no action
+  and nothing runs. A build without the execution path (the `shogun-mcp` server alone, or the
+  single-principal `shogun-api` beside the desktop app) leaves the approval `approved` with
+  `next_action: "execute_unavailable"`. The decision is recorded with `decided_by` and the time in
+  the ledger and in the audit log.
 - **Audit log** (V101 `audit_log`): one record per write and per approval decision on every face —
   actor, principal, tool or route, tier, outcome (`ok`, `pending`, `refused`, `approved`, …),
   time, request id (`X-Request-Id`, echoed). Never a body or an argument value.
+- **Audit export** (E26, `crates/shogun-mcp/src/audit_export.rs`). The principal's records in
+  append order (row id), `since_ms <= ts < until_ms`, as JSON Lines (default) or CSV, streamed
+  500 rows at a time. Each record carries `seq` (1, 2, … in this export), `prev_hash` (64 zeros for
+  the first) and `hash` = SHA-256 of its canonical form (`seq, id, ts, actor, principal, route,
+  level, outcome, request_id, prev_hash`, in that order, as compact JSON; the same in both
+  formats). The last line is a trailer with the record count and the head hash (JSON:
+  `{"trailer":true,"records":N,"head_hash":…}`, CSV: `#trailer,records=N,head_hash=…`). Editing,
+  dropping, reordering or inserting a record breaks every hash after it; a cut-short stream has no
+  trailer. `shogun audit verify <file>` recomputes all of it offline (exit 1 on any failure) and
+  reports `id_gaps`, store row ids missing between exported records (a window or retention can
+  leave them). The chain is deterministic, so keeping the head hash of a window out of band lets a
+  later export of the same window be checked against it. The export itself is recorded
+  (`audit.export`) before it streams; multi-principal, `principal=` is required. Labels only:
+  never a body or an argument value.
 - **Scratch ACL** (V101 `scratch_acl`): an agent reads and writes its own `agent_scratch:<id>` and
   the world; another agent's scratch is invisible (search, lists, GET by id, `/memories` files)
   unless the operator granted `read` or `write`. Enforced in the data layer (`ReadScope`,

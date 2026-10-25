@@ -85,6 +85,9 @@ pub struct HarnessConfig {
     /// by handle, so the model is pinned across suites and seeds by construction.
     #[serde(skip)]
     pub embedder: Option<crate::embedding::BenchEmbedder>,
+    /// The vector lane's cutoff override for every arm (`--vector-cutoff`, calibration runs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_cutoff: Option<f32>,
 }
 
 impl HarnessConfig {
@@ -101,6 +104,7 @@ impl HarnessConfig {
             search_path: SearchPath::Federated,
             db_dir: None,
             embedder: None,
+            vector_cutoff: None,
         }
     }
 
@@ -115,6 +119,7 @@ impl HarnessConfig {
             search_path: SearchPath::Federated,
             db_dir: None,
             embedder: None,
+            vector_cutoff: None,
         }
     }
 
@@ -149,6 +154,7 @@ impl HarnessConfig {
             search_path: self.search_path,
             slice: crate::slicer::SliceConfig::default(),
             embedder: self.embedder.clone(),
+            vector_cutoff: self.vector_cutoff,
         }
     }
 }

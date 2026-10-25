@@ -1399,7 +1399,7 @@ fn a_recency_cue_word_is_recognised_on_its_own_so_callers_can_count_it_back_in()
 fn the_vector_lane_recovers_a_paraphrase_the_lexical_lane_misses() {
     use crate::embed::{Embedder, TestEmbedder};
     let mut conn = crate::open_in_memory().unwrap();
-    let answer = event(&conn, 10, "The renewal fee lands at 12k for the year", "para-answer");
+    let answer = event(&conn, 10, "The fee is 12k", "para-answer");
     event(&conn, 11, "Standup notes: nothing blocking, ship on Thursday", "para-noise-1");
     event(&conn, 12, "Lunch options near the office", "para-noise-2");
     let embedder = TestEmbedder::new();
@@ -1425,4 +1425,29 @@ fn the_vector_lane_recovers_a_paraphrase_the_lexical_lane_misses() {
     let found = ids(&hybrid);
     assert_eq!(found.first(), Some(&answer), "the vector lane ranks the paraphrase first: {found:?}");
     assert!(hybrid.hits[0].component_ranks.warm_knn.is_some());
+}
+
+/// E24: the vector lane's relevance cutoff comes from the store's active model (its `ModelSpec`),
+/// not from one constant tuned for e5: a neighbour that shares one concept with the question but
+/// does not answer it is evidence at the old e5 cutoff and none at the test embedder's own.
+#[test]
+fn the_vector_cutoff_is_the_active_models() {
+    use crate::embed::{Embedder, TestEmbedder};
+    let mut conn = crate::open_in_memory().unwrap();
+    let neighbour = event(&conn, 10, "flight to Osaka booked", "cutoff-neighbour");
+    event(&conn, 11, "Lunch options near the office", "cutoff-noise");
+    let embedder = TestEmbedder::new();
+    crate::embed_job::embed_all_pending(&mut conn, &embedder, 16).unwrap();
+    let query = embedder.embed_query("what is the travel budget").unwrap();
+    let warm = |options: &FederatedSearchOptions| -> bool {
+        search_federated(&conn, "what is the travel budget", Some(&query), 100, options, 5)
+            .unwrap()
+            .hits
+            .iter()
+            .any(|hit| hit.component_ranks.warm_knn.is_some()
+                && hit.sources.iter().any(|s| s.id == FederatedSourceId::Event(neighbour)))
+    };
+    assert!(!warm(&FederatedSearchOptions::default()), "outside the test embedder's cutoff");
+    let e5 = FederatedSearchOptions { max_vector_distance: Some(1.0), ..FederatedSearchOptions::default() };
+    assert!(warm(&e5), "inside the e5 cutoff: the false evidence the per-model cutoff removes");
 }

@@ -562,6 +562,10 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // The audit log (V101) records who wrote what and when: this person's activity, so it goes
     // too. The access grants (`scratch_acl`, `principal_grants`) are settings, kept like others.
     tx.execute("DELETE FROM audit_log", [])?;
+    // The approval decisions (V103) are the same kind of activity record. The spent decision
+    // nonces are kept: they hold no content, expire with their token, and wiping them would let
+    // an unexpired approval link decide a second time.
+    tx.execute("DELETE FROM approval_decisions", [])?;
     // children first (FK order): provenance → commitments/open_loops → threads → people/projects.
     // `threads` holds titles, summaries and participants, so it is user data and must go too —
     // and it references projects, so it goes before them.
@@ -2787,6 +2791,8 @@ mod tests {
             "writing_voice_settings",
             // V102: the store's active embedding model (a model id, no content).
             "embedding_space",
+            // V103: spent decision-token nonces (replay protection until the token expires).
+            "approval_spent_nonces",
         ];
         // Emptied by ON DELETE CASCADE from a wiped parent, or by a trigger on one.
         const CASCADED: &[&str] = &[

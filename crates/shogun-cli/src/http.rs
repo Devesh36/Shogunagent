@@ -64,9 +64,30 @@ pub fn parse_response(raw: &str) -> HttpResponse {
         .and_then(|line| line.split_whitespace().nth(1))
         .and_then(|code| code.parse().ok())
         .unwrap_or(0);
-    // Body is everything after the header/body separator.
-    let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    // Body is everything after the header/body separator; a streamed answer (the audit export)
+    // arrives chunked and is reassembled.
+    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((raw, ""));
+    let chunked = head
+        .lines()
+        .any(|line| line.to_ascii_lowercase().replace(' ', "") == "transfer-encoding:chunked");
+    let body = if chunked { dechunk(body) } else { body.to_string() };
     HttpResponse { status, body }
+}
+
+/// Reassemble an HTTP/1.1 chunked body. A malformed or cut-short stream keeps what was complete.
+fn dechunk(mut rest: &str) -> String {
+    let mut out = String::new();
+    while let Some((size_line, after)) = rest.split_once("\r\n") {
+        let Ok(size) = usize::from_str_radix(size_line.split(';').next().unwrap_or("").trim(), 16) else {
+            break;
+        };
+        if size == 0 || after.len() < size || !after.is_char_boundary(size) {
+            break;
+        }
+        out.push_str(&after[..size]);
+        rest = after[size..].strip_prefix("\r\n").unwrap_or(&after[size..]);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -93,6 +114,15 @@ mod tests {
         let r = parse_response(raw);
         assert_eq!(r.status, 200);
         assert_eq!(r.body, "{\"ok\":true}");
+    }
+
+    #[test]
+    fn a_chunked_body_is_reassembled() {
+        let raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n7\r\n, world\r\n0\r\n\r\n";
+        assert_eq!(parse_response(raw).body, "hello, world");
+        // Cut short: only the complete chunks.
+        let cut = "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n5\r\nhello\r\n7\r\n, wo";
+        assert_eq!(parse_response(cut).body, "hello");
     }
 
     #[test]

@@ -3,8 +3,10 @@
 
 use serde_json::Value;
 use shogun_mcp::governance_api::{self, AclOperation, AuditQuery};
+use shogun_mcp::remote_approvals::{LedgerOp, LedgerReply};
 use shogun_memory::acl;
 use shogun_memory::actor::{Actor, Namespace};
+use shogun_memory::approval_ledger;
 use shogun_memory::audit::{self, AuditRecord};
 
 use super::Db;
@@ -13,6 +15,45 @@ impl Db {
     /// Append one audit record.
     pub fn audit_append(&self, record: &AuditRecord) -> Result<(), String> {
         self.with_conn("audit.append", |conn| audit::append(conn, record).map(|_| ()).map_err(|e| e.to_string()))
+            .map_err(|_| "audit_unavailable".to_string())
+    }
+
+    /// The durable approval ledger (V103): spent decision nonces and decisions. Any store fault is
+    /// `approval_ledger_unavailable`, and the face refuses the decision rather than make it
+    /// without a durable record.
+    pub fn approval_ledger(&self, op: LedgerOp<'_>) -> Result<LedgerReply, String> {
+        let now = self.now_ms();
+        self.with_conn("approval.ledger", |conn| -> Result<LedgerReply, String> {
+            let ms = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
+            let fault = |e: approval_ledger::LedgerError| e.to_string();
+            Ok(match op {
+                LedgerOp::SpendNonce { nonce, approval_id, expires_ms, now_ms } => LedgerReply::Done(
+                    approval_ledger::spend_nonce(conn, nonce, approval_id, ms(expires_ms), ms(now_ms)).map_err(fault)?,
+                ),
+                LedgerOp::Record(row) => LedgerReply::Done(approval_ledger::record_decision(conn, row).map_err(fault)?),
+                LedgerOp::Get(id) => LedgerReply::Row(approval_ledger::get(conn, id).map_err(fault)?),
+                LedgerOp::Claim(id) => LedgerReply::Done(approval_ledger::claim_execution(conn, id).map_err(fault)?),
+                LedgerOp::Settle { approval_id, sent, reason_class, now_ms } => {
+                    let outcome = if sent { approval_ledger::Execution::Sent } else { approval_ledger::Execution::Failed };
+                    let at = if now_ms == 0 { now } else { ms(now_ms) };
+                    LedgerReply::Done(
+                        approval_ledger::settle_execution(conn, approval_id, outcome, reason_class, at).map_err(fault)?,
+                    )
+                }
+            })
+        })
+        .map_err(|_| "approval_ledger_unavailable".to_string())
+    }
+
+    /// One page of the audit log in append order (the E26 export).
+    pub fn audit_page(
+        &self,
+        after_id: i64,
+        since_ms: Option<i64>,
+        until_ms: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<audit::AuditEntry>, String> {
+        self.with_conn("audit.page", |conn| audit::page(conn, after_id, since_ms, until_ms, limit).map_err(|e| e.to_string()))
             .map_err(|_| "audit_unavailable".to_string())
     }
 

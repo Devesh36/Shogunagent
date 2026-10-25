@@ -35,7 +35,10 @@ pub mod governance_api;
 pub mod remote_approvals;
 pub mod ai_search_api;
 pub mod api_port;
+pub mod approval_exec;
 pub mod approval_store;
+/// The hash-chained audit export and its offline verifier (E26).
+pub mod audit_export;
 pub mod reply_thread;
 pub mod backend;
 pub mod forms_api;

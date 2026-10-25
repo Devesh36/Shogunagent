@@ -142,8 +142,59 @@ pub fn list(conn: &Connection, since_ms: Option<i64>, limit: usize) -> Result<Ve
     Ok(rows)
 }
 
+/// One page of the log in append order, for the audit export (E26): records with `id > after_id`
+/// and `since_ms <= ts < until_ms` (either bound optional), oldest row first, at most `limit`.
+/// Keyed by row id so a page boundary never skips or repeats a record, whatever the timestamps.
+pub fn page(
+    conn: &Connection,
+    after_id: i64,
+    since_ms: Option<i64>,
+    until_ms: Option<i64>,
+    limit: usize,
+) -> Result<Vec<AuditEntry>, AuditError> {
+    let limit = i64::try_from(limit.clamp(1, 10_000)).unwrap_or(500);
+    let mut stmt = conn.prepare(
+        "SELECT id, ts, actor, principal, route, level, outcome, request_id FROM audit_log
+         WHERE id > ?1 AND ts >= ?2 AND ts < ?3 ORDER BY id LIMIT ?4",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![after_id, since_ms.unwrap_or(i64::MIN), until_ms.unwrap_or(i64::MAX), limit],
+            |r| {
+                Ok(AuditEntry {
+                    id: r.get(0)?,
+                    record: AuditRecord {
+                        ts: r.get(1)?,
+                        actor: r.get(2)?,
+                        principal: r.get(3)?,
+                        route: r.get(4)?,
+                        level: r.get(5)?,
+                        outcome: r.get(6)?,
+                        request_id: r.get(7)?,
+                    },
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pages_follow_append_order_within_the_window() {
+        let conn = conn();
+        for (ts, outcome) in [(30, "a"), (10, "b"), (20, "c"), (40, "d")] {
+            append(&conn, &AuditRecord::new(ts, "agent:x", None, "memory.ingest", "L1", outcome, "r").unwrap()).unwrap();
+        }
+        let all = page(&conn, 0, None, None, 2).unwrap();
+        assert_eq!(all.iter().map(|e| e.record.outcome.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        let next = page(&conn, all[1].id, None, None, 2).unwrap();
+        assert_eq!(next.iter().map(|e| e.record.outcome.as_str()).collect::<Vec<_>>(), ["c", "d"]);
+        let window = page(&conn, 0, Some(20), Some(40), 10).unwrap();
+        assert_eq!(window.iter().map(|e| e.record.outcome.as_str()).collect::<Vec<_>>(), ["a", "c"], "until is exclusive");
+    }
+
     use super::*;
 
     fn conn() -> Connection {

@@ -198,6 +198,16 @@ pub struct McpServer<B: MemoryBackend> {
     /// approval URL is `<SHOGUN_APPROVAL_BASE_URL>/approve/<signed token>`. Without a base URL or
     /// a signing key the envelope carries the id and the poll only: the user approves in the app.
     remote: crate::remote_approvals::RemoteApprovals,
+    /// Whether this process carries out approved actions (the REST face holds the executor);
+    /// `actions.status` says `execute_unavailable` for an approved action when it does not.
+    executes: bool,
+    /// The principal this server answers for (multi-principal `/mcp`, E2-T2): its approvals are
+    /// recorded and listed under it, and another principal's approval reads as unknown. `None` is
+    /// the single-principal store.
+    principal: Option<String>,
+    /// Who model-starting calls are counted against when the composition root already knows it
+    /// (multi-principal `/mcp`: the request's token id). `None` derives it from the session.
+    rate_client: Option<crate::rate_limit::ClientKey>,
 }
 
 thread_local! {
@@ -250,6 +260,9 @@ impl<B: MemoryBackend> McpServer<B> {
             memory_gate: None,
             llm_limiter: Arc::new(crate::rate_limit::LlmRateLimiter::in_memory()),
             remote: crate::remote_approvals::RemoteApprovals::from_env(),
+            executes: false,
+            principal: None,
+            rate_client: None,
         }
     }
 
@@ -292,6 +305,9 @@ impl<B: MemoryBackend> McpServer<B> {
     /// token's id, else the local caller (the desktop's in-process face and tests).
     fn rate_key(&self, registry: Option<&TokenRegistry>) -> crate::rate_limit::ClientKey {
         use crate::rate_limit::ClientKey;
+        if let Some(key) = &self.rate_client {
+            return key.clone();
+        }
         match &self.live {
             Some(LiveSession { client: Some(client), .. }) => ClientKey::connection(client),
             Some(LiveSession { token: Some(token), .. }) => registry
@@ -640,7 +656,7 @@ impl<B: MemoryBackend> McpServer<B> {
         let actor = shogun_memory::actor::current_write().actor;
         let now = u64::try_from((self.clock)()).unwrap_or(0);
         let response = crate::mrtr::shape_approval(response, |approval_id, level| {
-            self.remote.on_queued(approval_id, None, actor.as_str(), level, now).map(|(url, _)| url)
+            self.remote.on_queued(approval_id, self.principal.as_deref(), actor.as_str(), level, now).map(|(url, _)| url)
         });
         // E18: every write and action leaves an audit record (labels only, never arguments).
         if let Some(tool) = tool.filter(|tool| tool_level(*tool) != ApiLevel::Read) {
@@ -1562,10 +1578,27 @@ impl<B: MemoryBackend> McpServer<B> {
                     _ => None,
                 };
                 let ledger = self.remote.ledger();
+                let principal = self.principal.as_deref();
+                let multi = principal.is_some();
+                let persisted = |n: u64| match self.backend.approval_ledger(crate::remote_approvals::LedgerOp::Get(n)) {
+                    Ok(crate::remote_approvals::LedgerReply::Row(Some(row))) => {
+                        Some(json!({ "tool": "approvals.get", "approval": crate::remote_approvals::persisted_summary(&row, self.executes) }))
+                    }
+                    _ => None,
+                };
                 let answer = |queue: &mut ApprovalQueue| match approval_id {
-                    Some(n) => crate::remote_approvals::summary(queue, ledger, n, now).map(|s| json!({ "tool": "approvals.get", "approval": s })),
+                    Some(n) => {
+                        // Multi-principal: the shared queue answers only for the caller's own
+                        // approval; anything else comes from the caller's own store.
+                        let entry = ledger.get(n);
+                        if multi && entry.as_ref().is_some_and(|e| e.principal.as_deref() != principal) {
+                            return None;
+                        }
+                        let from_queue = if multi && entry.is_none() { None } else { crate::remote_approvals::summary(queue, ledger, n, now) };
+                        from_queue.map(|s| json!({ "tool": "approvals.get", "approval": s })).or_else(|| persisted(n))
+                    }
                     None => {
-                        let mut listed = crate::remote_approvals::list(queue, ledger, None, false, now);
+                        let mut listed = crate::remote_approvals::list(queue, ledger, principal, multi, now);
                         listed["tool"] = Value::String("approvals.list".into());
                         Some(listed)
                     }
@@ -1615,7 +1648,7 @@ impl<B: MemoryBackend> McpServer<B> {
             _ => "per_action",
         };
         let request_id = crate::governance_api::new_request_id();
-        if let Some(record) = crate::governance_api::record((self.clock)(), actor, None, tool.wire_name(), level, outcome, &request_id) {
+        if let Some(record) = crate::governance_api::record((self.clock)(), actor, self.principal.as_deref(), tool.wire_name(), level, outcome, &request_id) {
             if self.backend.audit_append(&record).is_err() {
                 eprintln!("shogun-mcp: audit append failed for {} ({outcome})", tool.wire_name());
             }
@@ -1624,15 +1657,59 @@ impl<B: MemoryBackend> McpServer<B> {
 
     fn poll_action(&self, approval_id: u64) -> String {
         let now = (self.clock)();
-        if let Some(store) = &self.approval_store {
-            return store
-                .with_queue(|queue| rest::poll_approval(approval_id, queue, now))
-                .unwrap_or_else(|why| approval_store_error(&why));
-        }
-        match self.approvals.lock() {
-            Ok(mut queue) => rest::poll_approval(approval_id, &mut queue, now),
-            Err(_) => r#"{"error":"internal"}"#.to_string(),
-        }
+        // Multi-principal: another principal's approval reads exactly like one that never existed
+        // (then only this principal's own store is consulted).
+        let foreign = self.principal.is_some()
+            && !self
+                .remote
+                .ledger()
+                .get(approval_id)
+                .is_some_and(|entry| entry.principal.as_deref() == self.principal.as_deref());
+        let polled = if foreign {
+            json!({ "approval_id": approval_id, "status": "unknown" }).to_string()
+        } else if let Some(store) = &self.approval_store {
+            match store.with_queue(|queue| rest::poll_approval(approval_id, queue, now)) {
+                Ok(polled) => polled,
+                Err(why) => return approval_store_error(&why),
+            }
+        } else {
+            match self.approvals.lock() {
+                Ok(mut queue) => rest::poll_approval(approval_id, &mut queue, now),
+                Err(_) => return r#"{"error":"internal"}"#.to_string(),
+            }
+        };
+        // The same completion REST applies: the decision the principal's store persisted (V103)
+        // and whether an approved action will be carried out here.
+        let persisted = || match self.backend.approval_ledger(crate::remote_approvals::LedgerOp::Get(approval_id)) {
+            Ok(crate::remote_approvals::LedgerReply::Row(row)) => row,
+            _ => None,
+        };
+        crate::remote_approvals::augment_status(approval_id, &polled, persisted, self.executes)
+    }
+
+    /// Whether this process carries out approved actions (E15 follow-up): the REST face of the
+    /// same process holds the executor. Only changes what `actions.status` says about an approved
+    /// action (`execute_unavailable` when false).
+    #[must_use]
+    pub fn with_approval_execution(mut self, executes: bool) -> Self {
+        self.executes = executes;
+        self
+    }
+
+    /// Answer for one principal of a multi-principal sidecar (`POST /mcp` under `--multi`): the
+    /// approvals this server queues are recorded under `principal`, `approvals.*` and
+    /// `actions.status` see only its approvals, and its audit records name it.
+    #[must_use]
+    pub fn with_principal(mut self, principal: Option<String>) -> Self {
+        self.principal = principal;
+        self
+    }
+
+    /// Count model-starting calls against `key` (multi-principal `/mcp`: the request's token id).
+    #[must_use]
+    pub fn with_rate_client(mut self, key: crate::rate_limit::ClientKey) -> Self {
+        self.rate_client = Some(key);
+        self
     }
 }
 

@@ -367,3 +367,167 @@ fn a_teammate_reads_world_rows_only_with_a_grant_and_zero_after_revoke() {
     assert_eq!(rows(&after.body), 0);
     assert!(!after.body.contains("zebrafish"));
 }
+
+/// Boot the multi-principal server with remote approvals configured (so an MCP send is queued with
+/// an approval URL rather than refused for want of an approval surface).
+fn boot_multi_with_approvals(root: PathBuf) -> (u16, Arc<PrincipalStore>) {
+    use shogun_mcp::remote_approvals::{ApprovalSigner, RemoteApprovals};
+    let keys = EnvKeyProvider::with_default(DbKey::new([0x5a; 32]))
+        .with_principal_key(&PrincipalId::parse("bob").unwrap(), DbKey::new([0xb0; 32]));
+    let store = Arc::new(PrincipalStore::new(root, Arc::new(keys), wall_clock(), 8));
+    let resolver = TokenPrincipalMap::parse(&format!(
+        "alice:{TOKEN_A}:claude-code,alice:{TOKEN_A2}:codex,bob:{TOKEN_B}"
+    ))
+    .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let served = store.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async move {
+            let state = shogun_core::tenancy::multi::app_state(served, Arc::new(resolver), wall_clock())
+                .with_admin_token(Some(ADMIN))
+                .with_remote_approvals(
+                    RemoteApprovals::default()
+                        .with_base_url(Some("https://gw.example".into()))
+                        .with_signer(ApprovalSigner::new(b"gateway-and-sidecar-shared-key-0123456789")),
+                );
+            let listener = bind_local(0).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tx.send(port).unwrap();
+            let _ = serve_on(listener, state.with_port(port)).await;
+        });
+    });
+    let port = rx.recv().unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    (port, store)
+}
+
+/// One `POST /mcp` with the transport's headers; returns (status, lower-cased headers, body).
+fn mcp_raw(port: u16, token: Option<&str>, method: Option<&str>, name: Option<&str>, body: &str) -> (u16, String, String) {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut headers = String::new();
+    if let Some(token) = token {
+        headers.push_str(&format!("Authorization: Bearer {token}\r\n"));
+    }
+    if let Some(method) = method {
+        headers.push_str(&format!("Mcp-Method: {method}\r\n"));
+    }
+    if let Some(name) = name {
+        headers.push_str(&format!("Mcp-Name: {name}\r\n"));
+    }
+    let req = format!(
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\n{headers}Content-Type: application/json\r\nAccept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(req.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    stream.read_to_end(&mut out).unwrap();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+    let status = head.lines().next().and_then(|l| l.split_whitespace().nth(1)).and_then(|c| c.parse().ok()).unwrap_or(0);
+    (status, head.to_ascii_lowercase(), body.to_string())
+}
+
+/// `tools/call` `name` with `arguments` as `token`; returns the full JSON-RPC reply.
+fn mcp_call(port: u16, token: &str, name: &str, arguments: serde_json::Value) -> serde_json::Value {
+    let body = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": arguments } });
+    let (status, _, reply) = mcp_raw(port, Some(token), Some("tools/call"), Some(name), &body.to_string());
+    assert_eq!(status, 200, "{name}: {reply}");
+    json(&reply)
+}
+
+/// The text block of a `tools/call` result, parsed.
+fn mcp_text(reply: &serde_json::Value) -> serde_json::Value {
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap_or_else(|| panic!("no text block: {reply}"));
+    json(text)
+}
+
+/// Plan E4-T1 × E2-T2: `POST /mcp` in multi-principal mode resolves the principal from each
+/// request's bearer, under the same header contract and MRTR shapes, and the file boundary holds
+/// on this face too: B reads zero of A's rows, A's approvals and A's audit log through MCP.
+#[test]
+fn the_mcp_face_keeps_principals_apart() {
+    let root = TempRoot::named("mcp");
+    let (port, store) = boot_multi_with_approvals(root.0.clone());
+    let list = r#"{"jsonrpc":"2.0","id":7,"method":"tools/list"}"#;
+
+    // No bearer, or one no principal owns: refused before any store is opened.
+    for token in [None, Some("token-nobody-01")] {
+        let (status, _, body) = mcp_raw(port, token, Some("tools/list"), None, list);
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(json(&body)["error"]["code"], shogun_mcp::mcp::TOKEN_INVALID_CODE, "{body}");
+    }
+    // The same header contract as the single-principal face.
+    let (status, _, body) = mcp_raw(port, Some(TOKEN_A), None, None, list);
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("missing_header"), "{body}");
+    let (status, head, body) = mcp_raw(port, Some(TOKEN_A), Some("tools/list"), None, list);
+    assert_eq!(status, 200, "{body}");
+    assert!(head.contains("mcp-method: tools/list"), "{head}");
+    assert!(json(&body)["result"]["tools"].as_array().is_some_and(|t| !t.is_empty()), "{body}");
+
+    // A ingests over MCP; the row is written as A's agent, in A's file.
+    let ingested = mcp_call(port, TOKEN_A, "memory.ingest", serde_json::json!({
+        "events": [{ "content": "narwhal quarterly plan with Kenji" }],
+        "source": "harness",
+        "actor": "codex",
+        "idempotency_key": "mcp-1",
+    }));
+    assert!(ingested.get("error").is_none(), "{ingested}");
+    let ingest_text = mcp_text(&ingested);
+    let event_id = ingest_text["event_ids"][0]
+        .as_i64()
+        .or_else(|| ingest_text["result"]["event_ids"][0].as_i64())
+        .unwrap_or_else(|| panic!("no event id: {ingest_text}"));
+
+    // A finds it; B finds nothing, by search or by id, on MCP and on REST.
+    let mine = mcp_call(port, TOKEN_A, "memory.search", serde_json::json!({ "query": "narwhal" }));
+    assert!(mine.to_string().contains("narwhal quarterly"), "{mine}");
+    let theirs = mcp_call(port, TOKEN_B, "memory.search", serde_json::json!({ "query": "narwhal" }));
+    assert!(!theirs.to_string().contains("narwhal"), "B's MCP search leaked: {theirs}");
+    let own_by_id = mcp_call(port, TOKEN_A, "memory.get_events", serde_json::json!({ "ids": [event_id] }));
+    assert!(own_by_id.to_string().contains("narwhal quarterly"), "{own_by_id}");
+    let by_id = mcp_call(port, TOKEN_B, "memory.get_events", serde_json::json!({ "ids": [event_id] }));
+    assert!(!by_id.to_string().contains("narwhal"), "B's MCP get-by-id leaked: {by_id}");
+    assert!(!request(port, "GET", "/v1/memory/search?q=narwhal", Some(TOKEN_B), None).unwrap().body.contains("narwhal"));
+
+    // A's L3 send over MCP: approval_required with a URL, recorded under A.
+    let queued = mcp_call(port, TOKEN_A, "actions.execute", serde_json::json!({
+        "kind": "send_email", "to": "kenji@example.com", "subject": "Q3", "body": "narwhal forecast attached",
+    }));
+    assert_eq!(queued["result"]["resultType"], "approval_required", "{queued}");
+    let approval_id = queued["result"]["approval"]["approval_id"].as_u64().unwrap_or_else(|| panic!("{queued}"));
+    assert!(queued["result"]["approval"]["url"].as_str().is_some_and(|u| u.starts_with("https://gw.example/approve/")), "{queued}");
+    // A sees it on both faces (one queue, one ledger).
+    assert_eq!(mcp_text(&mcp_call(port, TOKEN_A, "actions.status", serde_json::json!({ "approval_id": approval_id })))["status"], "pending");
+    let listed = mcp_text(&mcp_call(port, TOKEN_A, "approvals.list", serde_json::json!({})));
+    assert!(listed["approvals"].as_array().is_some_and(|a| a.iter().any(|x| x["approval_id"] == approval_id)), "{listed}");
+    assert_eq!(request(port, "GET", &format!("/v1/approvals/{approval_id}"), Some(TOKEN_A), None).unwrap().status, 200);
+    // B sees none of it.
+    assert_eq!(mcp_text(&mcp_call(port, TOKEN_B, "actions.status", serde_json::json!({ "approval_id": approval_id })))["status"], "unknown");
+    let bob_get = mcp_call(port, TOKEN_B, "approvals.get", serde_json::json!({ "approval_id": approval_id }));
+    assert_eq!(bob_get["result"]["isError"], true, "{bob_get}");
+    assert_eq!(mcp_text(&mcp_call(port, TOKEN_B, "approvals.list", serde_json::json!({})))["approvals"], serde_json::json!([]));
+    assert!(!bob_get.to_string().contains("kenji"), "{bob_get}");
+
+    // Audit logs: A's names A's agent and its MCP writes; B's holds none of them.
+    let audit_a = mcp_text(&mcp_call(port, TOKEN_A, "audit.list", serde_json::json!({})));
+    let records = audit_a["records"].as_array().cloned().unwrap_or_default();
+    assert!(records.iter().any(|r| r["route"] == "memory.ingest" && r["actor"] == "agent:claude-code" && r["principal"] == "alice"), "{audit_a}");
+    assert!(records.iter().any(|r| r["route"] == "actions.execute" && r["outcome"] == "pending"), "{audit_a}");
+    assert!(!audit_a.to_string().contains("narwhal") && !audit_a.to_string().contains("kenji"), "{audit_a}");
+    let audit_b = mcp_text(&mcp_call(port, TOKEN_B, "audit.list", serde_json::json!({})));
+    assert_eq!(audit_b["records"], serde_json::json!([]), "{audit_b}");
+
+    // On disk: B's file holds none of A's rows.
+    let bob = shogun_memory::open_encrypted_existing_read_only(
+        store.path_for(&PrincipalId::parse("bob").unwrap()),
+        &DbKey::new([0xb0; 32]),
+    )
+    .unwrap();
+    let bob_events: i64 = bob.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0)).unwrap();
+    let bob_audit: i64 = bob.query_row("SELECT count(*) FROM audit_log", [], |r| r.get(0)).unwrap();
+    assert_eq!((bob_events, bob_audit), (0, 0));
+}

@@ -22,7 +22,6 @@ use super::{
 const RRF_K: f64 = 60.0;
 const DEFAULT_PER_SOURCE_LIMIT: usize = 40;
 const DEFAULT_EXCERPT_CHARS: usize = 480;
-const MAX_SEMANTIC_L2_DISTANCE: f32 = 1.0;
 const MIN_QUALITY_WEIGHT: f64 = 0.2;
 const CORROBORATION_RATE: f64 = 0.1;
 const MAX_CORROBORATION_FRACTION: f64 = 0.1;
@@ -329,6 +328,11 @@ pub struct FederatedSearchOptions {
     /// row as evidence — the abstention benchmark, an agent that cannot weigh the verdict — opts
     /// in and gets an empty result instead.
     pub abstain_below_floor: bool,
+    /// The vector lane's relevance cutoff (largest L2 distance that counts as a semantic match).
+    /// `None` reads it from the store's active embedding model
+    /// ([`crate::embed::max_l2_distance_for`], a property of the model's [`crate::embed::ModelSpec`]);
+    /// a value overrides it (calibration runs). Irrelevant without a query embedding.
+    pub max_vector_distance: Option<f32>,
 }
 
 impl Default for FederatedSearchOptions {
@@ -347,6 +351,7 @@ impl Default for FederatedSearchOptions {
             widen_event_lexical: false,
             prefer_latest: false,
             abstain_below_floor: false,
+            max_vector_distance: None,
         }
     }
 }
@@ -537,8 +542,16 @@ pub fn search_federated(
         (lexical.hits, all_history, lexical.concept_weights)
     };
     let event_ids = event_fts_hits.iter().map(|hit| hit.id).collect::<Vec<_>>();
+    // The vector lane's relevance cutoff is the active model's (a property of its ModelSpec):
+    // every model places unrelated text at its own typical distance.
+    let cutoff = match (options.max_vector_distance, query_embedding) {
+        (Some(cutoff), _) => cutoff,
+        (None, Some(_)) => crate::embedding_space::active(conn)?
+            .map_or(crate::embed::DEFAULT_MAX_L2_DISTANCE, |space| crate::embed::max_l2_distance_for(&space.model_id)),
+        (None, None) => crate::embed::DEFAULT_MAX_L2_DISTANCE,
+    };
     let warm_hits = if raw_lanes_allowed {
-        accepted_vector_hits(match query_embedding {
+        accepted_vector_hits(cutoff, match query_embedding {
             Some(embedding) => match range {
                 Some(range) => crate::vector::knn_range_scored(
                     conn,
@@ -568,7 +581,7 @@ pub fn search_federated(
         document_focus,
         source_limit,
     )?;
-    let document_vector_hits = accepted_vector_hits(match query_embedding {
+    let document_vector_hits = accepted_vector_hits(cutoff, match query_embedding {
         Some(embedding) => crate::document_vector::knn_filtered_scored(
             conn,
             embedding,
@@ -657,10 +670,10 @@ pub fn search_federated(
     }
 
     apply_event_fts_ranks(&event_fts_hits, &mut candidates);
-    apply_vector_ranks(&warm_hits, RankLane::Warm, &mut candidates);
+    apply_vector_ranks(&warm_hits, RankLane::Warm, cutoff, &mut candidates);
     apply_ranks(&cold.ids, RankLane::Cold, &mut candidates);
     apply_document_ranks(&document_candidates, &accepted_documents, &mut candidates);
-    apply_document_vector_ranks(&document_vector_hits, &accepted_documents, &mut candidates);
+    apply_document_vector_ranks(&document_vector_hits, &accepted_documents, cutoff, &mut candidates);
     apply_meeting_ranks(&meetings, &accepted_meetings, &mut candidates);
     apply_imported_ranks(&imported, &mut candidates);
 
@@ -1043,9 +1056,9 @@ fn prior_multiplier(candidate: &Candidate, now_ms: i64) -> f64 {
     sanitize_nonnegative(candidate.source_weight * recency)
 }
 
-fn accepted_vector_hits(hits: Vec<crate::vector::VectorHit>) -> Vec<crate::vector::VectorHit> {
+fn accepted_vector_hits(cutoff: f32, hits: Vec<crate::vector::VectorHit>) -> Vec<crate::vector::VectorHit> {
     hits.into_iter()
-        .filter(|hit| hit.distance.is_finite() && hit.distance <= MAX_SEMANTIC_L2_DISTANCE)
+        .filter(|hit| hit.distance.is_finite() && hit.distance <= cutoff)
         .collect()
 }
 
@@ -1142,12 +1155,12 @@ fn normalized_lane_quality(strength: f64, strongest: f64, coverage: f64) -> f64 
     sanitize_nonnegative(relative_strength * coverage).min(1.0)
 }
 
-fn vector_quality(distance: f32) -> Option<f64> {
-    if !distance.is_finite() || distance > MAX_SEMANTIC_L2_DISTANCE {
+fn vector_quality(distance: f32, cutoff: f32) -> Option<f64> {
+    if !distance.is_finite() || cutoff.is_nan() || cutoff <= 0.0 || distance > cutoff {
         return None;
     }
     let distance = distance.max(0.0) as f64;
-    Some((1.0 - distance / f64::from(MAX_SEMANTIC_L2_DISTANCE)).clamp(0.0, 1.0))
+    Some((1.0 - distance / f64::from(cutoff)).clamp(0.0, 1.0))
 }
 
 fn quality_weighted_rrf(rank: usize, quality: f64) -> f64 {
@@ -1649,6 +1662,7 @@ fn apply_ranks(ids: &[i64], lane: RankLane, candidates: &mut BTreeMap<CandidateK
 fn apply_vector_ranks(
     hits: &[crate::vector::VectorHit],
     lane: RankLane,
+    cutoff: f32,
     candidates: &mut BTreeMap<CandidateKey, Candidate>,
 ) {
     for (index, hit) in hits.iter().enumerate() {
@@ -1656,7 +1670,7 @@ fn apply_vector_ranks(
         let Some(candidate) = candidates.get_mut(&CandidateKey::Event(hit.id)) else {
             continue;
         };
-        let Some(quality) = vector_quality(hit.distance) else {
+        let Some(quality) = vector_quality(hit.distance, cutoff) else {
             continue;
         };
         match lane {
@@ -1704,6 +1718,7 @@ fn apply_document_ranks(
 fn apply_document_vector_ranks(
     hits: &[crate::vector::VectorHit],
     accepted: &BTreeSet<i64>,
+    cutoff: f32,
     candidates: &mut BTreeMap<CandidateKey, Candidate>,
 ) {
     for (index, hit) in hits
@@ -1715,7 +1730,7 @@ fn apply_document_vector_ranks(
         let Some(candidate) = candidates.get_mut(&CandidateKey::Derived(hit.id)) else {
             continue;
         };
-        let Some(quality) = vector_quality(hit.distance) else {
+        let Some(quality) = vector_quality(hit.distance, cutoff) else {
             continue;
         };
         candidate.record_score(ScoreLane::DerivedKnn, quality_weighted_rrf(rank, quality));
@@ -2335,9 +2350,9 @@ mod score_tests {
         assert_eq!(bm25_strength(f64::NAN), 0.0);
         assert_eq!(bm25_strength(f64::NEG_INFINITY), 0.0);
         assert_eq!(normalized_lane_quality(f64::INFINITY, 1.0, 1.0), 0.0);
-        assert_eq!(vector_quality(f32::NAN), None);
-        assert_eq!(vector_quality(f32::INFINITY), None);
-        assert_eq!(vector_quality(-1.0), Some(1.0));
+        assert_eq!(vector_quality(f32::NAN, 1.0), None);
+        assert_eq!(vector_quality(f32::INFINITY, 1.0), None);
+        assert_eq!(vector_quality(-1.0, 1.0), Some(1.0));
 
         let fused =
             strongest_with_capped_corroboration([f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.5]);

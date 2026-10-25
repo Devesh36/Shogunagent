@@ -40,7 +40,7 @@ pub struct ModelFile {
 
 /// Everything that decides what vector a text gets: weights, tokenizer, prefixes, pooling, the
 /// stored width. Two specs with different [`ModelSpec::space_id`]s never share a vector space.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelSpec {
     /// The model's name (`nomic-embed-text-v1.5`).
     pub name: &'static str,
@@ -65,6 +65,14 @@ pub struct ModelSpec {
     pub layer_norm_before_truncate: bool,
     /// Longest input in tokens; longer text is truncated.
     pub max_tokens: usize,
+    /// The vector lane's relevance cutoff for this model: the largest L2 distance between a
+    /// query vector and a stored (unit) vector that still counts as a semantic match. Beyond it
+    /// a neighbour is not evidence at all, and below it the lane's quality scales linearly to 0
+    /// at the cutoff. For unit vectors `d = sqrt(2 − 2·cos)`, so `1.0` is cosine ≥ 0.5. Every
+    /// model places unrelated text at its own typical distance, so the cutoff is a property of
+    /// the model, calibrated on the memory-bench abstention suite
+    /// (`docs/benchmarks/README.md`, "The vector lane").
+    pub max_l2_distance: f32,
 }
 
 impl ModelSpec {
@@ -72,6 +80,48 @@ impl ModelSpec {
     pub fn onnx_file(&self) -> Option<&'static str> {
         self.files.iter().map(|f| f.local).find(|name| name.ends_with(".onnx"))
     }
+}
+
+/// The vector lane's cutoff for a space that is no known model (the hashing [`MockEmbedder`] of
+/// unit tests, an `unspecified` space): the value the lane was first tuned with, for e5.
+pub const DEFAULT_MAX_L2_DISTANCE: f32 = 1.0;
+
+/// `nomic-embed-text-v1.5`'s cutoff: **0.70**, i.e. cosine ≥ 0.755 between the `search_query:`
+/// vector and the `search_document:` vector (both the layer-normalised, truncated, re-normalised
+/// 384 prefix). Conservative on purpose, favouring abstention:
+///
+/// - At the e5 value (1.0, cosine ≥ 0.5) every unanswerable question of the memory-bench
+///   abstention suite got a vector neighbour back as evidence (false evidence 1.000, 600 events,
+///   seed 42): nomic places unrelated text of the same domain at cosine 0.5–0.7 to a query.
+/// - The real model cannot be downloaded in CI, so this value was not measured against it here.
+///   It sits above that band, where nomic's own retrieval pairs (a query and the passage that
+///   answers it) usually land; a paraphrase it drops is still found by the lexical lanes, while a
+///   wrong neighbour returned as evidence is the failure the abstention suite exists to catch.
+/// - Recalibrate on the owner's machine with the fetched model and keep the largest cutoff at
+///   which `abstention_false_evidence` stays 0.000 while temporal recall@1 and multi-session
+///   coverage@5 hold: `memory-bench harness --embedder nomic-embed-text-v1.5 --seeds 3 --events
+///   20000 --out /tmp/nomic.json` (build with `--features embed-local`, `SHOGUN_MODELS_DIR` and
+///   `ORT_DYLIB_PATH` set), once per candidate value (`docs/benchmarks/README.md`).
+pub const NOMIC_MAX_L2_DISTANCE: f32 = 0.70;
+
+/// [`TestEmbedder`]'s cutoff (**0.58**, cosine ≥ 0.83), calibrated on the memory-bench abstention
+/// suite with the test embedder itself, CI's regression guard for the per-model cutoff. Swept on
+/// `--path federated --embedder test --vector-cutoff F`, 500 questions: false evidence is 0.168 at
+/// every cutoff from 1.0 down to 0.66 (a question and a chatter row sharing one concept axis sit
+/// at about 0.62–0.66), still non-zero at 0.60–0.64 on some seeds and corpus sizes, and 0.000 at
+/// 0.58 and 0.55 on seeds 42–46 at 2,000 and 20,000 events, with temporal recall@1 and
+/// multi-session coverage@5 at 1.000. 0.58 is the largest of those; a single-concept paraphrase
+/// ("what did it cost" → "The fee is 12k", about 0.53) is still found
+/// (`docs/benchmarks/README.md`, "The vector lane").
+pub const TEST_EMBEDDER_MAX_L2_DISTANCE: f32 = 0.58;
+
+/// The vector lane's relevance cutoff for the vector space `model_id` (a [`ModelSpec::space_id`],
+/// a model name, or [`TestEmbedder::SPACE_ID`]); [`DEFAULT_MAX_L2_DISTANCE`] for anything else.
+pub fn max_l2_distance_for(model_id: &str) -> f32 {
+    if model_id == TestEmbedder::SPACE_ID {
+        return TEST_EMBEDDER_MAX_L2_DISTANCE;
+    }
+    model_spec(model_id).map_or(DEFAULT_MAX_L2_DISTANCE, |spec| spec.max_l2_distance)
 }
 
 /// **The default local model (E24): `nomic-embed-text-v1.5`, quantized ONNX.**
@@ -110,6 +160,7 @@ pub const NOMIC_EMBED_TEXT_V15: ModelSpec = ModelSpec {
     pooling: Pooling::Mean,
     layer_norm_before_truncate: true,
     max_tokens: 512,
+    max_l2_distance: NOMIC_MAX_L2_DISTANCE,
 };
 
 /// The developer model ShogunAI used (`multilingual-e5-small`, MIT, 384 native). Not fetchable by
@@ -129,6 +180,8 @@ pub const MULTILINGUAL_E5_SMALL: ModelSpec = ModelSpec {
     pooling: Pooling::Mean,
     layer_norm_before_truncate: false,
     max_tokens: 512,
+    // The cutoff the vector lane was tuned with for e5 (cosine ≥ 0.5). Unchanged.
+    max_l2_distance: 1.0,
 };
 
 /// The default model and every model this build knows.
@@ -370,6 +423,28 @@ mod tests {
         spaces.sort_unstable();
         spaces.dedup();
         assert_eq!(spaces.len(), MODELS.len(), "every model has its own space");
+    }
+
+    #[test]
+    fn the_vector_cutoff_is_a_property_of_the_model() {
+        assert_eq!(max_l2_distance_for(NOMIC_EMBED_TEXT_V15.space_id), NOMIC_MAX_L2_DISTANCE);
+        assert_eq!(max_l2_distance_for("nomic-embed-text-v1.5"), NOMIC_MAX_L2_DISTANCE);
+        assert_eq!(max_l2_distance_for(MULTILINGUAL_E5_SMALL.space_id), 1.0, "e5 keeps the value it was tuned with");
+        assert_eq!(max_l2_distance_for(TestEmbedder::SPACE_ID), TEST_EMBEDDER_MAX_L2_DISTANCE);
+        assert_eq!(max_l2_distance_for(crate::embedding_space::UNSPECIFIED_MODEL), DEFAULT_MAX_L2_DISTANCE);
+        // nomic's is stricter than e5's (favours abstention) and every cutoff is a real distance.
+        const { assert!(NOMIC_MAX_L2_DISTANCE < MULTILINGUAL_E5_SMALL.max_l2_distance) };
+        for spec in MODELS {
+            assert!(spec.max_l2_distance > 0.0 && spec.max_l2_distance <= 2.0, "{}", spec.name);
+        }
+        // The calibrated paraphrase is inside the test embedder's cutoff; an unrelated row is not.
+        let e = TestEmbedder::new();
+        let q = e.embed_query("what did it cost").unwrap();
+        let near = e.embed_passages(&["The fee is 12k"]).unwrap()[0].clone();
+        let far = e.embed_passages(&["Standup notes: nothing blocking"]).unwrap()[0].clone();
+        let l2 = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>().sqrt();
+        assert!(l2(&q, &near) <= TEST_EMBEDDER_MAX_L2_DISTANCE, "{}", l2(&q, &near));
+        assert!(l2(&q, &far) > TEST_EMBEDDER_MAX_L2_DISTANCE, "{}", l2(&q, &far));
     }
 
     #[test]
