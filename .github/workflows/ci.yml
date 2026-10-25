@@ -75,6 +75,26 @@ jobs:
       - run: pnpm --filter @shogun-ai/api typecheck
       - run: pnpm --filter @shogun-ai/api test:node
 
+  router:
+    name: "apps/router (typecheck, test, catalog, bundle; E48 idempotency and connector tokens included)"
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @shogunagent/router typecheck
+      # Includes the router's SQL (outbox, run idempotency) on the node:sqlite double.
+      - run: pnpm --filter @shogunagent/router test
+      - run: pnpm --filter @shogunagent/router build:catalog
+      # wrangler --dry-run bundles locally; nothing is deployed.
+      - run: pnpm --filter @shogunagent/router check:bundle
+
   agent-surfaces:
     name: "agent-readable surfaces (E10: generated files match, registry entry valid, CLI)"
     if: github.event.pull_request.draft != true

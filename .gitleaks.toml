@@ -1,0 +1,49 @@
+# Secret scanning (E48, threat model R8): gitleaks' default rules, with an allowlist for the
+# synthetic secrets this repository's tests, benches and fixtures carry on purpose (redaction,
+# PII and secret-masking tests need realistic-looking keys). Used by .github/workflows/secret-scan.yml.
+#
+# Add to this file only a path that holds test data, or a placeholder pattern that can never be a
+# live credential. A real secret is never allowlisted: rotate it, then remove it from history.
+title = "ShogunAgent gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic fixtures: test files and directories, benches, recorded fixtures, lockfiles"
+paths = [
+  # Test files and test directories, every language in the tree.
+  '''(^|/)tests?/''',
+  '''(^|/)__tests__/''',
+  '''(^|/)test_[^/]*\.py$''',
+  '''\.test\.(ts|tsx|js|mjs)$''',
+  '''\.spec\.(ts|tsx|js|mjs)$''',
+  '''(^|/)tests\.rs$''',
+  '''_tests?\.rs$''',
+  # Benches built around synthetic secrets (the PII / secret-residue corpus).
+  '''^crates/pii-bench/''',
+  # Recorded fixtures and snapshots.
+  '''(^|/)fixtures?/''',
+  '''\.snap$''',
+  # Lockfiles hold integrity hashes, not secrets.
+  '''(^|/)pnpm-lock\.yaml$''',
+  '''(^|/)Cargo\.lock$''',
+  '''(^|/)package-lock\.json$''',
+  # Git's own object store (`gitleaks dir` walks the checkout; history is scanned by `gitleaks git`).
+  '''(^|/)\.git/''',
+  # This file.
+  '''^\.gitleaks\.toml$''',
+]
+# Placeholder values used in in-file `#[cfg(test)]` modules and documentation examples. Matched
+# against the detected secret only (the default `regexTarget`), so a real key next to one of these
+# is still reported.
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',
+  '''(?i)abcdefghij''',
+  '''(?i)(AAAA|BBBB|XXXX)''',
+  '''123456789''',
+  '''(?i)(sentinel|placeholder|redacted|example|dummy|fake|test-key|test_key)''',
+  '''<[A-Za-z_ -]+>''',
+  '''\$\{?[A-Z_]+\}?''',
+]

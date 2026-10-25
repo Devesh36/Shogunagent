@@ -1,0 +1,72 @@
+name: fuzz-nightly
+
+# E48, threat model R9: the libFuzzer targets in fuzz/ (plan E38), time-boxed, on a nightly
+# toolchain (cargo-fuzz needs -Zsanitizer). Scheduled and manual only: never on pull requests or
+# pushes, so it costs nothing on the PR path. The same properties run seeded on stable in the
+# ordinary test suite (fuzz/README.md).
+#
+# The corpus is cached between nights so coverage accumulates; a crash uploads the reproducer as an
+# artifact (`cargo +nightly fuzz run <target> <artifact>` replays it). Nothing here needs a secret.
+
+on:
+  schedule:
+    - cron: "43 4 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Seconds per target (libFuzzer -max_total_time)"
+        required: false
+        default: "600"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_FUZZ_VERSION: "0.12.0"
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [mcp_jsonrpc, export_import]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+          key: fuzz-${{ matrix.target }}
+      - name: install cargo-fuzz ${{ env.CARGO_FUZZ_VERSION }}
+        run: cargo install cargo-fuzz --locked --version "$CARGO_FUZZ_VERSION"
+      - name: restore the corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: run ${{ matrix.target }} (time-boxed)
+        env:
+          TARGET: ${{ matrix.target }}
+          SECONDS_PER_TARGET: ${{ github.event.inputs.seconds || '600' }}
+        run: |
+          set -euo pipefail
+          case "$SECONDS_PER_TARGET" in (''|*[!0-9]*) echo "seconds must be a whole number" >&2; exit 2;; esac
+          if [ "$SECONDS_PER_TARGET" -gt 1800 ]; then SECONDS_PER_TARGET=1800; fi
+          cargo +nightly fuzz run "$TARGET" -- -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=4096 -timeout=30
+      - name: upload the reproducer
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}-${{ github.run_id }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 30
