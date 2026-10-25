@@ -93,11 +93,12 @@ describe("first-party connectors (E22)", () => {
     expect(msg).not.toContain("契約書");
   });
 
-  it("request hooks build the vendor call without any credential; the fetch transport injects it from the env map", async () => {
+  it("request hooks build the vendor call without any credential; the fetch transport injects it (development: from the env map)", async () => {
     const seen: { url: string; auth: string | null; ua: string | null }[] = [];
     const deps = makeDeps();
     deps.transport = createFetchTransport({
       env: { GITHUB_TOKEN: "GITHUB-TOKEN-SENTINEL" },
+      connectors: { mode: "dev_shared" },
       fetch: async (url, init) => {
         const h = new Headers(init?.headers);
         seen.push({ url: String(url), auth: h.get("authorization"), ua: h.get("user-agent") });
@@ -114,7 +115,7 @@ describe("first-party connectors (E22)", () => {
     expect(JSON.stringify(out.body)).not.toContain("SENTINEL");
 
     const missing = makeDeps();
-    missing.transport = createFetchTransport({ env: {}, fetch: async () => new Response("{}") });
+    missing.transport = createFetchTransport({ env: {}, connectors: { mode: "dev_shared" }, fetch: async () => new Response("{}") });
     const m = await run(missing, { input: { tool_id: "calendar.events.list", input: { time_min: "2026-10-27T00:00:00Z" }, idempotency_key: "cal" }, bearer: bearer() });
     expect(m.status).toBe(503);
     if ("error" in m.body) expect(m.body.error.next_action).toBe("try_alternative");

@@ -6,10 +6,18 @@
  * Response headers are not returned, so nothing the vendor echoes back can leak into the engine.
  *
  * `fetch` is called here and nowhere else in src/ (the ADR's TypeScript analogue of invariant 9).
+ *
+ * Per-caller connector credentials (E48): a `caller_connector` provider (the first-party Gmail,
+ * Calendar, GitHub, Linear and Slack connectors) acts as the CALLING principal's own account. In
+ * production the transport asks apps/api for that principal's access token at run time
+ * (`POST /v1/internal/router/connector-token`, docs/api/connector-tokens.md), injects it into the
+ * one outgoing request and drops it: it is never cached, returned, logged or stored. The Worker
+ * env is read for these providers only in development (`ROUTER_DEV_SHARED_CREDENTIALS=1` with no
+ * `ROUTER_WALLET_URL`), where one shared account is acceptable.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 
-import type { Json, ProviderAuth, RunRequest } from "../connectors/types.js";
+import type { ConnectorSlot, Json, ProviderAuth, RunRequest } from "../connectors/types.js";
 import type { Secret } from "./secret.js";
 import type { RunSettlement } from "./settlement.js";
 import type { WalletTransport } from "./wallet.js";
@@ -26,8 +34,11 @@ export interface ProviderRef {
 export interface TransportCall {
   provider: ProviderRef;
   request: RunRequest;
-  /** The agent's own bearer, forwarded only for `caller_bearer` providers. */
+  /** The agent's own bearer, forwarded only for `caller_bearer` providers, and presented to apps/api
+   * (never to the vendor) to fetch the principal's token for `caller_connector` providers. */
   caller?: { bearer?: Secret };
+  /** The run's id, sent with a connector-token request for correlation (not a secret). */
+  runId?: string;
 }
 
 export interface TransportResult {
@@ -39,7 +50,21 @@ export interface Transport {
   execute(call: TransportCall): Promise<TransportResult>;
 }
 
-export type TransportErrorCode = "credential_missing" | "network" | "timeout" | "invalid_response" | "caller_bearer_missing";
+export type TransportErrorCode =
+  | "credential_missing"
+  | "network"
+  | "timeout"
+  | "invalid_response"
+  | "caller_bearer_missing"
+  /** E48: the calling principal has no account connected for this connector (apps/api 404). */
+  | "connector_not_connected"
+  /** E48: apps/api refused the caller's key for a connector token (401/403). */
+  | "caller_unauthorized"
+  /** E48: apps/api's connector-token route did not answer usably (5xx, network, timeout). */
+  | "connector_token_unavailable"
+  /** E48: this router has no source of per-caller connector credentials (no `ROUTER_WALLET_URL`,
+   * and the development flag is off). */
+  | "connector_unconfigured";
 
 export class TransportError extends Error {
   constructor(
@@ -52,10 +77,31 @@ export class TransportError extends Error {
 
 export type CredentialEnv = Readonly<Record<string, string | undefined>>;
 
+/**
+ * Where `caller_connector` tokens come from (E48):
+ * - `per_caller` (production): apps/api at `baseUrl`, per run, for the caller's principal.
+ * - `dev_shared` (development only): the Worker env variable the provider names. One account for
+ *   every caller, so src/worker.ts allows it only without `ROUTER_WALLET_URL`.
+ * - `none`: refused with `connector_unconfigured`.
+ */
+export type ConnectorCredentialSource = { mode: "per_caller"; baseUrl: string; timeoutMs?: number } | { mode: "dev_shared" } | { mode: "none" };
+
 export interface FetchTransportOptions {
   env: CredentialEnv;
   fetch?: typeof fetch;
   defaultTimeoutMs?: number;
+  /** Default `none`. */
+  connectors?: ConnectorCredentialSource;
+}
+
+/** Decide the connector credential source from the Worker env (src/worker.ts logs the result).
+ * `ROUTER_WALLET_URL` set means a production deployment: always per caller, and the development
+ * flag is ignored (reported as `ignored_flag` so the boot log says so). */
+export function connectorSourceFor(env: CredentialEnv): { source: ConnectorCredentialSource; ignoredFlag: boolean } {
+  const devFlag = env["ROUTER_DEV_SHARED_CREDENTIALS"] === "1";
+  const wallet = env["ROUTER_WALLET_URL"];
+  if (wallet) return { source: { mode: "per_caller", baseUrl: wallet }, ignoredFlag: devFlag };
+  return { source: devFlag ? { mode: "dev_shared" } : { mode: "none" }, ignoredFlag: false };
 }
 
 function joinUrl(base: string, path: string, query?: Record<string, string>): URL {
@@ -64,8 +110,63 @@ function joinUrl(base: string, path: string, query?: Record<string, string>): UR
   return url;
 }
 
+/** Characters a vendor token may hold: visible ASCII, bounded. Anything else is not sent. */
+const TOKEN_RE = /^[\x21-\x7e]{8,4096}$/;
+
+/**
+ * Fetch the calling principal's access token for `slot` from apps/api
+ * (docs/api/connector-tokens.md). The router presents `ROUTER_SETTLEMENT_TOKEN` and forwards the
+ * caller's bearer in `X-Caller-Authorization`; apps/api resolves the principal from that key, so
+ * the router never names a principal and cannot ask for anyone else's token. Returns the token
+ * value to `inject` only; nothing about it is logged.
+ */
+async function fetchConnectorToken(opts: { env: CredentialEnv; baseUrl: string; fetch: typeof fetch; timeoutMs: number }, slot: ConnectorSlot, providerId: string, runId: string | undefined, caller: Secret): Promise<string> {
+  const service = opts.env["ROUTER_SETTLEMENT_TOKEN"];
+  if (!service) throw new TransportError("credential_missing", "ROUTER_SETTLEMENT_TOKEN is not configured");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+  let res: Response;
+  try {
+    res = await opts.fetch(joinUrl(opts.baseUrl, "/v1/internal/router/connector-token"), {
+      method: "POST",
+      headers: { authorization: `Bearer ${service}`, "x-caller-authorization": `Bearer ${caller.expose()}`, "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ slot, provider_id: providerId, ...(runId ? { run_id: runId } : {}) }),
+      signal: controller.signal,
+    });
+  } catch {
+    throw new TransportError("connector_token_unavailable", "the connector token service is unreachable");
+  } finally {
+    clearTimeout(timer);
+  }
+  if (res.status === 404) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new TransportError("connector_not_connected", "no account is connected for this connector");
+  }
+  if (res.status === 401 || res.status === 403) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new TransportError("caller_unauthorized", "the caller's key may not use this connector");
+  }
+  if (res.status !== 200) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new TransportError("connector_token_unavailable", "the connector token service did not answer");
+  }
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch {
+    throw new TransportError("connector_token_unavailable", "the connector token answer is not JSON");
+  }
+  const body = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
+  const token = body["access_token"];
+  const expiresAt = body["expires_at"];
+  if (typeof token !== "string" || !TOKEN_RE.test(token)) throw new TransportError("connector_token_unavailable", "the connector token answer is malformed");
+  if (typeof expiresAt === "number" && expiresAt <= Date.now()) throw new TransportError("connector_token_unavailable", "the connector token answer is already expired");
+  return token;
+}
+
 /** Applies the provider's auth spec. Returns the headers/query additions; never logs. */
-function inject(auth: ProviderAuth, env: CredentialEnv, caller: TransportCall["caller"], url: URL, headers: Headers): void {
+async function inject(auth: ProviderAuth, ctx: { env: CredentialEnv; connectors: ConnectorCredentialSource; fetch: typeof fetch; providerId: string; runId: string | undefined }, caller: TransportCall["caller"], url: URL, headers: Headers): Promise<void> {
+  const env = ctx.env;
   switch (auth.kind) {
     case "none":
       return;
@@ -93,12 +194,28 @@ function inject(auth: ProviderAuth, env: CredentialEnv, caller: TransportCall["c
       headers.set("authorization", `Bearer ${bearer.expose()}`);
       return;
     }
+    case "caller_connector": {
+      const source = ctx.connectors;
+      if (source.mode === "dev_shared") {
+        const v = env[auth.credential_env];
+        if (!v) throw new TransportError("credential_missing", `provider credential ${auth.credential_env} is not configured`);
+        headers.set("authorization", `Bearer ${v}`);
+        return;
+      }
+      if (source.mode === "none") throw new TransportError("connector_unconfigured", "no per-caller connector credentials are configured on this router");
+      const bearer = caller?.bearer;
+      if (!bearer) throw new TransportError("caller_bearer_missing", "this provider needs the caller's bearer");
+      const token = await fetchConnectorToken({ env, baseUrl: source.baseUrl, fetch: ctx.fetch, timeoutMs: source.timeoutMs ?? 5_000 }, auth.slot, ctx.providerId, ctx.runId, bearer);
+      headers.set("authorization", `Bearer ${token}`);
+      return;
+    }
   }
 }
 
 export function createFetchTransport(opts: FetchTransportOptions): Transport {
   const doFetch = opts.fetch ?? fetch;
   const defaultTimeout = opts.defaultTimeoutMs ?? 30_000;
+  const connectors = opts.connectors ?? { mode: "none" };
   return {
     async execute(call) {
       const { provider, request } = call;
@@ -106,7 +223,7 @@ export function createFetchTransport(opts: FetchTransportOptions): Transport {
       const url = joinUrl(base, request.path, request.query);
       const headers = new Headers(request.headers ?? {});
       headers.set("accept", "application/json");
-      inject(provider.auth, opts.env, call.caller, url, headers);
+      await inject(provider.auth, { env: opts.env, connectors, fetch: doFetch, providerId: provider.id, runId: call.runId }, call.caller, url, headers);
       const init: RequestInit = { method: request.method, headers };
       if (request.body !== undefined && request.method !== "GET") {
         headers.set("content-type", "application/json");

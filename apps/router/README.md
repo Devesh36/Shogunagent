@@ -120,7 +120,10 @@ curl -s -X POST http://localhost:8787/v1/router/run \
 | wallet short | `error` `payment_required` + x402-shaped `payment` | 402 | `top_up` |
 | provider failed / unreachable | `error` `upstream_error` ($0) | 502 | `try_alternative` / `retry_after` |
 | provider not configured | `error` `provider_unavailable` | 503 | `try_alternative` |
-| repeated `idempotency_key`, same input | the stored `result`, `replayed: true`, usage 0 | 200 | `null` |
+| wallet unavailable / throttled (E48) | `error` `provider_unavailable` / `rate_limited`, with `retry_after` and the `Retry-After` header carrying the wallet's own value | 503 / 429 | `retry_after` |
+| first-party connector, no account connected for the caller's principal (E48) | `error` `connector_not_connected` ($0) | 403 | `authenticate` |
+| repeated `idempotency_key`, same input, run completed | `replay` (`run_id`, `replayed: true`, `original: { outcome, usage, completed_at }`, no `result`), usage 0 | 200 | `null` |
+| repeated key while the first run is still running | `error` `idempotency_in_progress` + `retry_after` / `Retry-After` | 409 | `retry_after` |
 | repeated key, different input | `error` `idempotency_conflict` | 409 | `fix_input` |
 
 Each run emits one `ToolRunRecord { ts, actor, tool_id, task_hint, outcome, cost_micro_usd, latency_ms, hint_followed }` to the `RunLogSink` (no bodies; `actor` is a hash of the key).
@@ -128,6 +131,17 @@ Each run emits one `ToolRunRecord { ts, actor, tool_id, task_hint, outcome, cost
 Each run that reserved also settles exactly once with a `RunSettlement { format, run_id, receipt_id, ts, tool_id, provider_id, first_party, payout_account_ref, marketplace, outcome, quantity, provider_micro_usd }` (E29, E32; format `shogunagent-run-settlement/2`): `outcome` is `ok`, `empty`, `provider_error` or `transport_error`, and `provider_micro_usd` is the provider's price for an `ok` run and 0 otherwise. The settlement has no actor and no body; `run_id` is the receiver's idempotency key.
 
 **One charge, one take (E32).** In production the router holds no balance: `ApiWalletClient` (`src/wallet.ts`) reserves each metered run on apps/api's wallet (`POST /v1/internal/router/reserve`, the caller's key forwarded in `X-Caller-Authorization`) and settles it through `POST /v1/internal/router/settlements`. Only the provider's price crosses the wire; apps/api adds the take (`RUN_MARKUP_BPS`, set once in `packages/config/pricing.json`, which `src/take.ts` reads for the prices discover / inspect / dryRun quote). Catalog `usage` figures are provider prices; `quote_micro_usd` is the caller's price (provider + one take, none for first-party), `provider_quote_micro_usd` the provider's. A $0 tool never calls the wallet.
+
+### Idempotency (E48)
+
+Every `run` carries an `idempotency_key`, and a key never runs or charges twice for one caller, on any isolate. In production the record lives in Postgres (`router_run_idempotency`, `sql/run-idempotency.sql`, the same `HYPERDRIVE` binding as the outbox; `src/idempotency.ts`); without the binding, a per-isolate in-memory store (development).
+
+- The key is **claimed atomically** right before money is reserved (one `INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING`). Of two isolates racing on one key exactly one runs; the other answers `409 idempotency_in_progress` with `Retry-After`.
+- A run that produced a result marks its key **done before its settlement** is written, so a crash between the two can only under-charge (the outbox draft releases the hold at $0), never run and charge again.
+- A run that failed or was refused (nothing charged) **releases** its key, so the same key can be retried.
+- A claim whose isolate died is taken over by a retry with the same input after 10 minutes (the outbox's abandon window, by which time the dead run's hold was released at $0).
+- **No body is stored** (invariant 2). A row holds the actor (the 12-hex hash of the caller's key), a SHA-256 of the idempotency key, the tool id, a salted fingerprint of the input (conflict detection only), the run id, the state, the outcome and the usage the caller was charged. So a replay cannot repeat the result: it answers `resultType: "replay"` with the `run_id` and `original: { outcome, usage, completed_at }`. The result was returned once, to the call that ran it; to get a fresh one, run again with a new key (and pay again). Records answer for 24 hours after completion; the cron prunes them.
+- If the store is unreachable, a free L1 read runs without it (running it twice is harmless and costs nothing, logged `idempotency_bypassed`); every other run is refused `503 provider_unavailable` with `retry_after`, before anything is reserved or called.
 
 **Durable outbox (E33).** Every settlement is written to `router_settlement_outbox` (`sql/settlement-outbox.sql`, Postgres through the `HYPERDRIVE` binding; `src/outbox.ts`) before it is sent: a $0 draft before apps/api holds money, the final settlement before delivery. Delivery is idempotent by `run_id`; the cron `scheduled` handler retries due rows with exponential backoff (30 s → 1 h, never giving up on a retryable status), releases the hold of a run abandoned for 10 minutes at $0, and keeps malformed rows as `dead` for an operator. Details: docs/api/payouts.md "Delivery".
 
@@ -145,20 +159,20 @@ curl -s -X POST http://localhost:8787/mcp -H 'content-type: application/json' \
 Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the content-hashed catalog with `pnpm --filter @shogunagent/router build:catalog` (writes `dist/catalog.json` and `dist/catalog.<hash12>.json`; the compiler rejects duplicate ids, unknown categories, missing scope class or health, bad usage numbers and fixtures that fail their schema).
 
 - `shogunagent` (first-party, `caller_bearer` auth to the state REST face; base URL from `SHOGUNAGENT_API_BASE_URL`): `state.commitments.list`, `state.open_loops.list`, `state.people.get`, `memory.recall` — reads, L1, $0 — and `actions.execute` — `external_send`, L3, $0.002.
-- First-party connectors to the user's services (E22), each with `provider.json`, fixtures and replay tests, credentials named by `credential_env` and injected at the transport only, $0.002 per call (README §7):
+- First-party connectors to the user's services (E22), each with `provider.json`, fixtures and replay tests, $0.002 per call (README §7). Auth is `caller_connector` (E48): the tool acts as the **calling principal's own account**. In production (`ROUTER_WALLET_URL` set) the transport fetches that principal's access token for the connector's slot from apps/api at run time (`POST /v1/internal/router/connector-token`, contract in `docs/api/connector-tokens.md`), injects it into the one vendor request and drops it; no Worker secret is shared by every caller. A principal with no account connected gets `403 connector_not_connected` (`next_action: authenticate`, $0). The `credential_env` variables are read only in development, with `ROUTER_DEV_SHARED_CREDENTIALS=1` and no `ROUTER_WALLET_URL`; with the wallet URL set the flag is ignored and logged `dev_shared_credentials_ignored`.
 
-  | tool_id | class | level | credential_env |
-  |---|---|---|---|
-  | `gmail.drafts.create` | `user_data_write` | L2 (`input_required` once) | `GOOGLE_OAUTH_ACCESS_TOKEN` |
-  | `gmail.messages.send` | `external_send` | L3 (approval URL) | `GOOGLE_OAUTH_ACCESS_TOKEN` |
-  | `calendar.events.list` | `read` | L1 | `GOOGLE_OAUTH_ACCESS_TOKEN` |
-  | `calendar.events.create` | `external_send` | L3 | `GOOGLE_OAUTH_ACCESS_TOKEN` |
-  | `github.issues.list` | `read` | L1 | `GITHUB_TOKEN` |
-  | `github.issues.create` | `external_send` | L3 | `GITHUB_TOKEN` |
-  | `linear.issues.create` | `external_send` | L3 | `LINEAR_OAUTH_TOKEN` |
-  | `slack.messages.post` | `external_send` | L3 | `SLACK_TOKEN` |
+  | tool_id | class | level | token slot (production) | credential_env (development only) |
+  |---|---|---|---|---|
+  | `gmail.drafts.create` | `user_data_write` | L2 (`input_required` once) | `gmail-tokenset` | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `gmail.messages.send` | `external_send` | L3 (approval URL) | `gmail-tokenset` | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `calendar.events.list` | `read` | L1 | `gcal-tokenset` | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `calendar.events.create` | `external_send` | L3 | `gcal-tokenset` | `GOOGLE_OAUTH_ACCESS_TOKEN` |
+  | `github.issues.list` | `read` | L1 | `github-tokenset` | `GITHUB_TOKEN` |
+  | `github.issues.create` | `external_send` | L3 | `github-tokenset` | `GITHUB_TOKEN` |
+  | `linear.issues.create` | `external_send` | L3 | `linear-tokenset` | `LINEAR_OAUTH_TOKEN` |
+  | `slack.messages.post` | `external_send` | L3 | `slack-tokenset` | `SLACK_TOKEN` |
 
-  In the hosted router the transport resolves the calling principal's own OAuth token for these variables; the definitions only name them. `test/connectors.test.ts` asserts the levels, that no L3 run reaches the transport, that the draft asks once, header-injection safety for Gmail and credential injection at fetch time only.
+  `test/hardening.test.ts` asserts the per-caller fetch (the service token and the caller's key go to apps/api only, the principal's token to the vendor only, never into a body, a record or a log) and every refusal. `test/connectors.test.ts` asserts the levels, that no L3 run reaches the transport, that the draft asks once, header-injection safety for Gmail and credential injection at fetch time only.
 - `monid` (passthrough, `src/passthrough/monid.ts`): endpoints imported from a Monid-style catalog JSON, executed through Monid's `POST /v1/run` with the router's `MONID_API_KEY` injected at the transport, priced at Monid's own price; the caller pays it plus one take, added by the wallet (before E32 the importer baked 5% in, and the wallet would have added 5% again). The fixture catalog holds 12 endpoints from 11 upstream providers (search, scrape, enrichment, SEO, image generation, and one L3 `provision-numbers`).
 
 ## Listing pipeline (E21)
@@ -173,9 +187,9 @@ Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the conte
 | `SettlementOutbox` (E33, `src/outbox.ts`) | `InMemorySettlementOutbox` (tests) | `SqlSettlementOutbox` on `router_settlement_outbox` (`HYPERDRIVE`), delivered by `SettlementDelivery` inline and from the cron trigger |
 | `RunLogSink` | `InMemoryRunLogSink` | `tool_runs` (V94) in the principal's store |
 | `PersonalStore` (behind `PersonalRanker`, E20) | `InMemoryPersonalStore` | the principal's `tool_runs` (V94) via the sidecar — never a hosted shared DB |
-| `IdempotencyStore` | `InMemoryIdempotencyStore` (24 h TTL, bounded) | the principal's store — never a hosted DB (invariant 2) |
+| `IdempotencyStore` (E48) | `InMemoryIdempotencyStore` (24 h TTL, bounded) | `SqlIdempotencyStore` on `router_run_idempotency` (`HYPERDRIVE`): outcome references only (run id, state, charged usage), never a body (invariant 2) |
 | `HealthStore` | `InMemoryHealthStore` (observed after 20 runs) | shared status store (`/.well-known/status.json`) |
-| `Transport` | `createFetchTransport({ env })` | same; `createReplayTransport` for tests |
+| `Transport` | `createFetchTransport({ env, connectors })` (`connectors` from `connectorSourceFor(env)`: `per_caller` / `dev_shared` / `none`) | same; `createReplayTransport` for tests |
 | `Logger` | `consoleLogger` (closed field set) | Workers Logs, invocation logs off |
 
 ## Develop

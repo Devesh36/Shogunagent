@@ -10,7 +10,7 @@ import { requestLogger, routeTemplate } from "./logging.js";
 import { handleMcp } from "./mcp.js";
 import { OpsMetrics, opsTelemetry } from "./observability.js";
 import { openCatalog, openCatalogDetail, openCatalogHtml, type OpenCatalogFilter } from "./open-catalog.js";
-import { errorBody } from "./responses.js";
+import { errorBody, retryAfterOf } from "./responses.js";
 import { Secret } from "./secret.js";
 import type { VerbName } from "./verbs.js";
 
@@ -88,6 +88,8 @@ export function createApp(deps: RouterDeps): Hono {
       c.header("Mcp-Name", name);
       if (!body.ok) return sendJson(c, errorBody("invalid_request", "the request body must be JSON", "fix_input", 0), 400);
       const out = await callVerb(deps, name, body.value, bearerOf(c.req.header("authorization")));
+      const retryAfter = retryAfterOf(out.body);
+      if (retryAfter) c.header("Retry-After", retryAfter);
       return sendJson(c, out.body, out.status);
     });
   };

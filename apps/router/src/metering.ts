@@ -41,7 +41,9 @@ export type Reservation =
   | { ok: true; reservation_id: string; receipt_id: string | null }
   | { ok: false; status: 401; error: "authentication_required" }
   | { ok: false; status: 402; error: "payment_required" | "cap_exceeded"; payment: PaymentRequired }
-  | { ok: false; status: 503; error: "wallet_unavailable"; retry_after: number };
+  | { ok: false; status: 503; error: "wallet_unavailable"; retry_after: number }
+  /** apps/api's wallet throttled the reserve (429); `retry_after` is its `Retry-After`. */
+  | { ok: false; status: 429; error: "rate_limited"; retry_after: number };
 
 /** What a reservation needs besides the quote. */
 export interface ReserveContext {

@@ -148,15 +148,26 @@ export interface EndpointDefinition {
 }
 
 /**
+ * The connector-token slots apps/api keeps per principal (`connector_tokens.account`, the
+ * `<source>-tokenset` names of `shogun_integrations::token_store::CredentialSlot`).
+ */
+export type ConnectorSlot = "gmail-tokenset" | "gcal-tokenset" | "github-tokenset" | "linear-tokenset" | "slack-tokenset";
+
+/**
  * How the transport authenticates to the provider. Names an environment variable, never a
  * value. `caller_bearer` forwards the agent's own bearer (the first-party state face).
+ * `caller_connector` (E48) acts as the CALLING principal's own account at the vendor: the
+ * transport fetches that principal's access token for `slot` from apps/api at run time
+ * (docs/api/connector-tokens.md). `credential_env` is read only in development, behind
+ * `ROUTER_DEV_SHARED_CREDENTIALS=1`, and never in production.
  */
 export type ProviderAuth =
   | { kind: "none" }
   | { kind: "bearer"; credential_env: string }
   | { kind: "header"; header: string; credential_env: string }
   | { kind: "query"; param: string; credential_env: string }
-  | { kind: "caller_bearer" };
+  | { kind: "caller_bearer" }
+  | { kind: "caller_connector"; slot: ConnectorSlot; credential_env: string };
 
 export interface ProviderDefinition {
   id: string;
