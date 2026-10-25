@@ -492,3 +492,37 @@ agent calls book against the same `DAILY_SPEND_CAP_USD` day as the Batch lane (E
 the breaker with agent traffic in mind once the lane opens; the wallet, caps and receipts are the
 agent side's own tables. `/mcp` answers `503 upstream_unavailable` before reserving anything
 until the core (E4) is wired behind it.
+
+### 9.1 Billing to production grade (E19) and OAuth (E3-T2)
+
+1. **Schema.** Re-apply `apps/api/sql/agent-keys.sql` and `agent-keys-permissions.sql` (both
+   idempotent; E19 adds `list_cost` / `funding` / `commit_id` to receipts, resolution columns to
+   disputes, and the commit, adjustment, refund high-water, Stripe payment, Checkout session,
+   statement and licence-link tables). `checkSchema` refuses to boot on a database that lacks
+   them. For OAuth, also apply `apps/api/sql/agent-oauth.sql` then `agent-oauth-permissions.sql`.
+2. **Stripe webhook events.** Subscribe the endpoint to `checkout.session.completed`,
+   `checkout.session.expired` and `charge.refunded`. Refunds made in the Stripe dashboard debit
+   the wallet through `charge.refunded`; the admin route and the webhook converge on the charge's
+   refunded total, so a refund is debited once.
+3. **Commit overage (optional).** Create a metered price in Stripe (one unit = one cent, usage
+   records, `aggregate_usage=sum`) and set `STRIPE_COMMIT_OVERAGE_PRICE_ID` (needs
+   `STRIPE_SECRET_KEY`). An admin commit created with `stripe_customer_id` subscribes that customer
+   to the price; the sweep reports overage in whole cents with the report id as the Stripe
+   Idempotency-Key. Without the variable, commits still discount and draw down; usage past the
+   amount falls back to the wallet.
+4. **Admin key.** Operator routes (`/v1/admin/*`) need an `sa_` key with the `admin` scope. There is
+   no route that mints one: insert it once with the operator's database role (hash it with
+   `hashAgentKey` from `src/agent-keys.ts`), keep the key in the operator secret store, and never
+   give it to an agent.
+5. **OAuth.** `wrangler secret put AGENT_OAUTH_SECRET` (≥ 32 random characters; rotating it only
+   invalidates consent pages that are open at that moment). The boot log line then says
+   `oauth on`. Verify by hand from Claude Code and Cursor (E3-T2's acceptance is a manual review):
+   add `https://api.shogunaios.com/mcp` as a remote server, follow the browser to the consent page,
+   paste the principal's `sa_live_` key, and check `tools/list` answers.
+6. **Pro bundle.** Linking (`POST /v1/agents/me/licence`) verifies the ShogunAI licence token
+   against the same `LICENSE_PUBKEY_B64` trust roots; the sweep grants $20 a month per linked Pro
+   subject. Watch `pro_bundle_granted N` in the sweep log.
+
+New sweep log lines: `pro_bundle_granted N`, `commit_overage_reports sent=N failed=N`,
+`pro bundle grant unavailable`, `commit overage report unavailable`, `oauth maintenance
+unavailable`. None carries an id.

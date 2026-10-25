@@ -32,6 +32,16 @@ export function serverCard(table: ToolTable, ctx: WellknownContext): Record<stri
           scopes: ["read", "write", "run"],
           registration: { url: `${origin(ctx)}/v1/agents`, method: "POST", description: "Self-registration: a proof-of-work challenge, no email; returns a scoped key and the free allowance." },
         },
+        {
+          // E3-T2: MCP clients connect over OAuth 2.1 with a Client ID Metadata Document as their
+          // client_id; there is no dynamic registration endpoint.
+          type: "oauth2",
+          scopes: ["read", "write", "run"],
+          protectedResourceMetadata: `${origin(ctx)}/.well-known/oauth-protected-resource/mcp`,
+          authorizationServerMetadata: `${origin(ctx)}/.well-known/oauth-authorization-server`,
+          clientRegistration: "client-id-metadata-document",
+          pkce: ["S256"],
+        },
       ],
     },
     capabilities: { tools: { listChanged: false } },

@@ -37,6 +37,20 @@
           "method": "POST",
           "description": "Self-registration: a proof-of-work challenge, no email; returns a scoped key and the free allowance."
         }
+      },
+      {
+        "type": "oauth2",
+        "scopes": [
+          "read",
+          "write",
+          "run"
+        ],
+        "protectedResourceMetadata": "https://api.test/.well-known/oauth-protected-resource/mcp",
+        "authorizationServerMetadata": "https://api.test/.well-known/oauth-authorization-server",
+        "clientRegistration": "client-id-metadata-document",
+        "pkce": [
+          "S256"
+        ]
       }
     ]
   },

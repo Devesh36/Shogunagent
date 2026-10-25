@@ -298,7 +298,15 @@
     },
     {
       "name": "billing",
-      "description": "Quotes, receipts, disputes."
+      "description": "Quotes, receipts, disputes, statements, commits."
+    },
+    {
+      "name": "admin",
+      "description": "Operator routes (admin key only): commits, credits and refunds, dispute resolution."
+    },
+    {
+      "name": "oauth",
+      "description": "OAuth 2.1 + Client ID Metadata Documents for MCP clients. No dynamic registration."
     },
     {
       "name": "mcp",
@@ -654,6 +662,11 @@
             "agentKey": [
               "read"
             ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
           }
         ]
       }
@@ -816,6 +829,11 @@
             "agentKey": [
               "read"
             ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
           }
         ]
       }
@@ -875,6 +893,11 @@
         "security": [
           {
             "agentKey": [
+              "write"
+            ]
+          },
+          {
+            "oauth": [
               "write"
             ]
           }
@@ -963,6 +986,11 @@
             "agentKey": [
               "read"
             ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
           }
         ]
       }
@@ -1018,6 +1046,11 @@
         "security": [
           {
             "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
               "read"
             ]
           }
@@ -1095,8 +1128,674 @@
             "agentKey": [
               "write"
             ]
+          },
+          {
+            "oauth": [
+              "write"
+            ]
           }
         ]
+      }
+    },
+    "/v1/statements": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "The month's statement: usage per unit (free units at $0), credits, adjustments, disputes and their resolution, commit drawdown. Immutable once the month closes (stored, with a SHA-256).",
+        "operationId": "get_v1_statements",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+            },
+            "description": "YYYY-MM (UTC). Default: the current month."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "csv"
+              ],
+              "default": "json"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The statement; X-Statement-Hash repeats its hash.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Statement"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_month | month_not_started | invalid_format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/commit": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "The active annual commit for this principal (or its tenant): discount, amount, drawn, remaining, overage. null when none.",
+        "operationId": "get_v1_commit",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "commit": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/Commit"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "next_action": {
+                      "type": "null"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/agents/me/licence": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Link a ShogunAI licence (X-Shogun-Licence header). A Pro licence earns $20 of credit per month.",
+        "operationId": "post_v1_agents_me_licence",
+        "parameters": [
+          {
+            "name": "X-Shogun-Licence",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "licence_missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_licence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "licence_plan_not_eligible | oauth_not_allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/commits": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Create an annual commit (10–25% off) for a principal or tenant; optional Stripe customer for metered overage.",
+        "operationId": "post_v1_admin_commits",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "commit": {
+                      "$ref": "#/components/schemas/Commit"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "idempotency_key_required | invalid_subject | invalid_amount | invalid_discount | invalid_period | invalid_customer | overage_billing_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope | oauth_not_allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "commit_overlap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/adjustments": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Credit or refund a principal: one ledger entry per Idempotency-Key; a refund with charge_id also refunds the card through Stripe.",
+        "operationId": "post_v1_admin_adjustments",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdjustmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "idempotency_key_required | invalid_kind | invalid_amount | invalid_reason | invalid_charge | refunds_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "principal_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/disputes/{id}/resolve": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Resolve a dispute: credit (default: the receipt's cost) or reject. Once.",
+        "operationId": "post_v1_admin_disputes_id_resolve",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "outcome"
+                ],
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "credit",
+                      "reject"
+                    ]
+                  },
+                  "amount_micro_usd": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Credit amount (integer micro-USD; 1 USD = 1000000)."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "dispute_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/.well-known/oauth-protected-resource": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 9728 Protected Resource Metadata for /mcp (also at /.well-known/oauth-protected-resource/mcp).",
+        "operationId": "get__well_known_oauth_protected_resource",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/.well-known/oauth-protected-resource/mcp": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 9728 Protected Resource Metadata, path-suffixed form for /mcp.",
+        "operationId": "get__well_known_oauth_protected_resource_mcp",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 8414 Authorization Server Metadata: code + PKCE S256, client_id_metadata_document_supported, no registration endpoint.",
+        "operationId": "get__well_known_oauth_authorization_server",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/oauth/authorize": {
+      "get": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "Validate the client (its metadata document) and redirect_uri, then render the consent page.",
+        "operationId": "get_oauth_authorize",
+        "responses": {
+          "200": {
+            "description": "The consent page.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "An error returned to the validated redirect_uri."
+          },
+          "400": {
+            "description": "An HTML error page; never a redirect."
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      },
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "The human's decision (form post from the consent page) → 302 to redirect_uri with code, state and iss.",
+        "operationId": "post_oauth_authorize",
+        "responses": {
+          "302": {
+            "description": "code or error"
+          },
+          "400": {
+            "description": "invalid_consent"
+          },
+          "401": {
+            "description": "The key was not accepted; the page is shown again."
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "grant_type=authorization_code (PKCE S256) or refresh_token (rotated; reuse revokes the family). Form-encoded.",
+        "operationId": "post_oauth_token",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "access_token": {
+                      "type": "string",
+                      "pattern": "^sat_"
+                    },
+                    "token_type": {
+                      "type": "string",
+                      "enum": [
+                        "Bearer"
+                      ]
+                    },
+                    "expires_in": {
+                      "type": "integer"
+                    },
+                    "refresh_token": {
+                      "type": "string",
+                      "pattern": "^sar_"
+                    },
+                    "scope": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/oauth/revoke": {
+      "post": {
+        "tags": [
+          "oauth"
+        ],
+        "summary": "RFC 7009: revoke a token and everything minted from the same consent. Always 200.",
+        "operationId": "post_oauth_revoke",
+        "responses": {
+          "200": {
+            "description": "Revoked, or nothing to revoke."
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/privacy": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Privacy policy (DRAFT pending legal review), rendered from docs/legal/privacy-policy.md.",
+        "operationId": "get_privacy",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/terms": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Terms of service (DRAFT pending legal review), rendered from docs/legal/terms.md.",
+        "operationId": "get_terms",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
       }
     },
     "/mcp": {
@@ -1227,6 +1926,9 @@
         "security": [
           {
             "agentKey": []
+          },
+          {
+            "oauth": []
           }
         ]
       },
@@ -1357,6 +2059,9 @@
         "security": [
           {
             "agentKey": []
+          },
+          {
+            "oauth": []
           }
         ]
       },
@@ -1487,6 +2192,9 @@
         "security": [
           {
             "agentKey": []
+          },
+          {
+            "oauth": []
           }
         ]
       }
@@ -1687,6 +2395,11 @@
             "agentKey": [
               "run"
             ]
+          },
+          {
+            "oauth": [
+              "run"
+            ]
           }
         ],
         "x-served-by": "apps/router"
@@ -1723,6 +2436,22 @@
         "scheme": "bearer",
         "bearerFormat": "sa_live_<key>",
         "description": "An agent key from POST /v1/agents. Scopes: read, write, run, admin (admin implies all)."
+      },
+      "oauth": {
+        "type": "oauth2",
+        "description": "OAuth 2.1 for MCP clients (docs/api/oauth.md): authorization code with PKCE S256; the client_id is the URL of a Client ID Metadata Document; no dynamic registration. Access tokens (sat_…) act as the consenting key, with at most its scopes and never admin.",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "/oauth/authorize",
+            "tokenUrl": "/oauth/token",
+            "refreshUrl": "/oauth/token",
+            "scopes": {
+              "read": "Read state and memory (free)",
+              "write": "Ingest and write notes (metered)",
+              "run": "Run tools (metered; L3 waits for approval)"
+            }
+          }
+        }
       }
     },
     "parameters": {
@@ -2519,6 +3248,316 @@
               "null"
             ],
             "format": "date-time"
+          }
+        }
+      },
+      "Statement": {
+        "type": "object",
+        "description": "shogunagent/statement/v1. Amounts are integer micro-USD; `hash` is sha256 over the canonical JSON (RFC 8785) of every other field.",
+        "required": [
+          "schema",
+          "statement_id",
+          "principal_id",
+          "month",
+          "status",
+          "usage",
+          "totals",
+          "credits",
+          "adjustments",
+          "disputes",
+          "commit",
+          "hash"
+        ],
+        "properties": {
+          "schema": {
+            "type": "string",
+            "enum": [
+              "shogunagent/statement/v1"
+            ]
+          },
+          "statement_id": {
+            "type": "string"
+          },
+          "principal_id": {
+            "type": "string"
+          },
+          "month": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ]
+          },
+          "usage": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "type": "string"
+                },
+                "calls": {
+                  "type": "integer"
+                },
+                "quantity": {
+                  "type": "integer"
+                },
+                "list_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "At list price (integer micro-USD; 1 USD = 1000000)."
+                },
+                "charged_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Charged (integer micro-USD; 1 USD = 1000000)."
+                },
+                "discount_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Commit discount (integer micro-USD; 1 USD = 1000000)."
+                },
+                "commit_funded_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Drawn from a commit (integer micro-USD; 1 USD = 1000000)."
+                },
+                "wallet_funded_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Drawn from the wallet (integer micro-USD; 1 USD = 1000000)."
+                },
+                "free": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "totals": {
+            "type": "object"
+          },
+          "credits": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "adjustments": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "disputes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "dispute_id": {
+                  "type": "string"
+                },
+                "receipt_id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "resolved",
+                    "rejected"
+                  ]
+                },
+                "credit_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Credited (integer micro-USD; 1 USD = 1000000)."
+                },
+                "opened_at": {
+                  "type": "string"
+                },
+                "resolved_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "commit": {
+            "oneOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unsettled_receipts": {
+            "type": "integer"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      },
+      "Commit": {
+        "type": "object",
+        "properties": {
+          "commit_id": {
+            "type": "string",
+            "pattern": "^cmt_"
+          },
+          "subject": {
+            "type": "string",
+            "enum": [
+              "principal",
+              "tenant"
+            ]
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "discount_bps": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 2500
+          },
+          "amount_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Committed spend (integer micro-USD; 1 USD = 1000000)."
+          },
+          "drawn_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Drawn so far (discounted) (integer micro-USD; 1 USD = 1000000)."
+          },
+          "remaining_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "amount − drawn (integer micro-USD; 1 USD = 1000000)."
+          },
+          "overage_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Drawn above the amount (integer micro-USD; 1 USD = 1000000)."
+          },
+          "overage_reported_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Reported to Stripe (integer micro-USD; 1 USD = 1000000)."
+          },
+          "overage_billing": {
+            "type": "boolean"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CommitRequest": {
+        "type": "object",
+        "required": [
+          "subject_id",
+          "amount_micro_usd",
+          "discount_bps",
+          "starts_at",
+          "ends_at"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "enum": [
+              "principal",
+              "tenant"
+            ],
+            "default": "principal"
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "amount_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Committed spend (integer micro-USD; 1 USD = 1000000)."
+          },
+          "discount_bps": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 2500
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "stripe_customer_id": {
+            "type": "string",
+            "pattern": "^cus_"
+          }
+        }
+      },
+      "AdjustmentRequest": {
+        "type": "object",
+        "required": [
+          "principal_id",
+          "kind",
+          "amount_micro_usd"
+        ],
+        "properties": {
+          "principal_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "credit",
+              "refund"
+            ]
+          },
+          "amount_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Positive amount (integer micro-USD; 1 USD = 1000000)."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "goodwill",
+              "dispute",
+              "service_credit",
+              "refund",
+              "chargeback",
+              "correction"
+            ]
+          },
+          "charge_id": {
+            "type": "string",
+            "pattern": "^(ch|py)_"
+          },
+          "ref": {
+            "type": "string"
           }
         }
       },
