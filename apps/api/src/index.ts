@@ -26,6 +26,7 @@ import { InMemoryAgentStore } from "./agent-store.js";
 import { InMemoryX402Store } from "./billing/x402.js";
 import { InMemoryPayoutStore } from "./payouts.js";
 import { InMemoryOAuthStore } from "./oauth/store.js";
+import { InMemoryEnterpriseStore } from "./enterprise/store.js";
 import { BootError, SERVER_TIMEOUTS, agentLaneLine, billingJobs, createRelay, formLaneLine, intFromEnv, postgresStore, relayConfigFromEnv, startPeriodicSweep, trialLaneLine, type RelayStore } from "./boot.js";
 import { operational } from "./logging.js";
 import { TokenBucketLimiter } from "./ratelimit.js";
@@ -82,6 +83,7 @@ async function openStore(): Promise<RelayStore> {
       if (config.agent?.oauthSecret) await store.oauth.checkSchema();
       if (config.agent?.payouts) await store.payouts.checkSchema();
       if (config.agent?.x402) await store.x402.checkSchema();
+      if (config.agent?.enterprise) await store.enterprise.checkSchema();
     } catch (e) {
       refuse(e instanceof Error ? e.message : "shared store unavailable");
     }
@@ -95,9 +97,9 @@ async function openStore(): Promise<RelayStore> {
     usage: new InMemoryUsageStore(),
     rateLimit: new TokenBucketLimiter(config.rateBurst, config.ratePerMin),
     // Keys, wallets and receipts vanish with the process too.
-    ...(config.agent ? { agent: new InMemoryAgentStore(), oauth: new InMemoryOAuthStore(), resolveHost: resolveAllAddresses } : {}),
     ...(config.agent?.payouts ? { payouts: new InMemoryPayoutStore() } : {}),
     ...(config.agent?.x402 ? { x402: new InMemoryX402Store() } : {}),
+    ...(config.agent ? { agent: new InMemoryAgentStore(), oauth: new InMemoryOAuthStore(), enterprise: new InMemoryEnterpriseStore(), resolveHost: resolveAllAddresses } : {}),
     close: () => Promise.resolve(),
   };
 }

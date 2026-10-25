@@ -128,6 +128,21 @@ import { FetchDeepgramGateway } from "./deepgram.js";
  *                              required and X402_MAX_TIMEOUT_SECONDS is optional (60). Needs
  *                              sql/x402-payments.sql applied.
  *
+ * The enterprise lane (E26; enterprise/app.ts). Off unless ENTERPRISE_ENABLED=1 (with the agent
+ * API on); needs sql/enterprise.sql applied:
+ * - ENTERPRISE_ENABLED       — `1` serves tenants, SSO for tenant admins, SCIM and the audit export.
+ * - ENTERPRISE_SECRET        — secret, ≥ 32 characters: signs admin sessions, seals the SSO flow
+ *                              cookie and OIDC client secrets at rest. Rotating it ends sessions
+ *                              and makes stored OIDC client secrets unreadable (set them again).
+ * - SHOGUN_REGION            — the region this deployment serves (default `us`).
+ * - SHOGUN_REGION_ENDPOINTS  — JSON object region → https origin of the other regions'
+ *                              deployments, named in `421 wrong_region` answers.
+ * - SCIM_DELETE_GRACE_DAYS   — days between a SCIM DELETE and the principal-store purge (default 30, 1–365).
+ * - SSO_CLOCK_SKEW_SECS      — clock skew tolerated on ID tokens and assertions (default 120, 0–600).
+ * - SHOGUN_SIDECAR_ADMIN_TOKEN — secret, optional: the sidecar's `SHOGUN_ADMIN_TOKEN`, for Team
+ *                              sync, the audit export and purges (with SHOGUN_SIDECAR_URL). Unset =
+ *                              those answer 503 and purges stay due.
+ *
  * Node-only settings (PORT, RELAY_DATABASE_URL, METRICS_LOG_INTERVAL_SEC) are documented and
  * parsed in `index.ts`; the Worker's store comes from its `HYPERDRIVE` binding.
  */
@@ -161,6 +176,11 @@ import { SqlInFlightLimiter, SqlRateLimiter, SqlUsageStore, SqlWindowLimiter } f
 import type { InFlightLimiter, RateLimiter } from "./ratelimit.js";
 import { FORM_DECIDE_MAX_IN_FLIGHT, FORM_DECIDE_PER_HOUR, FORM_DECIDE_TIMEOUT_MS, FORM_DECIDE_WINDOW_MS, typesafeDecider } from "./form-decide.js";
 import type { SqlClient } from "./sql.js";
+import { DEFAULT_DELETE_GRACE_DAYS, enterpriseJobs } from "./enterprise/app.js";
+import { DEFAULT_CLOCK_SKEW_SECS } from "./enterprise/oidc.js";
+import { DEFAULT_REGION, REGION_RE, parseRegionEndpoints, type RegionConfig } from "./enterprise/region.js";
+import { httpEnterpriseSidecar } from "./enterprise/sidecar-ops.js";
+import { SqlEnterpriseStore, type EnterpriseStore } from "./enterprise/store.js";
 import { DEFAULT_BATCH_PRICES, priceFor, priceTableWithOverride, spendCapMicrosFromEnv, usageMicros, usdCapMicrosFromEnv, type PriceTable, type SpendBreaker } from "./spend.js";
 import { SETTLE_WINDOW_DAYS, keepCutoff, utcDate, type UsageStore } from "./usage.js";
 
@@ -302,6 +322,45 @@ export interface AgentConfig {
   payouts?: { stateSecret: string; settlementToken?: string; minPayoutMicros: number };
   /** x402 acceptance (E30, billing/x402.ts): only with `X402_ENABLED=1`. Absent = off. */
   x402?: X402Config;
+  /** The enterprise lane (E26): `ENTERPRISE_ENABLED=1`, `ENTERPRISE_SECRET`, `SHOGUN_REGION`,
+   * `SHOGUN_REGION_ENDPOINTS`, `SCIM_DELETE_GRACE_DAYS`, `SSO_CLOCK_SKEW_SECS`, and for the
+   * sidecar calls `SHOGUN_SIDECAR_URL` + `SHOGUN_SIDECAR_ADMIN_TOKEN`. Absent = not served. */
+  enterprise?: EnterpriseConfig;
+}
+
+export interface EnterpriseConfig {
+  secret: string;
+  region: RegionConfig;
+  deleteGraceDays: number;
+  skewSecs: number;
+  sidecar?: { url: string; adminToken: string };
+}
+
+/** Parse the enterprise settings, or `undefined` when `ENTERPRISE_ENABLED` is not `1`. Throws
+ * `BootError` naming the variable, never echoing a value. */
+export function enterpriseConfigFromEnv(env: EnvRecord): EnterpriseConfig | undefined {
+  if (env.ENTERPRISE_ENABLED?.trim() !== "1") return undefined;
+  const secret = env.ENTERPRISE_SECRET;
+  if (!secret || secret.length < 32) throw new BootError("missing required env: ENTERPRISE_SECRET (at least 32 characters; ENTERPRISE_ENABLED=1)");
+  const served = env.SHOGUN_REGION?.trim() || DEFAULT_REGION;
+  if (!REGION_RE.test(served)) throw new BootError("invalid SHOGUN_REGION (a region code such as us, eu or jp)");
+  let endpoints: Record<string, string>;
+  try {
+    endpoints = parseRegionEndpoints(env.SHOGUN_REGION_ENDPOINTS);
+  } catch {
+    throw new BootError("invalid SHOGUN_REGION_ENDPOINTS (a JSON object of region code to https origin, e.g. {\"eu\":\"https://eu.api.example\"})");
+  }
+  const sidecarUrl = env.SHOGUN_SIDECAR_URL?.trim();
+  const adminToken = env.SHOGUN_SIDECAR_ADMIN_TOKEN?.trim();
+  if (adminToken && adminToken.length < 16) throw new BootError("invalid SHOGUN_SIDECAR_ADMIN_TOKEN (at least 16 characters, the sidecar's SHOGUN_ADMIN_TOKEN)");
+  if (adminToken && (!sidecarUrl || !/^https?:\/\/[^\s]+$/.test(sidecarUrl))) throw new BootError("missing or invalid SHOGUN_SIDECAR_URL (SHOGUN_SIDECAR_ADMIN_TOKEN is set)");
+  return {
+    secret,
+    region: { served, endpoints },
+    deleteGraceDays: intFromEnv(env, "SCIM_DELETE_GRACE_DAYS", DEFAULT_DELETE_GRACE_DAYS, 1, 365),
+    skewSecs: intFromEnv(env, "SSO_CLOCK_SKEW_SECS", DEFAULT_CLOCK_SKEW_SECS, 0, 600),
+    ...(adminToken && sidecarUrl ? { sidecar: { url: sidecarUrl, adminToken } } : {}),
+  };
 }
 
 /** Parse the payout settings, or `undefined` when `PAYOUTS_STATE_SECRET` is unset. */
@@ -387,6 +446,7 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
   } catch (e) {
     throw new BootError(e instanceof Error ? e.message : "invalid X402 settings");
   }
+  const enterprise = enterpriseConfigFromEnv(env);
   return {
     powSecret,
     powBits: intFromEnv(env, "AGENT_POW_BITS", DEFAULT_POW_BITS, 0, MAX_POW_BITS),
@@ -401,6 +461,7 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
     ...(approvals ? { approvals } : {}),
     ...(payouts ? { payouts } : {}),
     ...(x402 ? { x402 } : {}),
+    ...(enterprise ? { enterprise } : {}),
   };
 }
 
@@ -432,7 +493,7 @@ export async function billingJobs(config: Pick<RelayConfig, "agent">, store: Pic
 /** Whether the agent API is served; one boot-log line, so a 404 on `/v1/agents` is not a mystery. */
 export function agentLaneLine(config: Pick<RelayConfig, "agent">): string {
   if (!config.agent) return "agent_api closed (AGENT_API_ENABLED unset)";
-  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"}; provider payouts ${config.agent.payouts ? "on" : "off: PAYOUTS_STATE_SECRET unset"}; x402 ${config.agent.x402 ? "on" : "off"})`;
+  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"}; provider payouts ${config.agent.payouts ? "on" : "off: PAYOUTS_STATE_SECRET unset"}; x402 ${config.agent.x402 ? "on" : "off"}; enterprise ${config.agent.enterprise ? `on (region ${config.agent.enterprise.region.served}; sidecar ops ${config.agent.enterprise.sidecar ? "on" : "off"})` : "off"})`;
 }
 
 /** The Batch price table in force: the override, or the shipped defaults. */
@@ -582,6 +643,8 @@ export interface RelayStore {
   payouts?: PayoutStore;
   /** The x402 replay guard (E30). Absent = an in-process store when x402 is enabled. */
   x402?: X402Store;
+  /** The enterprise directory (E26). Absent = the enterprise lane is not served even when configured. */
+  enterprise?: EnterpriseStore;
   close(): Promise<void>;
 }
 
@@ -592,7 +655,7 @@ export interface RelayStore {
  * one fixed warning line. `checkSchema` is the caller's: Node runs it before listening, the
  * Worker on each sweep (a missing table is otherwise a 503 per request, fail-closed).
  */
-export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker" | "agent">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore; agent: SqlAgentStore; oauth: SqlOAuthStore; payouts: SqlPayoutStore; x402: SqlX402Store } {
+export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker" | "agent">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore; agent: SqlAgentStore; oauth: SqlOAuthStore; payouts: SqlPayoutStore; x402: SqlX402Store; enterprise: SqlEnterpriseStore } {
   return {
     payouts: new SqlPayoutStore(db),
     x402: new SqlX402Store(db),
@@ -605,6 +668,7 @@ export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurs
     agent: new SqlAgentStore(db),
     registerLimiter: new SqlWindowLimiter(db, config.agent?.registerPerHour ?? REGISTER_PER_HOUR, REGISTER_WINDOW_MS, () => warn("ratelimit_unavailable (failing open)")),
     webhooks: new SqlWebhookStore(db),
+    enterprise: new SqlEnterpriseStore(db),
     close: () => db.close(),
   };
 }
@@ -660,6 +724,8 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
   const provided = shared.gateway ? { gateway: shared.gateway, orphanSweep: shared.orphanSweep } : providerGateways(config, log);
   const gateway = provided.gateway;
   const metrics = shared.metrics ?? newMetrics(config);
+  // E26: the operator client to the sidecar (teams, grants, audit export, purge), when configured.
+  const enterpriseSidecar = config.agent?.enterprise?.sidecar ? httpEnterpriseSidecar(config.agent.enterprise.sidecar.url, config.agent.enterprise.sidecar.adminToken) : undefined;
   const deps: RelayDeps = {
     gateway,
     usage: store.usage,
@@ -730,6 +796,18 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
             ...(config.agent.approvals.slack ? { slack: config.agent.approvals.slack } : {}),
           },
         } : {}),
+        // The enterprise lane (E26): tenants, SSO, SCIM, regions, the tenant audit export.
+        ...(config.agent.enterprise && store.enterprise ? {
+          enterprise: {
+            store: store.enterprise,
+            secret: config.agent.enterprise.secret,
+            region: config.agent.enterprise.region,
+            deleteGraceMs: config.agent.enterprise.deleteGraceDays * 86_400_000,
+            skewSecs: config.agent.enterprise.skewSecs,
+            ...(enterpriseSidecar ? { sidecar: enterpriseSidecar } : {}),
+            ...(store.resolveHost ? { resolveHost: store.resolveHost } : {}),
+          },
+        } : {}),
       },
     } : {}),
   };
@@ -768,6 +846,8 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
       // Expired PoW rows and settled receipts past their window (agent-store.ts). Counts nothing.
       if (config.agent && store.agent) await store.agent.maintenance((shared.now?.() ?? new Date()).getTime()).catch(() => operational.warn("agent maintenance unavailable"));
       if (config.agent && store.agent) await billingJobs(config, store, (shared.now?.() ?? new Date()).getTime());
+      // E26: SAML replay rows past expiry, and principal-store purges past the SCIM grace period.
+      if (config.agent?.enterprise && store.enterprise) await enterpriseJobs(store.enterprise, enterpriseSidecar, (shared.now?.() ?? new Date()).getTime(), operational.warn).catch(() => operational.warn("enterprise jobs unavailable"));
       return sweepOnce(settlementDeps);
     },
     settle: () => settleOnce(settlementDeps),

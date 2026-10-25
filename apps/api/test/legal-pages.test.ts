@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { PRIVACY_HTML, TERMS_HTML } from "../src/wellknown/legal-content.generated.js";
+import { DPA_HTML, PRIVACY_HTML, SLA_HTML, TERMS_HTML, ZDR_HTML } from "../src/wellknown/legal-content.generated.js";
 import { makeAgentRig } from "./agent-helpers.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore — plain ESM without types
@@ -15,17 +15,25 @@ describe("legal pages", () => {
   it("the committed module is what the generator renders from the markdown", () => {
     expect(PRIVACY_HTML).toBe(renderPage(read("docs/legal/privacy-policy.md")));
     expect(TERMS_HTML).toBe(renderPage(read("docs/legal/terms.md")));
+    expect(DPA_HTML).toBe(renderPage(read("docs/legal/dpa.md")));
+    expect(ZDR_HTML).toBe(renderPage(read("docs/legal/zdr.md")));
+    expect(SLA_HTML).toBe(renderPage(read("docs/legal/sla.md")));
   });
 
   it("both are marked DRAFT for legal review", () => {
-    for (const html of [PRIVACY_HTML, TERMS_HTML]) expect(html).toContain("<strong>DRAFT — for legal review. Not in force.</strong>");
+    for (const html of [PRIVACY_HTML, TERMS_HTML, DPA_HTML, ZDR_HTML, SLA_HTML]) expect(html).toContain("<strong>DRAFT — for legal review. Not in force.</strong>");
+    expect(DPA_HTML).toContain("Standard Contractual Clauses");
+    expect(DPA_HTML).toContain("Personal data breaches");
+    expect(ZDR_HTML).toContain("Paths that retain nothing");
+    expect(ZDR_HTML).toContain("<code>/mcp</code>");
+    expect(SLA_HTML).toContain("99.9% monthly availability");
     expect(PRIVACY_HTML).toContain("We do not train models on your data");
     expect(PRIVACY_HTML).toContain("Export is always free");
   });
 
   it("are served at /privacy and /terms with a locked-down CSP", async () => {
     const rig = makeAgentRig();
-    for (const [path, html] of [["/privacy", PRIVACY_HTML], ["/terms", TERMS_HTML]] as const) {
+    for (const [path, html] of [["/privacy", PRIVACY_HTML], ["/terms", TERMS_HTML], ["/legal/dpa", DPA_HTML], ["/legal/zdr", ZDR_HTML], ["/legal/sla", SLA_HTML]] as const) {
       const res = await rig.app.request(path);
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toContain("text/html");

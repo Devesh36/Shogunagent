@@ -58,6 +58,9 @@ export interface OAuthDeps {
 export interface OAuthAppDeps extends OAuthDeps, WellknownContext {
   agentStore: AgentStore;
   now: () => Date;
+  /** E26: whether a principal may consent by pasting a key. `sso_required` (an SSO-enforced
+   * enterprise tenant) refuses it. Absent = always allowed. */
+  consentPolicy?: (principalId: string) => Promise<"allow" | "sso_required">;
 }
 
 const b64url = (b: Buffer): string => b.toString("base64url");
@@ -202,7 +205,7 @@ input[type=password]{width:100%;padding:.5rem;font:inherit;box-sizing:border-box
   return { html, csp };
 }
 
-function htmlResponse(c: Context, status: 200 | 400 | 401, rendered: { html: string; csp: string }): Response {
+function htmlResponse(c: Context, status: 200 | 400 | 401 | 403, rendered: { html: string; csp: string }): Response {
   return c.html(rendered.html, status, {
     "cache-control": "no-store", "content-security-policy": rendered.csp, "x-frame-options": "DENY", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff",
   });
@@ -225,7 +228,7 @@ function errorPage(c: Context, code: string, status: 400 | 401 = 400): Response 
   return htmlResponse(c, status, page("Cannot connect", `<h1>This connection cannot continue</h1><p>${escapeHtml(ERROR_TEXT[code] ?? "The request is not valid.")}</p><p class="muted">Error: <code>${escapeHtml(code)}</code>. Nothing was granted.</p>`));
 }
 
-function consentPage(c: Context, meta: ClientMetadata, p: AuthorizeParams, consent: string, status: 200 | 401, error?: string): Response {
+function consentPage(c: Context, meta: ClientMetadata, p: AuthorizeParams, consent: string, status: 200 | 401 | 403, error?: string): Response {
   const name = meta.clientName ?? new URL(meta.clientId).hostname;
   const redirectOrigin = new URL(p.redirectUri).origin;
   const hidden = (k: string, v: string): string => `<input type="hidden" name="${k}" value="${escapeHtml(v)}">`;
@@ -345,6 +348,16 @@ export function createOAuthApp(deps: OAuthAppDeps): Hono<{ Variables: AgentVars 
     if (!resolved?.ok) {
       c.set("relayLogEvent", "oauth_denied");
       return consentPage(c, head.meta, p, signConsent(deps.secret, p, nowMs()), 401, "That key was not accepted. Check it and try again.");
+    }
+    if (deps.consentPolicy) {
+      const policy = await deps.consentPolicy(resolved.principal.principalId).catch(() => "unavailable" as const);
+      if (policy !== "allow") {
+        c.set("relayLogEvent", "oauth_sso_required");
+        return consentPage(c, head.meta, p, signConsent(deps.secret, p, nowMs()), policy === "sso_required" ? 403 : 401,
+          policy === "sso_required"
+            ? "Your organization requires single sign-on, so its members cannot connect apps by pasting an agent key. Ask your tenant administrator to connect this app."
+            : "The organization directory is unavailable. Try again shortly.");
+      }
     }
     const scopes = grantableScopes(p.scopes, resolved.principal.scopes);
     if (scopes.length === 0) {

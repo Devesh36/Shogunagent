@@ -203,7 +203,10 @@ describe("/openapi.json (E10-T6 scaffolding)", () => {
       // E29: the open catalog (apps/router) and provider payouts
       "/v1/catalog", "/v1/catalog/{tool_id}", "/catalog", "/v1/internal/router/settlements", "/v1/providers/me", "/v1/providers/me/connect",
       "/v1/providers/connect/return", "/v1/providers/connect/refresh", "/v1/providers/me/statements", "/v1/admin/providers",
-      "/v1/admin/providers/{id}/adjustments", "/v1/admin/providers/{id}/disputes/{entry}/resolve", "/v1/admin/payouts/run"]) {
+      "/v1/admin/providers/{id}/adjustments", "/v1/admin/providers/{id}/disputes/{entry}/resolve", "/v1/admin/payouts/run",
+      // E26
+      "/legal/dpa", "/legal/zdr", "/legal/sla", "/v1/admin/tenants", "/v1/admin/tenants/{id}", "/v1/admin/tenants/{id}/principals", "/v1/admin/tenants/{id}/scim-token",
+      "/sso/{tenant}/login", "/sso/{tenant}/oidc/callback", "/sso/{tenant}/saml/acs", "/v1/tenant/audit/export", "/scim/v2/Users", "/scim/v2/Users/{id}", "/scim/v2/Groups", "/scim/v2/ServiceProviderConfig"]) {
       expect(doc.paths[p], p).toBeDefined();
     }
     expect(Object.keys(doc.paths["/mcp"] ?? {}).sort()).toEqual(["delete", "get", "post"]);

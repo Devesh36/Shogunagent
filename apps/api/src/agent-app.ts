@@ -28,7 +28,7 @@ import { randomUUID } from "node:crypto";
 
 import {
   DEFAULT_PBKDF2_ITERATIONS, agentError, agentPrincipalOf, generateAgentKey, hashAgentKey, requireAgentKey,
-  type AgentKeyRecord, type AgentPrincipal, type AgentScope, type AgentVars,
+  type AgentKeyLookup, type AgentKeyRecord, type AgentPrincipal, type AgentScope, type AgentVars,
 } from "./agent-keys.js";
 import type { KeyObject } from "node:crypto";
 
@@ -51,6 +51,8 @@ import { HANDOFF_PATH, handleHandoff } from "./handoff.js";
 import { createApprovalsApp, type ApprovalsDeps } from "./approvals/app.js";
 import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
 import { registerPayoutRoutes, type PayoutDeps } from "./payouts-app.js";
+import { createEnterpriseApp, ssoConsentPolicy, type EnterpriseDeps } from "./enterprise/app.js";
+import { regionAdmission } from "./enterprise/region.js";
 
 /** Self-registration: at most this many per IP per hour (in-process default; production wires
  * `SqlWindowLimiter`). */
@@ -103,6 +105,10 @@ export interface AgentDeps extends MeteringDeps {
   /** Provider payouts (E29, payouts-app.ts): the settlement seam, Connect onboarding, provider
    * statements and the payout run. Absent = those routes do not exist on this gateway. */
   payouts?: PayoutDeps;
+  /** The enterprise lane (E26, enterprise/app.ts): tenants, SSO for tenant admins, SCIM, region
+   * separation, the tenant audit export. Absent = none of those routes exist and every principal
+   * is served here. */
+  enterprise?: EnterpriseDeps;
 }
 
 /** The client IP as the edge reports it. Workers set `CF-Connecting-IP`; behind another proxy the
@@ -144,7 +150,12 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   const registerLimiter = deps.registerLimiter ?? new WindowLimiter(REGISTER_PER_HOUR, REGISTER_WINDOW_MS);
   const bodyTooLarge = (c: Context): Response => agentError(c, 413, "body_too_large", "The body is too large for this route.");
   // E3-T2: with OAuth on, every key-guarded route (and /mcp) also accepts `sat_` access tokens.
-  const lookup = deps.oauth ? oauthKeyLookup(store, deps.oauth.store) : store;
+  const baseLookup: AgentKeyLookup = deps.oauth ? oauthKeyLookup(store, deps.oauth.store) : store;
+  // E26: with the enterprise lane on, a principal homed in another region is refused (421) on
+  // every key-guarded route and on /mcp, before anything is read or booked.
+  const lookup: AgentKeyLookup = deps.enterprise
+    ? { keysByPrefix: (prefix) => baseLookup.keysByPrefix(prefix), ...(baseLookup.accessToken ? { accessToken: baseLookup.accessToken.bind(baseLookup) } : {}), admit: regionAdmission(deps.enterprise.store, deps.enterprise.region) }
+    : baseLookup;
   const base = deps.publicBaseUrl.replace(/\/+$/, "");
   // E19: the pluggable notifier; the default keeps events in memory and never logs them.
   const notifier = deps.notifier ?? new InMemoryNotifier();
@@ -177,7 +188,20 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
 
   // --- OAuth 2.1 + CIMD (E3-T2) ---
   if (deps.oauth) {
-    app.route("/", createOAuthApp({ ...deps.oauth, agentStore: store, publicBaseUrl: deps.publicBaseUrl, ...(deps.wellknown?.mcpUrl ? { mcpUrl: deps.wellknown.mcpUrl } : {}), now }));
+    app.route("/", createOAuthApp({
+      ...deps.oauth, agentStore: store, publicBaseUrl: deps.publicBaseUrl, ...(deps.wellknown?.mcpUrl ? { mcpUrl: deps.wellknown.mcpUrl } : {}), now,
+      // E26: an SSO-enforced tenant's principals cannot consent by pasting a key.
+      ...(deps.enterprise ? { consentPolicy: ssoConsentPolicy(deps.enterprise.store) } : {}),
+    }));
+  }
+
+  // --- enterprise (E26): tenants, SSO, SCIM, the tenant audit export ---
+  if (deps.enterprise) {
+    for (const path of ["/v1/admin/tenants", "/v1/admin/tenants/*", "/v1/tenant/*", "/sso/*", "/scim/*"]) app.use(path, wellknown.observe);
+    app.route("/", createEnterpriseApp({
+      ...deps.enterprise, agentStore: store, ...(deps.oauth ? { oauthStore: deps.oauth.store } : {}),
+      publicBaseUrl: deps.publicBaseUrl, now, log: deps.log, ...(deps.keyIterations !== undefined ? { keyIterations: deps.keyIterations } : {}), requireKey,
+    }));
   }
 
   // --- registration (E3-T3) ---

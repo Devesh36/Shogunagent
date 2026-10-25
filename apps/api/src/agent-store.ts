@@ -129,6 +129,13 @@ export interface AgentStore {
   revokeKey(keyId: string, at: number): Promise<boolean>;
   /** Set the key's own caps (`undefined` = back to the defaults). False when the key does not exist. */
   setKeyCaps(keyId: string, caps: { dayMicros?: number; monthMicros?: number }): Promise<boolean>;
+  /** E26: revoke every live key of a principal at `at` (SCIM deactivation and deletion). Returns
+   * how many were live; a key already revoked keeps its first revocation time. */
+  revokePrincipalKeys(principalId: string, at: number): Promise<number>;
+  /** E26: record the principal (and its keys) under an enterprise tenant. The membership itself
+   * (at most one tenant per principal) is the enterprise store's; this keeps the `tenant_id` the
+   * commit lookup and `/v1/agents/me` read in step with it. False when the principal is unknown. */
+  assignTenant(principalId: string, tenantId: string): Promise<boolean>;
 
   // --- wallet ---
   wallet(principalId: string): Promise<Wallet>;
@@ -303,6 +310,28 @@ export class InMemoryAgentStore implements AgentStore {
       if (!k) return false;
       if (caps.dayMicros === undefined) delete k.capDayMicros; else k.capDayMicros = caps.dayMicros;
       if (caps.monthMicros === undefined) delete k.capMonthMicros; else k.capMonthMicros = caps.monthMicros;
+      return true;
+    });
+  }
+
+  revokePrincipalKeys(principalId: string, at: number): Promise<number> {
+    return this.enqueue(() => {
+      let live = 0;
+      for (const k of this.keys.values()) {
+        if (k.principalId !== principalId || k.revokedAt !== undefined) continue;
+        k.revokedAt = at;
+        live += 1;
+      }
+      return live;
+    });
+  }
+
+  assignTenant(principalId: string, tenantId: string): Promise<boolean> {
+    return this.enqueue(() => {
+      const p = this.principals.get(principalId);
+      if (!p) return false;
+      p.tenantId = tenantId;
+      for (const k of this.keys.values()) if (k.principalId === principalId) k.tenantId = tenantId;
       return true;
     });
   }

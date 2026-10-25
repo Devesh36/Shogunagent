@@ -526,3 +526,50 @@ until the core (E4) is wired behind it.
 New sweep log lines: `pro_bundle_granted N`, `commit_overage_reports sent=N failed=N`,
 `pro bundle grant unavailable`, `commit overage report unavailable`, `oauth maintenance
 unavailable`. None carries an id.
+
+### 9.2 Enterprise: tenants, SSO, SCIM, regions, audit export (E26)
+
+Off until `ENTERPRISE_ENABLED: "1"` (the agent API must be on). Routes and behaviour:
+`README-agent-api.md` §8.
+
+1. **Schema.** Re-apply `apps/api/sql/agent-oauth.sql` (adds the `oauth_families_principal`
+   index SCIM deactivation uses), then apply `apps/api/sql/enterprise.sql` and
+   `apps/api/sql/enterprise-permissions.sql`, as the relay role with `search_path=relay`.
+   Idempotent, additive only. Boot and every sweep run `checkSchema` and refuse to serve without
+   the six `enterprise_*` tables.
+2. **Secrets** (`wrangler secret put`):
+   - `ENTERPRISE_SECRET` — at least 32 random characters. Signs admin session cookies, seals the
+     SSO flow cookie and the OIDC client secrets stored in `enterprise_tenants.sso_json`. Rotating
+     it signs every admin out and makes stored OIDC client secrets unreadable: set each tenant's
+     `client_secret` again with `PATCH /v1/admin/tenants/{id}` afterwards.
+   - `SHOGUN_SIDECAR_ADMIN_TOKEN` — the sidecar's `SHOGUN_ADMIN_TOKEN` (≥ 16 characters), with the
+     var `SHOGUN_SIDECAR_URL`. Needed for SCIM groups (Team sync and grants), the tenant audit
+     export and the purges after SCIM deletes. Without it those answer 503 and purges stay due.
+3. **Vars:**
+   - `ENTERPRISE_ENABLED: "1"`.
+   - `SHOGUN_REGION` — the one region this deployment serves (default `us`).
+   - `SHOGUN_REGION_ENDPOINTS` — a JSON object of the *other* regions' public origins, e.g.
+     `{"eu":"https://eu.api.shogunaios.com","jp":"https://jp.api.shogunaios.com"}`. Only named in
+     `421 wrong_region` answers; nothing is ever sent there.
+   - `SCIM_DELETE_GRACE_DAYS` (default 30, 1–365) and `SSO_CLOCK_SKEW_SECS` (default 120, 0–600).
+4. **Regional deployments.** Deploy one Worker per region with its own Hyperdrive and Postgres,
+   its own sidecar fleet and its own KMS keys, and set `SHOGUN_REGION` on each. Never point two
+   regions at one database, and never configure a sidecar URL of another region: the separation
+   is that no such path exists. Create each tenant on its home region's deployment.
+5. **Onboarding a customer.** `POST /v1/admin/tenants` (Idempotency-Key) with the region, plan
+   `enterprise` and the SSO block; hand the customer the SCIM base URL and the `sct_` token from
+   the answer (shown once; rotate with `POST /v1/admin/tenants/{id}/scim-token`), the OIDC
+   redirect URI or the SAML metadata URL from the tenant document, and add their admins with
+   `POST /v1/admin/tenants/{id}/admins`. Set `"enforced": true` once their SSO works.
+6. **The sidecar contract.** The sidecar must serve `GET /v1/audit/export?principal=<id>` (NDJSON)
+   and `DELETE /v1/principals/<id>` under the operator bearer, besides the existing `/v1/teams` and
+   `/v1/acl/*`. Until a route exists, the export frames that member as failed and purges stay due.
+
+Boot log: `agent_api open (…; enterprise on (region us; sidecar ops on))`. New log events:
+`event=tenant_created`, `sso_login_started` / `sso_login_succeeded` / `sso_login_refused`,
+`saml_replay`, `scim_user_created` / `scim_user_deactivated` / `scim_user_deleted`,
+`scim_group_synced`, `scim_rejected`, `region_refused`, `oauth_sso_required`,
+`audit_export_streamed`, `member_key_issued`. Sweep lines: `enterprise_purges purged=N failed=N`,
+`enterprise maintenance unavailable`, `enterprise purge listing unavailable`, `enterprise jobs
+unavailable`. None carries an id, an e-mail address, a token or an assertion. Alert on repeated
+`saml_replay` and on `scim_rejected` bursts (a leaked or stale SCIM token).

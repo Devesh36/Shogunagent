@@ -193,6 +193,22 @@ export class SqlAgentStore implements AgentStore {
     });
   }
 
+  revokePrincipalKeys(principalId: string, at: number): Promise<number> {
+    return this.tx(async (tx) => {
+      const rows = await tx.query("UPDATE agent_keys SET revoked_at=$2::bigint WHERE principal_id=$1::text AND revoked_at IS NULL RETURNING key_id", [principalId, at]);
+      return rows.length;
+    });
+  }
+
+  assignTenant(principalId: string, tenantId: string): Promise<boolean> {
+    return this.tx(async (tx) => {
+      const rows = await tx.query("UPDATE agent_principals SET tenant_id=$2::text WHERE principal_id=$1::text RETURNING principal_id", [principalId, tenantId]);
+      if (rows.length === 0) return false;
+      await tx.query("UPDATE agent_keys SET tenant_id=$2::text WHERE principal_id=$1::text", [principalId, tenantId]);
+      return true;
+    });
+  }
+
   async wallet(principalId: string): Promise<Wallet> {
     const r = (await this.read("SELECT balance,reserved FROM agent_wallets WHERE principal_id=$1::text", [principalId]))[0];
     return { principalId, balanceMicros: num(r?.balance), reservedMicros: num(r?.reserved) };
