@@ -548,6 +548,13 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
         tx.execute("DELETE FROM search_document_provenance", [])?;
     let search_documents = tx.execute("DELETE FROM search_documents", [])?;
     let period_summaries = tx.execute("DELETE FROM period_summaries", [])?;
+    // The tenancy rows (V94–V97): the router's run ledger, the export deletion markers, the
+    // principal's cursors and the typed relations are this person's data too. Relations reference
+    // event_log, so they go before the events.
+    tx.execute("DELETE FROM relations", [])?;
+    tx.execute("DELETE FROM tool_runs", [])?;
+    tx.execute("DELETE FROM export_tombstones", [])?;
+    tx.execute("DELETE FROM principal_meta", [])?;
     // children first (FK order): provenance → commitments/open_loops → threads → people/projects.
     // `threads` holds titles, summaries and participants, so it is user data and must go too —
     // and it references projects, so it goes before them.

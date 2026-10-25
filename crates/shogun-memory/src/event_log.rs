@@ -7,6 +7,8 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::actor::{current_write, WriteContext};
+
 /// A row to append to the event log. Spatial-ready fields are optional and NULL in v1
 /// (`window_pose` / `gaze_target` are not written by v1 at all; kept in the schema per
 /// FR-MEM-12 so they never need a backward-incompatible add later).
@@ -47,6 +49,17 @@ pub fn insert(conn: &Connection, ev: &NewEvent<'_>) -> Result<i64, rusqlite::Err
     insert_with_thread(conn, ev, None)
 }
 
+/// [`insert`] as `ctx` (E2-T4): the row records `ctx.actor` and lands in `ctx.namespace`.
+/// [`insert`] itself writes as the call's current context ([`current_write`]: the owner, unless
+/// a face set one for this call).
+pub fn insert_as(
+    conn: &Connection,
+    ev: &NewEvent<'_>,
+    ctx: &WriteContext,
+) -> Result<i64, rusqlite::Error> {
+    insert_with_thread_as(conn, ev, None, ctx)
+}
+
 /// [`insert`], for a source that knows its own conversation id (an AI session id, a Gmail thread
 /// id, an issue URL). That id is what the thread is really keyed on; without it the derivation
 /// falls back to app + window title, which splits one conversation whenever the title varies —
@@ -56,8 +69,18 @@ pub fn insert_with_thread(
     ev: &NewEvent<'_>,
     native_thread_id: Option<&str>,
 ) -> Result<i64, rusqlite::Error> {
+    insert_with_thread_as(conn, ev, native_thread_id, &current_write())
+}
+
+/// [`insert_with_thread`] as `ctx` (E2-T4).
+pub fn insert_with_thread_as(
+    conn: &Connection,
+    ev: &NewEvent<'_>,
+    native_thread_id: Option<&str>,
+    ctx: &WriteContext,
+) -> Result<i64, rusqlite::Error> {
     let (content, hash) = prepare_body(ev);
-    insert_prepared(conn, ev, content.as_ref(), hash.as_ref(), native_thread_id)
+    insert_prepared(conn, ev, content.as_ref(), hash.as_ref(), native_thread_id, ctx)
 }
 
 /// Strip hidden format characters, then mask secrets. If anything was stripped, the stored
@@ -78,6 +101,7 @@ fn insert_prepared(
     content: &str,
     content_hash: &str,
     native_thread_id: Option<&str>,
+    ctx: &WriteContext,
 ) -> Result<i64, rusqlite::Error> {
     // The window title goes through the same gate as the body (PII-001).
     //
@@ -101,8 +125,8 @@ fn insert_prepared(
     conn.execute(
         "INSERT INTO event_log
            (ts, source, kind, app_bundle_id, window_title, content, content_hash,
-            last_seen_at, dwell_ms, display_id, window_bounds, thread_key)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?1, ?8, ?9, ?10, ?11)",
+            last_seen_at, dwell_ms, display_id, window_bounds, thread_key, actor, namespace)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?1, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             ev.ts,
             ev.source,
@@ -115,6 +139,8 @@ fn insert_prepared(
             ev.display_id,
             ev.window_bounds,
             thread_key,
+            ctx.actor_sql(),
+            ctx.namespace_sql(),
         ],
     )?;
     let id = conn.last_insert_rowid();
@@ -145,13 +171,34 @@ pub fn insert_or_touch(conn: &Connection, ev: &NewEvent<'_>) -> Result<(i64, boo
     insert_or_touch_with_thread(conn, ev, None)
 }
 
+/// [`insert_or_touch`] as `ctx` (E2-T4). Dedup is scoped to `ctx.namespace`: an agent's scratch
+/// row never touches (or is touched by) the same text in the world.
+pub fn insert_or_touch_as(
+    conn: &Connection,
+    ev: &NewEvent<'_>,
+    ctx: &WriteContext,
+) -> Result<(i64, bool), rusqlite::Error> {
+    insert_or_touch_with_thread_as(conn, ev, None, ctx)
+}
+
 /// [`insert_or_touch`], carrying the source's own conversation id — see [`insert_with_thread`].
 pub fn insert_or_touch_with_thread(
     conn: &Connection,
     ev: &NewEvent<'_>,
     native_thread_id: Option<&str>,
 ) -> Result<(i64, bool), rusqlite::Error> {
+    insert_or_touch_with_thread_as(conn, ev, native_thread_id, &current_write())
+}
+
+/// [`insert_or_touch_with_thread`] as `ctx` (E2-T4); dedup stays within `ctx.namespace`.
+pub fn insert_or_touch_with_thread_as(
+    conn: &Connection,
+    ev: &NewEvent<'_>,
+    native_thread_id: Option<&str>,
+    ctx: &WriteContext,
+) -> Result<(i64, bool), rusqlite::Error> {
     let (content, hash) = prepare_body(ev);
+    let namespace = ctx.namespace_sql();
     // A source that knows its own conversation id dedups **within that conversation**. Scoping
     // only by (content_hash, source) collapses two different threads that happen to carry the
     // same text — routine for automated mail ("Your build passed") — into one row, and the
@@ -163,9 +210,9 @@ pub fn insert_or_touch_with_thread(
         let existing: Option<i64> = conn
             .query_row(
                 "SELECT id FROM event_log
-                 WHERE content_hash = ?1 AND source = ?2 AND thread_key = ?3
+                 WHERE content_hash = ?1 AND source = ?2 AND thread_key = ?3 AND namespace = ?4
                  ORDER BY id DESC LIMIT 1",
-                params![hash.as_ref(), ev.source, thread_key],
+                params![hash.as_ref(), ev.source, thread_key, namespace],
                 |r| r.get(0),
             )
             .ok();
@@ -175,7 +222,7 @@ pub fn insert_or_touch_with_thread(
                 Ok((id, true))
             }
             None => Ok((
-                insert_prepared(conn, ev, content.as_ref(), hash.as_ref(), native_thread_id)?,
+                insert_prepared(conn, ev, content.as_ref(), hash.as_ref(), native_thread_id, ctx)?,
                 false,
             )),
         };
@@ -183,18 +230,18 @@ pub fn insert_or_touch_with_thread(
     let existing: Option<i64> = if APP_SCOPED_SOURCES.contains(&ev.source) {
         conn.query_row(
             "SELECT id FROM event_log
-             WHERE content_hash = ?1 AND source = ?2 AND app_bundle_id IS ?3
+             WHERE content_hash = ?1 AND source = ?2 AND app_bundle_id IS ?3 AND namespace = ?4
              ORDER BY id DESC LIMIT 1",
-            params![hash.as_ref(), ev.source, ev.app_bundle_id],
+            params![hash.as_ref(), ev.source, ev.app_bundle_id, namespace],
             |r| r.get(0),
         )
         .ok()
     } else {
         conn.query_row(
             "SELECT id FROM event_log
-             WHERE content_hash = ?1 AND source = ?2
+             WHERE content_hash = ?1 AND source = ?2 AND namespace = ?3
              ORDER BY id DESC LIMIT 1",
-            params![hash.as_ref(), ev.source],
+            params![hash.as_ref(), ev.source, namespace],
             |r| r.get(0),
         )
         .ok()
@@ -204,8 +251,34 @@ pub fn insert_or_touch_with_thread(
         touch(conn, id, ev.ts, ev.dwell_ms)?;
         Ok((id, true))
     } else {
-        Ok((insert_prepared(conn, ev, content.as_ref(), hash.as_ref(), native_thread_id)?, false))
+        Ok((insert_prepared(conn, ev, content.as_ref(), hash.as_ref(), native_thread_id, ctx)?, false))
     }
+}
+
+/// The ids among `ids` whose row is outside `scope` (E2-T5): under the default world-only scope,
+/// every event an agent wrote into its scratch namespace. Empty when scratch is included. Chunked
+/// well below SQLite's bind-variable limit.
+pub fn out_of_scope_ids(
+    conn: &Connection,
+    ids: &[i64],
+    scope: crate::actor::ReadScope,
+) -> Result<std::collections::HashSet<i64>, rusqlite::Error> {
+    let mut out = std::collections::HashSet::new();
+    if scope.include_scratch {
+        return Ok(out);
+    }
+    for chunk in ids.chunks(500) {
+        let marks = vec!["?"; chunk.len()].join(",");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id FROM event_log WHERE id IN ({marks}) AND NOT ({})",
+            scope.predicate("")
+        ))?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| row.get::<_, i64>(0))?;
+        for id in rows {
+            out.insert(id?);
+        }
+    }
+    Ok(out)
 }
 
 /// Advance one known event's recency and dwell without comparing or rewriting its text.

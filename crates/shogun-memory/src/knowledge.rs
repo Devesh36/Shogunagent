@@ -325,6 +325,7 @@ pub fn persist(
                 table,
                 &[state::Provenance::new(event_id)],
                 Some(&candidate.quote),
+                &crate::actor::current_write(),
                 |tx| {
                     if candidate.kind == Kind::Person {
                         tx.execute("INSERT INTO people(display_name,relationship_summary,interaction_channel,extraction_key,confidence,base_confidence,created_at,updated_at,last_evidence_at)

@@ -262,6 +262,19 @@ pub fn update_state(
     patch: &StatePatch,
     now: i64,
 ) -> Result<bool, EditError> {
+    update_state_as(conn, table, id, patch, now, &crate::actor::current_write())
+}
+
+/// [`update_state`] as `ctx` (E2-T4): the row's `actor_last` records the editor. [`update_state`]
+/// itself writes as the call's current context ([`crate::actor::current_write`]).
+pub fn update_state_as(
+    conn: &mut Connection,
+    table: StateTable,
+    id: i64,
+    patch: &StatePatch,
+    now: i64,
+    ctx: &crate::actor::WriteContext,
+) -> Result<bool, EditError> {
     if patch.is_empty() {
         return Err(EditError::Invalid("invalid empty edit"));
     }
@@ -382,12 +395,14 @@ pub fn update_state(
     let n = sets.len();
     sql.push_str(&format!(
         "confidence = 1.0, base_confidence = 1.0, user_pinned = 1, user_edited_at = ?{a},
-         updated_at = ?{a} WHERE id = ?{b}",
+         updated_at = ?{a}, actor_last = ?{c} WHERE id = ?{b}",
         a = n + 1,
-        b = n + 2
+        b = n + 2,
+        c = n + 3
     ));
     values.push(Box::new(now));
     values.push(Box::new(id));
+    values.push(Box::new(ctx.actor_sql().to_string()));
     let refs: Vec<&dyn ToSql> = values.iter().map(|v| v.as_ref()).collect();
     tx.execute(&sql, refs.as_slice())?;
 
@@ -456,6 +471,17 @@ pub fn create_state(
     req: &CreateRequest,
     now: i64,
 ) -> Result<Option<i64>, EditError> {
+    create_state_as(conn, req, now, &crate::actor::current_write())
+}
+
+/// [`create_state`] as `ctx` (E2-T4): the new row records `ctx.actor` and lands in
+/// `ctx.namespace` (V93).
+pub fn create_state_as(
+    conn: &mut Connection,
+    req: &CreateRequest,
+    now: i64,
+    ctx: &crate::actor::WriteContext,
+) -> Result<Option<i64>, EditError> {
     let description = clean_text(&req.description, MAX_TEXT_CHARS, false)?
         .ok_or(EditError::Invalid("invalid empty text"))?;
     let tx = conn.savepoint()?;
@@ -470,17 +496,18 @@ pub fn create_state(
         StateTable::Commitments => tx.execute(
             "INSERT INTO commitments
                (direction, counterparty_id, description, due_at, status, confidence, base_confidence,
-                created_at, updated_at, last_evidence_at, user_pinned, user_edited_at, wording_edited)
-             VALUES ('mine', ?1, ?2, ?3, 'open', 1.0, 1.0, ?4, ?4, ?4, 1, ?4, 1)",
-            params![req.person_id, description, req.due_at, now],
+                created_at, updated_at, last_evidence_at, user_pinned, user_edited_at, wording_edited,
+                actor_last, namespace)
+             VALUES ('mine', ?1, ?2, ?3, 'open', 1.0, 1.0, ?4, ?4, ?4, 1, ?4, 1, ?5, ?6)",
+            params![req.person_id, description, req.due_at, now, ctx.actor_sql(), ctx.namespace_sql()],
         )?,
         _ => tx.execute(
             "INSERT INTO open_loops
                (kind, description, counterparty_id, opened_at, staleness_days, status, confidence,
                 base_confidence, created_at, updated_at, last_evidence_at, user_pinned,
-                user_edited_at, wording_edited)
-             VALUES ('other', ?1, ?2, ?3, 0, 'open', 1.0, 1.0, ?3, ?3, ?3, 1, ?3, 1)",
-            params![description, req.person_id, now],
+                user_edited_at, wording_edited, actor_last, namespace)
+             VALUES ('other', ?1, ?2, ?3, 0, 'open', 1.0, 1.0, ?3, ?3, ?3, 1, ?3, 1, ?4, ?5)",
+            params![description, req.person_id, now, ctx.actor_sql(), ctx.namespace_sql()],
         )?,
     };
     let id = tx.last_insert_rowid();
@@ -497,6 +524,19 @@ pub fn delete_state(
     table: StateTable,
     id: i64,
     now: i64,
+) -> Result<bool, EditError> {
+    delete_state_as(conn, table, id, now, &crate::actor::current_write())
+}
+
+/// [`delete_state`] as `ctx` (E2-T4): the deletion leaves an `export_tombstones` marker (V95)
+/// naming the table, the id and the actor, so an incremental export or sync peer retires its
+/// copy; the deleted content itself is never kept.
+pub fn delete_state_as(
+    conn: &mut Connection,
+    table: StateTable,
+    id: i64,
+    now: i64,
+    ctx: &crate::actor::WriteContext,
 ) -> Result<bool, EditError> {
     let tx = conn.savepoint()?;
     let key: Option<Option<String>> = match table {
@@ -522,9 +562,27 @@ pub fn delete_state(
     if let Some(key) = key {
         suppress(&tx, table, &key, "deleted", now)?;
     }
+    tombstone(&tx, table.as_str(), id, now, ctx)?;
     tx.commit()?;
     let _ = crate::search_documents::project_source_after_write(conn, &source_ref(table, id), now);
     Ok(true)
+}
+
+/// Record a deletion for the export format and sync (V95): `(kind, id)` with the time and the
+/// actor as the reason. One marker per row; a repeat refreshes the time. Never the content.
+pub(crate) fn tombstone(
+    conn: &Connection,
+    kind: &str,
+    id: i64,
+    now: i64,
+    ctx: &crate::actor::WriteContext,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO export_tombstones (kind, id, deleted_at, reason) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (kind, id) DO UPDATE SET deleted_at = excluded.deleted_at, reason = excluded.reason",
+        params![kind, id, now, format!("deleted_by:{}", ctx.actor_sql())],
+    )?;
+    Ok(())
 }
 
 /// Caller owns the transaction and the user-intent policy; maintenance must not create tombstones.

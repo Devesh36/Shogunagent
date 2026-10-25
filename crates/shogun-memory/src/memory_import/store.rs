@@ -31,6 +31,19 @@ pub fn commit(
     via: Via,
     now: i64,
 ) -> Result<CommitOutcome, ImportError> {
+    commit_as(conn, request, via, now, &crate::actor::current_write())
+}
+
+/// [`commit`] as `ctx` (E2-T4): the people rows an import creates record `ctx.actor` as their
+/// writer and land in `ctx.namespace` (V93). [`commit`] itself writes as the call's current
+/// context ([`crate::actor::current_write`]).
+pub fn commit_as(
+    conn: &mut Connection,
+    request: &ImportRequest,
+    via: Via,
+    now: i64,
+    ctx: &crate::actor::WriteContext,
+) -> Result<CommitOutcome, ImportError> {
     let selection = request
         .selection
         .as_ref()
@@ -94,7 +107,7 @@ pub fn commit(
             ProposedAction::New
                 if request.people_to_state && p.item.section == Section::Entity && p.item.kind.as_deref() == Some("person") =>
             {
-                (Some("people"), Some(insert_person(&tx, import_id, p, now)?))
+                (Some("people"), Some(insert_person(&tx, import_id, p, now, ctx)?))
             }
             _ => (None, None),
         };
@@ -138,13 +151,15 @@ fn insert_person(
     import_id: i64,
     p: &super::preview::ProposedItem,
     now: i64,
+    ctx: &crate::actor::WriteContext,
 ) -> Result<i64, rusqlite::Error> {
     let aliases = (!p.item.aliases.is_empty())
         .then(|| serde_json::to_string(&p.item.aliases).unwrap_or_else(|_| "[]".into()));
     tx.execute(
         "INSERT INTO people (display_name, aliases, relationship_summary, extraction_key, confidence,
-                             base_confidence, user_pinned, created_at, updated_at, last_evidence_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1, ?6, ?6, ?6)",
+                             base_confidence, user_pinned, created_at, updated_at, last_evidence_at,
+                             actor_last, namespace)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, 1, ?6, ?6, ?6, ?7, ?8)",
         params![
             p.item.name,
             aliases,
@@ -152,6 +167,8 @@ fn insert_person(
             format!("{PEOPLE_KEY_PREFIX}{import_id}:{}", p.item.id),
             PEOPLE_CONFIDENCE,
             now,
+            ctx.actor_sql(),
+            ctx.namespace_sql(),
         ],
     )?;
     let id = tx.last_insert_rowid();

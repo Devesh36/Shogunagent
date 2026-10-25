@@ -16,7 +16,7 @@ mod terms;
 
 pub use excerpt::{excerpt, snippet, SNIPPET_CHARS};
 pub use federated::{
-    event_places, search_federated, CanonicalEvidenceId, ComponentRanks, EventPlace, FederatedHit,
+    event_places, hit_event_ids, search_federated, CanonicalEvidenceId, ComponentRanks, EventPlace, FederatedHit,
     FederatedSearchOptions, FederatedSearchResult, FederatedSource, FederatedSourceId,
     FederatedSourceKind, MatchQualitySummary, TierMetadata, MIN_FACT_CONFIDENCE,
 };
