@@ -3787,7 +3787,7 @@
           "mcp"
         ],
         "summary": "The metered MCP Streamable HTTP endpoint. Classified from headers, never from the body.",
-        "description": "Sequence: key → classify → quote → reserve → forward → settle once (2xx: the quote; anything else: 0). Tool names today: memory.search, memory.get_context, memory.get_context_pack, memory.get_events, memory.read_session, memory.get_wrap, memory.get_periods, memory.recall, calendar.upcoming, profile.whoami, state.commitments.list, state.open_loops.list, state.people.list, state.projects.list, state.people.get, state.projects.get, wiki.evidence, actions.status, memory.append_note, memory.ingest, actions.execute. Annotations per tool are in the server card (https://api.test/.well-known/mcp/server-card.json).",
+        "description": "Sequence: key (401 with WWW-Authenticate first) → classify → quote → reserve → relay to the principal's core as a stream → settle once from the core's reply Mcp-Quantity (capped at the reservation; 0 for a JSON-RPC error, a refusal, an idempotent replay, a non-2xx or a reply without it; reads are always 0). Tool names today: memory.search, memory.get_context, memory.get_context_pack, memory.get_events, memory.read_session, memory.get_wrap, memory.get_periods, memory.recall, calendar.upcoming, profile.whoami, state.commitments.list, state.open_loops.list, state.people.list, state.projects.list, state.people.get, state.projects.get, wiki.evidence, actions.status, memory.append_note, memory.ingest, actions.execute. Annotations per tool are in the server card (https://api.test/.well-known/mcp/server-card.json).",
         "operationId": "get_mcp",
         "parameters": [
           {
@@ -3856,7 +3856,7 @@
             }
           },
           "400": {
-            "description": "invalid_metering_header | run_price_unavailable",
+            "description": "invalid_metering_header | run_price_unavailable; the core's JSON-RPC missing_header / mcp_method_mismatch / mcp_name_mismatch",
             "content": {
               "application/json": {
                 "schema": {
@@ -3866,7 +3866,7 @@
             }
           },
           "401": {
-            "description": "Invalid key — next_action register",
+            "description": "Invalid key — next_action register; WWW-Authenticate names the protected-resource metadata",
             "content": {
               "application/json": {
                 "schema": {
@@ -3895,8 +3895,18 @@
               }
             }
           },
+          "421": {
+            "description": "wrong_region | wrong_shard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "upstream_unavailable | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After",
+            "description": "upstream_unavailable | principal_not_provisioned | core_rejected_gateway | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After",
             "content": {
               "application/json": {
                 "schema": {
@@ -3920,7 +3930,7 @@
           "mcp"
         ],
         "summary": "The metered MCP Streamable HTTP endpoint. Classified from headers, never from the body.",
-        "description": "Sequence: key → classify → quote → reserve → forward → settle once (2xx: the quote; anything else: 0). Tool names today: memory.search, memory.get_context, memory.get_context_pack, memory.get_events, memory.read_session, memory.get_wrap, memory.get_periods, memory.recall, calendar.upcoming, profile.whoami, state.commitments.list, state.open_loops.list, state.people.list, state.projects.list, state.people.get, state.projects.get, wiki.evidence, actions.status, memory.append_note, memory.ingest, actions.execute. Annotations per tool are in the server card (https://api.test/.well-known/mcp/server-card.json).",
+        "description": "Sequence: key (401 with WWW-Authenticate first) → classify → quote → reserve → relay to the principal's core as a stream → settle once from the core's reply Mcp-Quantity (capped at the reservation; 0 for a JSON-RPC error, a refusal, an idempotent replay, a non-2xx or a reply without it; reads are always 0). Tool names today: memory.search, memory.get_context, memory.get_context_pack, memory.get_events, memory.read_session, memory.get_wrap, memory.get_periods, memory.recall, calendar.upcoming, profile.whoami, state.commitments.list, state.open_loops.list, state.people.list, state.projects.list, state.people.get, state.projects.get, wiki.evidence, actions.status, memory.append_note, memory.ingest, actions.execute. Annotations per tool are in the server card (https://api.test/.well-known/mcp/server-card.json).",
         "operationId": "post_mcp",
         "parameters": [
           {
@@ -3989,7 +3999,7 @@
             }
           },
           "400": {
-            "description": "invalid_metering_header | run_price_unavailable",
+            "description": "invalid_metering_header | run_price_unavailable; the core's JSON-RPC missing_header / mcp_method_mismatch / mcp_name_mismatch",
             "content": {
               "application/json": {
                 "schema": {
@@ -3999,7 +4009,7 @@
             }
           },
           "401": {
-            "description": "Invalid key — next_action register",
+            "description": "Invalid key — next_action register; WWW-Authenticate names the protected-resource metadata",
             "content": {
               "application/json": {
                 "schema": {
@@ -4028,8 +4038,18 @@
               }
             }
           },
+          "421": {
+            "description": "wrong_region | wrong_shard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "upstream_unavailable | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After",
+            "description": "upstream_unavailable | principal_not_provisioned | core_rejected_gateway | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After",
             "content": {
               "application/json": {
                 "schema": {
@@ -4053,7 +4073,7 @@
           "mcp"
         ],
         "summary": "The metered MCP Streamable HTTP endpoint. Classified from headers, never from the body.",
-        "description": "Sequence: key → classify → quote → reserve → forward → settle once (2xx: the quote; anything else: 0). Tool names today: memory.search, memory.get_context, memory.get_context_pack, memory.get_events, memory.read_session, memory.get_wrap, memory.get_periods, memory.recall, calendar.upcoming, profile.whoami, state.commitments.list, state.open_loops.list, state.people.list, state.projects.list, state.people.get, state.projects.get, wiki.evidence, actions.status, memory.append_note, memory.ingest, actions.execute. Annotations per tool are in the server card (https://api.test/.well-known/mcp/server-card.json).",
+        "description": "Sequence: key (401 with WWW-Authenticate first) → classify → quote → reserve → relay to the principal's core as a stream → settle once from the core's reply Mcp-Quantity (capped at the reservation; 0 for a JSON-RPC error, a refusal, an idempotent replay, a non-2xx or a reply without it; reads are always 0). Tool names today: memory.search, memory.get_context, memory.get_context_pack, memory.get_events, memory.read_session, memory.get_wrap, memory.get_periods, memory.recall, calendar.upcoming, profile.whoami, state.commitments.list, state.open_loops.list, state.people.list, state.projects.list, state.people.get, state.projects.get, wiki.evidence, actions.status, memory.append_note, memory.ingest, actions.execute. Annotations per tool are in the server card (https://api.test/.well-known/mcp/server-card.json).",
         "operationId": "delete_mcp",
         "parameters": [
           {
@@ -4122,7 +4142,7 @@
             }
           },
           "400": {
-            "description": "invalid_metering_header | run_price_unavailable",
+            "description": "invalid_metering_header | run_price_unavailable; the core's JSON-RPC missing_header / mcp_method_mismatch / mcp_name_mismatch",
             "content": {
               "application/json": {
                 "schema": {
@@ -4132,7 +4152,7 @@
             }
           },
           "401": {
-            "description": "Invalid key — next_action register",
+            "description": "Invalid key — next_action register; WWW-Authenticate names the protected-resource metadata",
             "content": {
               "application/json": {
                 "schema": {
@@ -4161,8 +4181,18 @@
               }
             }
           },
+          "421": {
+            "description": "wrong_region | wrong_shard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "503": {
-            "description": "upstream_unavailable | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After",
+            "description": "upstream_unavailable | principal_not_provisioned | core_rejected_gateway | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After",
             "content": {
               "application/json": {
                 "schema": {

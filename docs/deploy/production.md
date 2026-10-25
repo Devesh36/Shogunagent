@@ -59,13 +59,22 @@ required.
 | KMS | AWS KMS, GCP Cloud KMS or Vault Transit | one key per region | wraps each principal's data key | — |
 | Providers | OpenAI, Anthropic, Deepgram, TypeSafe, Groq, Stripe, Monid | their consoles | per-project budgets and hard limits (`apps/api/DEPLOY.md` §3) | — |
 
-**Open architecture item (decided with E34, owner to confirm):** the sidecar binds `127.0.0.1` only
-and refuses a non-loopback `Host` (`deploy/README.md` §1), and a Worker cannot reach a pod's
-loopback. Before `SHOGUN_SIDECAR_URL` is set on the Worker, choose the private path from the Worker to
-each region's sidecars (for example a Cloudflare Tunnel or Workers VPC service terminating inside the
-pod network, with the sidecar's operator bearer on every call), or front the Worker with the Node
-gateway that already runs in the sidecar's pod (`deploy/helm`). Until then the hosted `/mcp` answers
-`503 upstream_unavailable` and the enterprise operations that need the sidecar answer 503.
+**Open architecture item (E34 built the seam; owner to choose the path):** the sidecar binds
+`127.0.0.1` only and refuses a non-loopback `Host` (`deploy/README.md` §1), and a Worker cannot reach
+a pod's loopback. The `/mcp` relay (`apps/api/src/mcp-proxy.ts`) therefore takes its transport as a
+seam, and only these are supported:
+
+| Option | Settings | Notes |
+|---|---|---|
+| A. Node gateway in the sidecar's pod (**recommended for launch**) | in the pod: `SHOGUN_SIDECAR_URL=http://127.0.0.1:7464` + a bearer source; route the public `/mcp` (and only it) to the regional pod's gateway, by principal (consistent hash on the key, or the 421 `wrong_shard` retry with `SHOGUN_SHARD`) | No new network path: the Helm chart and compose file already run the gateway next to the sidecar on loopback. Same code, same Postgres ledger (`RELAY_DATABASE_URL`). The Worker keeps everything else. |
+| B. Worker → Workers VPC service / service binding → Cloudflare Tunnel connector in the pod | Worker: `SHOGUN_SIDECAR_BINDING=<binding name>` (+ the binding in `wrangler.jsonc`) + a bearer source; in the pod: `cloudflared` forwarding to `127.0.0.1:7464` with a loopback `Host` | Keeps `/mcp` on the Worker. Needs one tunnel (or one VPC service) per shard pod and the binding provisioned per region; no public origin. |
+| C. Worker → private origin URL | `SHOGUN_SIDECAR_URL=<origin>` + a bearer source | Only for an origin reachable solely by the Worker (never a public hostname): the sidecar bearer is the only credential on the path. Not recommended. |
+
+With none configured the hosted `/mcp` answers `503 upstream_unavailable` (`next_action:
+retry_after`) before anything is reserved, and the enterprise operations that need the sidecar
+answer 503. The bearer the relay presents is per principal (`SHOGUN_SIDECAR_PRINCIPAL_TOKENS`, or
+the derived `sgw1` bearer from `SHOGUN_SIDECAR_BEARER_SECRET`, which needs the sidecar resolver
+listed in the E34 plan row); contract in `docs/api/billing.md` "Hosted `/mcp`".
 
 ### 1.1 Hostnames (owner decision)
 
@@ -380,7 +389,11 @@ Agent API (`AGENT_API_ENABLED=1`):
 | `PAYOUTS_STATE_SECRET` | secret | no | ≥ 32 characters; provider payouts (needs `provider-payouts.sql`) |
 | `PAYOUT_MIN_USD` | var | no | default 10 |
 | `SHOGUN_APPROVAL_SIGNING_KEY` | secret | no | ≥ 32 characters, same value as the sidecar's; turns remote approvals on |
-| `SHOGUN_SIDECAR_URL` | var | with approvals or enterprise sidecar ops | the sidecar's base URL (open item, §1) |
+| `SHOGUN_SIDECAR_URL` | var | with approvals, enterprise sidecar ops or the `/mcp` relay | the sidecar's base URL (open item, §1); with `SHOGUN_SIDECAR_BINDING` only a label |
+| `SHOGUN_SIDECAR_BINDING` | var | no | E34: name of a Workers service / VPC binding the `/mcp` relay reaches the sidecar through (option B, §1); named but unbound = `/mcp` stays 503 |
+| `SHOGUN_SIDECAR_PRINCIPAL_TOKENS` | secret | one of the two bearer sources turns the `/mcp` relay on | E34: the sidecar's `SHOGUN_PRINCIPAL_TOKENS` (`principal:token[:agent_id],…`); presented instead of the agent's key |
+| `SHOGUN_SIDECAR_BEARER_SECRET` | secret | one of the two bearer sources turns the `/mcp` relay on | E34: ≥ 32 characters, same value as the sidecar's; derives `sgw1.<principal>.<key>.<mac>` (needs the sidecar resolver) |
+| `SHOGUN_SHARD` | var | no | E34: `<index>/<count>` of this gateway's sidecar replica; other principals get `421 wrong_shard` (`deploy/README.md` §5.2) |
 | `WEBHOOK_SIGNING_SECRET` | secret | with approvals | ≥ 32 characters |
 | `SLACK_BOT_TOKEN` | secret | no (trio) | the three Slack settings together or none |
 | `SLACK_SIGNING_SECRET` | secret | no (trio) | |

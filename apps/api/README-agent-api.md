@@ -167,18 +167,22 @@ X-Usage-Cost-Micro-Usd: 6000
 X-Latency-Ms: 41
 ```
 
-The body is the core's, relayed untouched. Sequence inside the gateway: verify key → classify →
-quote → **reserve** (wallet and the four cap counters in one transaction) → forward → **settle**
-once (2xx: the quote; anything else: 0, so a failed call costs nothing). A free call writes a
-settled receipt at cost 0.
+The body is the core's, relayed untouched as a stream. Sequence inside the gateway: verify key
+(`401` with `WWW-Authenticate` first, whatever else the request says) → classify → quote → **reserve** (wallet and the four cap
+counters in one transaction) → relay to the principal's sidecar → **settle** once from the reply's
+`Mcp-Quantity` (the units the core took, capped at the reservation; `0` for a JSON-RPC error, a
+refusal or an idempotent replay, which travel as HTTP 200; a non-2xx or a reply without the header
+settles at 0). `X-Usage-Quantity` is the settled figure. A free call writes a settled receipt at
+cost 0. Contract and relay: [billing.md "Hosted `/mcp`"](../../docs/api/billing.md).
 
 A dry run answers `200 { "dry_run": true, "quote": { "unit", "quantity", "cost_micro_usd" },
 "sufficient": true, "balance_micro_usd": …, "usage": {…,"cost_micro_usd":0}, "latency_ms" }`.
-The real call then settles at exactly `quote.cost_micro_usd`.
+The real call then settles at exactly `quote.cost_micro_usd` when the core takes every unit.
 
-Refusals: `401` (key), `403 insufficient_scope`, `402 payment_required | cap_exceeded`
-(`docs/api/402.md`), `503 upstream_unavailable | wallet_unavailable | capacity_exhausted`
-(the company's global daily breaker; `Retry-After` to UTC midnight).
+Refusals: `401` (key), `400 invalid_metering_header` (and the core's JSON-RPC `400 missing_header`), `403 insufficient_scope`,
+`402 payment_required | cap_exceeded` (`docs/api/402.md`), `421 wrong_shard`,
+`503 upstream_unavailable | principal_not_provisioned | core_rejected_gateway | wallet_unavailable | capacity_exhausted`
+(the last is the company's global daily breaker; `Retry-After` to UTC midnight).
 
 ## 3. Quote
 
@@ -331,8 +335,11 @@ tables.
 - The periodic sweep deletes expired PoW rows and settled receipts older than 400 days;
   unsettled receipts are never deleted (they hold money).
 
-Not in this slice: the core behind `/mcp` (E4 wires `mcpUpstream`; until then `/mcp` answers
-`503 upstream_unavailable` before reserving), the router's `runPricer`, storage billing (the
+The core behind `/mcp` is the sidecar relay (E34, `src/mcp-proxy.ts`): on with
+`SHOGUN_SIDECAR_URL` (or, on the Worker, `SHOGUN_SIDECAR_BINDING`) and
+`SHOGUN_SIDECAR_PRINCIPAL_TOKENS` or `SHOGUN_SIDECAR_BEARER_SECRET` (optionally `SHOGUN_SHARD`;
+transport options in `docs/deploy/production.md` §1); without them `/mcp` answers `503 upstream_unavailable` before
+reserving. Not in this slice: the router's `runPricer`, storage billing (the
 rate is published; the sweep that books it comes with the core's usage report), and webhook
 delivery of the billing events (`wallet.low_balance`, `cap.reached` go to the in-memory notifier
 until E15 adds per-principal webhooks; shapes in `docs/api/billing.md`).

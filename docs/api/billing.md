@@ -1,7 +1,8 @@
 # Billing: statements, commits, adjustments and events
 
 How the hosted gateway bills beyond the per-call wallet of `docs/api/402.md`: monthly statements,
-annual commit contracts, refunds and credits, the ShogunAI Pro bundle, and the two billing events.
+annual commit contracts, refunds and credits, how a hosted `/mcp` call is relayed and settled,
+the ShogunAI Pro bundle, and the two billing events.
 Implementation: `apps/api/src/billing/` (`ledger.ts` rules, `routes.ts` routes, `jobs.ts` sweep
 jobs, `notify.ts` events); tests: `apps/api/test/billing.test.ts`. Plan: E19 and E14-T3. Amounts
 are integer micro-USD (1 USD = 1,000,000). Reads, export and deletion are free (invariant 10).
@@ -84,6 +85,86 @@ While a commit is active:
   `dispute:<id>`. Resolving twice changes nothing.
 
 Admin routes take an `admin` agent key, never an OAuth access token.
+
+## Hosted `/mcp` (E34)
+
+`/mcp` on the hosted gateway is the agent's MCP endpoint (Streamable HTTP, MCP 2026-07-28). The
+gateway authenticates, meters and relays; the principal's Rust sidecar (`shogun-api --multi`) runs
+the call against the principal's store. Implementation: `apps/api/src/mcp-proxy.ts` (relay),
+`apps/api/src/metering.ts` (`metered`, `settledQuantity`); tests: `apps/api/test/mcp-relay.test.ts`.
+
+### Sequence
+
+1. **Authenticate.** No valid agent key or OAuth access token: `401` with
+   `WWW-Authenticate: Bearer realm="shogunagent", resource_metadata="<base>/.well-known/oauth-protected-resource/mcp"`
+   (the pointer is present when OAuth is served), before any other header is looked at.
+2. **Classify** from `Mcp-Method`, `Mcp-Name`, `Mcp-Quantity`. Region (`421 wrong_region`), scope
+   (`403 insufficient_scope`), dry run. Missing or mismatched `Mcp-Method` / `Mcp-Name` are refused
+   by the core (JSON-RPC `400 missing_header` / `*_mismatch`) before anything runs, and the refusal
+   settles at 0; a `POST` without `Mcp-Method` is classified as free protocol traffic.
+3. **Can this gateway serve the principal?** No sidecar configured: `503 upstream_unavailable`
+   (`next_action: retry_after`). The principal's store lives on another replica (`SHOGUN_SHARD`):
+   `421 wrong_shard`. No sidecar bearer for the principal: `503 principal_not_provisioned`
+   (`next_action: contact_operator`). Nothing is reserved in any of these.
+4. **Reserve** the quote (wallet or commit, the four caps, the global breaker; `402` as in
+   `docs/api/402.md`).
+5. **Relay** to `<SHOGUN_SIDECAR_URL>/mcp`, through the configured transport (global `fetch`, or a
+   Workers binding with `SHOGUN_SIDECAR_BINDING`; options in `docs/deploy/production.md` §1): the request body is handed on as a stream and the reply
+   body comes back as a stream; neither is read, buffered, logged or stored by the gateway
+   (invariants 1 and 2). Request headers passed: `Content-Type`, `Accept`, `Mcp-Method`,
+   `Mcp-Name`, `Mcp-Protocol-Version`, `Last-Event-ID`, `Idempotency-Key`; the agent's
+   `Authorization` is replaced by the principal's sidecar bearer, everything else stays at the
+   gateway. Reply headers passed: `Content-Type`, `Cache-Control`, `Mcp-Method`, `Mcp-Name`,
+   `Mcp-Quantity`, `Mcp-Protocol-Version`, `Allow`, `Retry-After`. The sidecar refusing the
+   gateway's bearer (`401`/`403`) is answered `503 core_rejected_gateway`, never as a `401` to the
+   agent. No reply headers within 30 s, or no connection: `503 upstream_unavailable`, nothing charged.
+6. **Settle** once, from the reply's headers only (below), and add `X-Receipt-Id`, `X-Usage-*`,
+   `X-Latency-Ms`.
+
+### The settlement contract (gateway ↔ sidecar)
+
+The sidecar answers JSON-RPC errors, `isError` tool results and idempotent replays with HTTP
+`200`. The gateway does not read the body to tell them apart; the sidecar says what it did in one
+reply header:
+
+| Reply | Settles at |
+|---|---|
+| non-`2xx` | 0 |
+| `2xx` with `Mcp-Quantity: n` (a whole number) | `min(n, reserved quantity)` × the quote's unit price (commit discount applied as usual) |
+| `2xx` without `Mcp-Quantity`, or with anything but a whole number | 0, logged as `event=settle_quantity_missing` |
+| any reply to a free call (`read`, `protocol`) | 0, whatever the header says (invariant 10) |
+
+What the sidecar MUST send on every reply to a billable `tools/call` (`ingest`, `model_op`,
+`run` units):
+
+- `Mcp-Quantity: <n>` where `n` is the units the core actually took: for `memory.ingest` the
+  events/turns newly stored (`usage.quantity` of the result), for `memory.append_note` 1 when a
+  note was written, for any other billable tool 1 when it ran;
+- `Mcp-Quantity: 0` for a JSON-RPC error, an `isError` result, a refusal (L2 `input_required`,
+  L3 `approval_required`) and an idempotent replay that stored nothing new.
+
+The gateway bills only what the core confirmed: a sidecar that omits the header is never billed
+more than 0 for the call. An x402-funded call (`docs/api/402.md`) is captured only when `n`
+equals the reserved quantity, because an `exact` payment cannot be captured in part.
+
+### How the gateway names the principal to the sidecar
+
+The sidecar resolves a bearer to a principal and an actor. The gateway presents one of:
+
+- **A listed token** — `SHOGUN_SIDECAR_PRINCIPAL_TOKENS`, the same `principal:token[:agent_id],…`
+  list the sidecar is given as `SHOGUN_PRINCIPAL_TOKENS`. Works with the current sidecar; suited
+  to a fixed set of principals (BYOC, evaluation).
+- **A derived bearer** — with `SHOGUN_SIDECAR_BEARER_SECRET` (≥ 32 characters, the same value on
+  both sides): `sgw1.<principal_id>.<key_id>.<mac>`, `mac` = base64url (no padding) of
+  HMAC-SHA256(secret, `"shogun/sidecar-bearer/v1\n" + principal_id + "\n" + key_id`). The sidecar
+  must verify the MAC in constant time, take the principal from the token and record writes as
+  `agent:<key_id>`. Any self-registered principal works without provisioning. **Not in the sidecar
+  yet** (a `PrincipalResolver` for `sgw1` tokens, accepted by its token registry).
+
+A listed token wins over a derived one. Sharding (`deploy/README.md` §5.2): each gateway talks only
+to its own pod's loopback sidecar; with `SHOGUN_SHARD=<index>/<count>` it refuses a principal whose
+`fnv1a64(principal_id) mod count` is another replica, so a misrouted request never creates a stray
+store. Routing a principal to its replica stays the ingress's job.
 
 ## Router runs (E32)
 
