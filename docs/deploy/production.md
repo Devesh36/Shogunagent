@@ -38,8 +38,8 @@ required.
         │  HYPERDRIVE (caching off)        ◄────────────────┘  ROUTER_SETTLEMENT_TOKEN)
         │                                                   │  HYPERDRIVE (caching off)
         ▼                                                   ▼
-     Postgres: schema `relay`, role `shogun_relay`   Postgres: role of the router (outbox only)
-     (ledger, keys hashed, wallet, receipts, OAuth   (router_settlement_outbox; no body, no actor)
+     Postgres: schema `relay`, role `shogun_relay`   Postgres: role of the router (outbox, idempotency)
+     (ledger, keys hashed, wallet, receipts, OAuth   (router_settlement_outbox, router_run_idempotency; no body)
       hashes, tenants; never a body)
         │
         │  SHOGUN_SIDECAR_URL + SHOGUN_SIDECAR_ADMIN_TOKEN (Team sync, audit export, purges,
@@ -118,15 +118,16 @@ refuses a store it cannot unwrap.
 
 1. Relay role and schema exactly as `apps/api/DEPLOY.md` §1 (`shogun_relay`, `NOINHERIT`,
    `statement_timeout = '5s'`, schema `relay`, no grant in `public`).
-2. Router role: a second login role that owns only the outbox, the same shape (its own schema, e.g.
+2. Router role: a second login role that owns only the outbox and the run idempotency table, the same shape (its own schema, e.g.
    `router`, `search_path` set on the role, no grant in `public` or `relay`). The router and the relay
    share nothing but the settlement HTTP route (`apps/router/sql/settlement-outbox-permissions.sql`).
    They may be the same Postgres project or separate ones.
 
 ### Step 2 — SQL files, in this order
 
-Every file is provisioning and additive only, and all but one are idempotent (`IF NOT EXISTS`; see below). Apply as the owning role
-with its schema on the path:
+Every file is provisioning and additive only, and every one is idempotent: re-running any of them
+changes nothing (`IF NOT EXISTS`, and guarded `CREATE POLICY` in `live-store-access.sql`). Apply as
+the owning role with its schema on the path:
 
 ```sh
 psql "<relay connection string as shogun_relay>" -v ON_ERROR_STOP=1 -c 'SET search_path = relay' -f <file>
@@ -141,29 +142,34 @@ psql "<relay connection string as shogun_relay>" -v ON_ERROR_STOP=1 -c 'SET sear
 | 5 | `apps/api/sql/asr-provider-usage.sql` | `shogun_relay` | with 3 | provider counter floors; after 3 |
 | 6 | `apps/api/sql/agent-keys.sql` | `shogun_relay` | before `AGENT_API_ENABLED=1` | principals, keys (hashed), wallet, receipts, E19 billing tables |
 | 7 | `apps/api/sql/agent-keys-permissions.sql` | `shogun_relay` | with 6 | after 6 |
-| 8 | `apps/api/sql/agent-oauth.sql` | `shogun_relay` | before `AGENT_OAUTH_SECRET` is set; before 13 | after 6 (references principals) |
+| 8 | `apps/api/sql/agent-oauth.sql` | `shogun_relay` | before `AGENT_OAUTH_SECRET` is set; before 16 | after 6 (references principals) |
 | 9 | `apps/api/sql/agent-oauth-permissions.sql` | `shogun_relay` | with 8 | after 8 |
 | 10 | `apps/api/sql/approval-webhooks.sql` | `shogun_relay` | before `SHOGUN_APPROVAL_SIGNING_KEY` is set | outbound approval webhooks |
-| 11 | `apps/api/sql/provider-payouts.sql` | `shogun_relay` | before `PAYOUTS_STATE_SECRET` is set | provider ledger (E29) |
-| 12 | `apps/api/sql/x402-payments.sql` | `shogun_relay` | **only** if `X402_ENABLED=1`, which stays off (§9) | x402 replay guard |
-| 13 | `apps/api/sql/enterprise.sql` | `shogun_relay` | before `ENTERPRISE_ENABLED=1` | after 6 and 8 |
-| 14 | `apps/api/sql/enterprise-permissions.sql` | `shogun_relay` | with 13 | after 13 |
-| 15 | `apps/api/sql/live-store.sql` | `shogun_relay` | before `LIVE_AI_ENABLED=1` | live lane admission (#1101) |
-| 16 | `apps/api/sql/live-store-access.sql` | `shogun_relay` | with 15 | after 15 |
-| 17 | `apps/api/sql/connector-tokens.sql` | `shogun_relay` | optional today | nothing reads it yet (hosted connector token store) |
-| 18 | `apps/router/sql/settlement-outbox.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | the durable outbox (E33) |
-| 19 | `apps/router/sql/settlement-outbox-permissions.sql` | router role | with 18 | after 18 |
+| 11 | `apps/api/sql/approval-webhooks-permissions.sql` | `shogun_relay` | with 10 | RLS on, nothing for `PUBLIC` / `anon` / `authenticated`; after 10 (E48) |
+| 12 | `apps/api/sql/provider-payouts.sql` | `shogun_relay` | before `PAYOUTS_STATE_SECRET` is set | provider ledger (E29) |
+| 13 | `apps/api/sql/provider-payouts-permissions.sql` | `shogun_relay` | with 12 | after 12 (E48) |
+| 14 | `apps/api/sql/x402-payments.sql` | `shogun_relay` | **only** if `X402_ENABLED=1`, which stays off (§9) | x402 replay guard |
+| 15 | `apps/api/sql/x402-payments-permissions.sql` | `shogun_relay` | with 14 | after 14 (E48) |
+| 16 | `apps/api/sql/enterprise.sql` | `shogun_relay` | before `ENTERPRISE_ENABLED=1` | after 6 and 8 |
+| 17 | `apps/api/sql/enterprise-permissions.sql` | `shogun_relay` | with 16 | after 16 |
+| 18 | `apps/api/sql/live-store.sql` | `shogun_relay` | before `LIVE_AI_ENABLED=1` | live lane admission (#1101) |
+| 19 | `apps/api/sql/live-store-access.sql` | `shogun_relay` | with 18 | after 18; re-runnable since E48 |
+| 20 | `apps/api/sql/connector-tokens.sql` | `shogun_relay` | before the connector-token route (`docs/api/connector-tokens.md`) is served | hosted connector token store; nothing reads it yet |
+| 21 | `apps/api/sql/connector-tokens-permissions.sql` | `shogun_relay` | with 20 | after 20 (E48) |
+| 22 | `apps/router/sql/settlement-outbox.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | the durable outbox (E33) |
+| 23 | `apps/router/sql/settlement-outbox-permissions.sql` | router role | with 22 | after 22 |
+| 24 | `apps/router/sql/run-idempotency.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | cross-isolate run idempotency (E48); without it every metered run is refused `503` (the store fails closed) |
+| 25 | `apps/router/sql/run-idempotency-permissions.sql` | router role | with 24 | after 24 |
 
 Applying a file for a lane that stays off is harmless; leaving one out for a lane that is switched
-on makes that lane's `checkSchema` refuse. Two exceptions to "re-run freely": `live-store-access.sql`
-runs `CREATE POLICY` without `IF NOT EXISTS`, so it is applied **once** (a re-run fails on the
-existing policy and its transaction rolls back, changing nothing); and files 10, 11, 12 and 17 have
-no permissions companion, so their tables have no RLS (open item, §9).
+on makes that lane's `checkSchema` refuse. Every file may be re-run: `live-store-access.sql` creates
+each policy only when it does not exist (a `DO` block over `pg_policy`), and every table has a
+permissions companion with RLS on (E48).
 
 Check: `\dt relay.*` as `shogun_relay` lists the tables of the files applied; as `shogun_relay`,
 `SELECT 1 FROM public.<any licence table>` fails with `permission denied`; `SELECT relname FROM
-pg_class WHERE relkind = 'r' AND relnamespace = 'relay'::regnamespace AND NOT relrowsecurity` lists
-only the tables of files 10, 11, 12 and 17.
+pg_class WHERE relkind = 'r' AND relnamespace IN ('relay'::regnamespace, '<router schema>'::regnamespace)
+AND NOT relrowsecurity` returns no row.
 
 ### Step 3 — Hyperdrive, query caching disabled (both)
 
@@ -266,12 +272,19 @@ Each lane: apply its SQL (step 2), set its secrets, add its `vars` in a PR, depl
    `ROUTER_WALLET_URL` (the relay's public origin). Leave `ROUTER_TOPUP_URL` unset in production (it
    is used by the in-memory development wallet only).
 3. The `hyperdrive` block of step 3 and a `routes` entry (§1.1), in one PR.
-4. **Do not set** `GOOGLE_OAUTH_ACCESS_TOKEN`, `GITHUB_TOKEN`, `LINEAR_OAUTH_TOKEN` or `SLACK_TOKEN` as
-   Worker secrets. The first-party connectors name them as `credential_env`, and the fetch transport
-   reads them from the Worker env today: a Worker secret would make every caller act as one account.
-   In production these must be resolved per calling principal (open item, §9); until that exists,
-   those tools answer `credential_missing` and stay unlisted in the hosted catalog.
-5. Verify and deploy:
+4. **Do not set** `GOOGLE_OAUTH_ACCESS_TOKEN`, `GITHUB_TOKEN`, `LINEAR_OAUTH_TOKEN`, `SLACK_TOKEN` or
+   `ROUTER_DEV_SHARED_CREDENTIALS`. With `ROUTER_WALLET_URL` set the router never reads those
+   variables: the first-party connectors (`caller_connector` auth, E48) fetch the calling
+   principal's own token per run from the relay's `POST /v1/internal/router/connector-token`
+   (`docs/api/connector-tokens.md`), and the development flag is ignored (logged
+   `dev_shared_credentials_ignored`). The relay side of that route is not built yet, so those tools
+   answer `connector_not_connected` and stay unlisted in the hosted catalog until it ships (§9).
+5. After the first request, `wrangler tail` shows the boot words (fixed, one per decision):
+   `wallet_wired_with_outbox`, `idempotency_postgres`, `connector_credentials_per_caller`. Any of
+   `wallet_outbox_missing`, `idempotency_in_memory`, `wallet_in_memory_dev` or
+   `dev_shared_credentials_ignored` in production means the `hyperdrive` block or a variable is
+   wrong: fix it before routing traffic.
+6. Verify and deploy:
 
    ```sh
    pnpm --filter @shogunagent/router typecheck
@@ -434,7 +447,8 @@ Node entry only (`src/index.ts`: development, BYOC compose / Helm gateway contai
 | `APPROVAL_BASE_URL` | var | no | where L3 approval URLs point |
 | `ROUTER_WALLET_URL` | var | yes in production | the relay's origin; unset = in-memory development wallet |
 | `ROUTER_TOPUP_URL` | var | no | development wallet only; leave unset in production |
-| `HYPERDRIVE` | binding | with `ROUTER_WALLET_URL` | the outbox's Postgres; caching disabled |
+| `HYPERDRIVE` | binding | with `ROUTER_WALLET_URL` | the outbox's and the run idempotency store's Postgres (E33, E48); caching disabled |
+| `ROUTER_DEV_SHARED_CREDENTIALS` | var | **never in production** | development only: `1` lets the first-party connectors read one shared token from the variables below. Ignored whenever `ROUTER_WALLET_URL` is set (logged `dev_shared_credentials_ignored`) |
 | `ROUTER_METRICS_TOKEN` | secret | no | bearer for `GET /metrics` (E37, Prometheus text); unset = 404 |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | var | no | opt-in OTLP span export (E37); https, or http to a loopback collector; unset = off |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | var | no | overrides the traces URL derived from the endpoint |
@@ -443,14 +457,16 @@ Node entry only (`src/index.ts`: development, BYOC compose / Helm gateway contai
 | `OTEL_TRACES_SAMPLER_ARG` | var | no | span sample ratio 0–1, default 1 |
 
 First-party connector credentials (named by `credential_env` in `apps/router/connectors/*/provider.ts`;
-**never Worker secrets in production**, see §3 step 8):
+read **only in development** with `ROUTER_DEV_SHARED_CREDENTIALS=1` and no `ROUTER_WALLET_URL`;
+**never set in production**, see §3 step 8). In production each run fetches the calling principal's
+token for the slot below from the relay (`docs/api/connector-tokens.md`):
 
-| Name | Connectors | Production source |
+| Name (development only) | Connectors | Production source (slot in `connector_tokens`) |
 |---|---|---|
-| `GOOGLE_OAUTH_ACCESS_TOKEN` | `gmail`, `calendar` | the calling principal's own OAuth token (not built) |
-| `GITHUB_TOKEN` | `github` | same |
-| `LINEAR_OAUTH_TOKEN` | `linear` | same |
-| `SLACK_TOKEN` | `slack` | same |
+| `GOOGLE_OAUTH_ACCESS_TOKEN` | `gmail`, `calendar` | `gmail-tokenset`, `gcal-tokenset` |
+| `GITHUB_TOKEN` | `github` | `github-tokenset` |
+| `LINEAR_OAUTH_TOKEN` | `linear` | `linear-tokenset` |
+| `SLACK_TOKEN` | `slack` | `slack-tokenset` |
 
 ### 5.3 Deploy tooling and the conformance suite (not read by the Workers)
 
@@ -558,6 +574,8 @@ re-read the `name` line before every staging command anyway.
 | Run without key | `POST /v1/router/run` on a metered tool | `401 authentication_required` |
 | Run with the demo key | a $0 first-party read | `200`; then a metered tool on an empty wallet: `402 payment_required` |
 | Outbox | `wrangler tail` for two minutes | the cron runs; no `dead` rows (`SELECT status, count(*) FROM router_settlement_outbox GROUP BY 1`) |
+| Boot wiring | `wrangler tail` during the first request | `wallet_wired_with_outbox`, `idempotency_postgres`, `connector_credentials_per_caller`; none of the words in §3 step 8.5 |
+| Idempotency | the same metered run twice with one `idempotency_key` | first `200 result`, then `200 replay` with the same `run_id` and one charge on the wallet |
 
 ### 7.3 Sidecar
 
@@ -622,13 +640,15 @@ Owner decisions still open:
       `docs/decisions/0002-x402.md`); `x402-payments.sql` not required.
 - [ ] **Worker → sidecar path** (§1) and E34 live, so `/mcp` stops answering 503.
 - [ ] **Per-principal connector credentials** for the router's first-party Gmail, Calendar, GitHub,
-      Linear and Slack tools (§3 step 8), or those tools left out of the hosted catalog at launch.
+      Linear and Slack tools: the router side is built (E48, `caller_connector`); the relay's
+      `POST /v1/internal/router/connector-token` (`docs/api/connector-tokens.md`) is not. Ship it, or
+      leave those tools out of the hosted catalog at launch.
 - [ ] **A deploy workflow** for the two Workers (manual, `main` only, `environment: release`), or a
       written decision to keep deploying from the owner's machine.
 - [ ] **OpenAI directory credit rule** resolved (`docs/directories/openai-credit-rule.md`).
-- [ ] **RLS for the remaining relay tables.** `approval-webhooks.sql`, `provider-payouts.sql`,
-      `x402-payments.sql` and `connector-tokens.sql` have no `*-permissions.sql` companion; add one
-      (the `shared-store-permissions.sql` pattern) before those lanes open, or record why not.
+- [ ] **RLS for the remaining relay tables** — files written (E48: `approval-webhooks-`,
+      `provider-payouts-`, `x402-payments-`, `connector-tokens-permissions.sql`); apply them (§3 step
+      2) and run the step 2 check, which must return no row.
 - [ ] **TypeSafe retention terms** for text on the company key (inherited open item).
 - [ ] **Anthropic zero retention**: apply, or state the 29-day Batch result window in the privacy
       policy (inherited, `docs/shogunai-origin/ai-gateway-launch-checklist.md` §3).
