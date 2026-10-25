@@ -36,6 +36,9 @@ ALLOWLIST = {
     "crates/shogun-integrations/src/keychain.rs",           # hands the value to the macOS Keychain (feature `desktop`, macOS only)
     # E34 / threat model R4 (decision: docs/api/billing.md, "How the gateway names the principal to the sidecar").
     "crates/shogun-core/src/tenancy/derived_bearer.rs",     # keys HMAC-SHA256 with SHOGUN_SIDECAR_BEARER_SECRET to verify the gateway's sgw1 bearers; never logged or stored
+    # E50 hosted connector credentials (decision: docs/api/connector-tokens.md, docs/implementation-plan.md E50).
+    "crates/shogun-integrations/src/hosted_connect.rs",  # the hosted OAuth client secret and the PKCE verifier go into the vendor's token form (the core's egress); never logged or returned
+    "crates/shogun-mcp/src/connector_vault.rs",          # writes the one access token into the no-store response the gateway hands the router; never logged or stored
 }
 
 EXPOSE_RE = re.compile(r"\.expose\s*\(")

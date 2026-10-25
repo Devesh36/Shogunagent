@@ -168,6 +168,35 @@ impl AppState {
     }
 }
 
+/// E50: who a connector route (`connector_vault`) acts for. The caller must present the operator's
+/// admin credential (the gateway's `SHOGUN_SIDECAR_ADMIN_TOKEN`) in `Authorization` and the
+/// principal's own sidecar bearer (a derived `sgw1` bearer or a listed token) in
+/// `X-Shogun-Principal-Authorization`; the principal is the one that bearer resolves to, never one
+/// the body names. An agent bearer alone is refused (403), and a purged principal stays purged.
+pub(super) fn connector_principal(state: &AppState, admin: Option<&str>, principal_bearer: Option<&str>) -> Result<String, (u16, String)> {
+    if !state.admin_ok(admin) {
+        let known = admin.is_some_and(|token| {
+            state.tokens.current().token_id(token).is_some()
+                || state.principals.as_ref().is_some_and(|resolver| resolver.resolve(token).is_ok())
+        });
+        return Err(if known {
+            error(403, "admin_required", "Connector credentials are served to the gateway only: present the operator's admin credential, not an agent's bearer.")
+        } else {
+            error(401, "unauthorized", "Present the operator's admin credential.")
+        });
+    }
+    let Some(resolver) = &state.principals else {
+        return Err(error(404, "principals_unavailable", "Connector credentials exist only in multi-principal mode."));
+    };
+    let Some(bearer) = principal_bearer else {
+        return Err(error(401, "principal_required", "Name the principal with its own sidecar bearer in X-Shogun-Principal-Authorization."));
+    };
+    let resolved = resolver.resolve(bearer)?;
+    resolved
+        .principal
+        .ok_or_else(|| error(500, "internal", "The resolver named no principal."))
+}
+
 /// Answer an operator / hosted-surface route, or `None` to let the agent routing take it.
 pub(super) fn admin_route(state: &AppState, req: &Incoming<'_>) -> Option<(u16, String)> {
     let segments: Vec<&str> = req.path.trim_matches('/').split('/').collect();

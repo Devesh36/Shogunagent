@@ -23,6 +23,7 @@
 pub mod composio;
 pub mod connect;
 pub mod endpoints;
+pub mod hosted_connect;
 pub mod oauth;
 pub mod provider_read;
 pub mod result;

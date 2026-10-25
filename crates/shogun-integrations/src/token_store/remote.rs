@@ -1,9 +1,12 @@
-//! [`RemoteTokenStore`]: the hosted gateway's token store, as an interface (E5-T5).
+//! [`RemoteTokenStore`]: a token store over remote rows, as an interface (E5-T5).
 //!
-//! The hosted deployment keeps each principal's credentials as rows in Postgres
-//! (`apps/api/sql/connector-tokens.sql`), each row an envelope sealed by a KMS key:
-//! the store never holds a value in clear and the database never sees one. This module fixes the
-//! shape of that split so the gateway can only fill it in one way:
+//! For a deployment that keeps each principal's credentials as rows in a database (a BYOC
+//! operator's own store), each row an envelope sealed by a KMS key: the store never holds a value
+//! in clear and the database never sees one. The hosted service does not use it: since E50 the
+//! sidecar keeps connector grants in its [`super::FileSealedTokenStore`] under each principal's
+//! own key (KMS-backed when the key provider is) and serves them to the gateway
+//! (`crate::hosted_connect`), so no gateway table holds credentials. This module fixes the shape
+//! of the split so an implementation can only fill it in one way:
 //!
 //! - [`KmsEnvelope`] seals and opens a value, binding it to the principal and slot as associated
 //!   data. The KMS client implements it (no network here: this crate has no HTTP client, and the
@@ -13,8 +16,8 @@
 //!
 //! [`RemoteTokenStore`] composes the two into a [`TokenStore`]. [`super::KmsSealer`] (E26) is the
 //! production [`KmsEnvelope`]: envelope encryption under the customer's KMS key through a
-//! [`super::KeyWrapper`] the core implements for AWS KMS, GCP Cloud KMS and Vault Transit. The
-//! Postgres [`SealedRowBackend`] lands with the gateway's store.
+//! [`super::KeyWrapper`] the core implements for AWS KMS, GCP Cloud KMS and Vault Transit. No
+//! [`SealedRowBackend`] ships.
 
 use super::{valid_principal, CredentialSlot, Secret, TokenStore, TokenStoreError};
 

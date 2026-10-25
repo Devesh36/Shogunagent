@@ -39,6 +39,8 @@ pub mod ai_search_api;
 pub mod api_port;
 pub mod approval_exec;
 pub mod approval_store;
+/// Hosted connector credentials: the sidecar's internal token and connect routes (E50).
+pub mod connector_vault;
 /// The hash-chained audit export and its offline verifier (E26).
 pub mod audit_export;
 pub mod reply_thread;

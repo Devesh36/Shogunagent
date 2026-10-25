@@ -258,3 +258,17 @@ pub fn app_state_with_credentials(
         }))
         .with_backend_resolver(Arc::new(MultiBackends::new(store, resolver).with_credentials(credentials)))
 }
+
+/// The sidecar's connector vault (E50): the principals' grants in `tokens` (the same store the
+/// approval executor sends with), refreshed and connected through the core's HTTP token exchange,
+/// the single egress. The hosted OAuth clients and the callback come from `vars`
+/// (`SHOGUN_CONNECT_*`, `deploy/README.md`); `Err` names the malformed variable, never its value.
+/// The exchange's client is built on first use, on a blocking thread.
+pub fn hosted_connectors(
+    tokens: Arc<dyn TokenStore>,
+    vars: &std::collections::HashMap<String, String>,
+) -> Result<Arc<shogun_integrations::hosted_connect::HostedConnectors<crate::mcp_http::HttpTokenExchange>>, &'static str> {
+    use shogun_integrations::hosted_connect::{HostedClients, HostedConnectors};
+    let clients = HostedClients::from_vars(vars)?;
+    Ok(Arc::new(HostedConnectors::new(tokens, clients, crate::mcp_http::HttpTokenExchange::new)))
+}

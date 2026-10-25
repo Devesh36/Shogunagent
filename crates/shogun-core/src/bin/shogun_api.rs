@@ -280,8 +280,21 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
     // its store.
     let credentials = principal_credentials(&root, keys.clone());
     let executor = approval_executor(credentials.clone(), store.clone());
+    // E50: the gateway's connector routes over the same store (a vendor token per router run, the
+    // hosted connect flow), behind SHOGUN_ADMIN_TOKEN and the principal's own bearer.
+    let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let connectors = shogun_core::tenancy::multi::hosted_connectors(credentials.clone(), &vars).unwrap_or_else(|var| {
+        eprintln!("{FACE}: {var} is malformed (see deploy/README.md, hosted connector credentials)");
+        std::process::exit(1);
+    });
+    let connectable = connectors.clients().connectable();
+    eprintln!(
+        "{FACE}: connector credentials served to the gateway (connect flow: {})",
+        if connectable.is_empty() { "off: SHOGUN_CONNECT_REDIRECT_URI or the clients unset".to_string() } else { connectable.join(", ") }
+    );
     let state = shogun_core::tenancy::multi::app_state_with_credentials(store, Arc::new(resolver), clock, Some(credentials))
-        .with_approval_executor(executor);
+        .with_approval_executor(executor)
+        .with_connector_vault(connectors);
     let port = std::env::var("SHOGUN_API_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
