@@ -343,6 +343,20 @@ describe("SAML 2.0 sign-in for tenant admins", () => {
     expect(code(doctype)).toBe("saml_doctype_refused");
     // Encrypted assertions are not supported.
     expect(code(f({ after: (x) => x.replace("</saml2p:Response>", '<saml2:EncryptedAssertion xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion"/></saml2p:Response>') }))).toBe("saml_encrypted_assertion_unsupported");
+    // E39 strictness. An encrypted NameID or attribute is refused like an encrypted assertion.
+    expect(code(f({ after: (x) => x.replace("</saml2p:Response>", '<saml2:EncryptedID xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion"/></saml2p:Response>') }))).toBe("saml_encrypted_assertion_unsupported");
+    expect(code(f({ after: (x) => x.replace("</saml2p:Response>", '<saml2:EncryptedAttribute xmlns:saml2="urn:oasis:names:tc:SAML:2.0:assertion"/></saml2p:Response>') }))).toBe("saml_encrypted_assertion_unsupported");
+    // The Response's own Issuer, when present, is the IdP (it can only refuse: it is unsigned here).
+    expect(code(f({ after: (x) => x.replace(/(<saml2p:Response[^>]*>\s*<saml2:Issuer[^>]*>)[^<]+/, `$1https://evil.example/idp`) }))).toBe("saml_issuer_mismatch");
+    // SAML 2.0 only.
+    expect(code(f({ after: (x) => x.replace(/(<saml2p:Response[^>]*?)Version="2.0"/, '$1Version="1.1"') }))).toBe("saml_malformed");
+    // An assertion issued in the future, or before the sign-in flow could have started.
+    expect(code(f({ nowMs: NOW + 10 * 60_000, notBeforeMs: NOW - 60_000, notOnOrAfterMs: NOW + 30 * 60_000, subjectNotOnOrAfterMs: NOW + 30 * 60_000 }))).toBe("saml_not_yet_valid");
+    expect(code(f({ nowMs: NOW - 20 * 60_000, notBeforeMs: NOW - 21 * 60_000, notOnOrAfterMs: NOW + 30 * 60_000, subjectNotOnOrAfterMs: NOW + 30 * 60_000 }))).toBe("saml_expired");
+    expect(code(f({ nowMs: NOW - 5 * 60_000, notBeforeMs: NOW - 6 * 60_000 }))).toBeUndefined(); // five minutes old: fine
+    // A bearer confirmation that only starts later confirms nothing yet.
+    expect(code(f({ subjectNotBeforeMs: NOW + 10 * 60_000 }))).toBe("saml_not_yet_valid");
+    expect(code(f({ subjectNotBeforeMs: NOW - 60_000 }))).toBeUndefined();
     expect(code("not base64 xml at all")).toBe("saml_malformed");
   });
 

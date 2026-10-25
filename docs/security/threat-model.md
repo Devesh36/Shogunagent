@@ -102,7 +102,7 @@ operator ──(9)──▶ /metrics, admin routes, OTLP collector
 
 | Threat | Mitigation (code) |
 |---|---|
-| S: forged SAML assertion | Assertion must carry the only enveloped signature, one reference to its own ID, RSA-SHA256/512 and SHA-256/512 only, verified against configured certificates (KeyInfo ignored), values read only from the signed bytes, DOCTYPE refused, replay cache (`enterprise/saml.ts`). Fuzzed: `apps/api/test/saml-fuzz.test.ts` |
+| S: forged SAML assertion | Assertion must carry the only enveloped signature, one reference to its own ID, RSA-SHA256/512 and SHA-256/512 only, verified against configured certificates (KeyInfo ignored), values read only from the signed bytes, DOCTYPE refused, replay cache, SAML 2.0 only, `IssueInstant` bounded to the sign-in flow, XML Encryption refused (E39) (`enterprise/saml.ts`). Fuzzed: `apps/api/test/saml-fuzz.test.ts` |
 | S: forged OIDC ID token | Issuer, audience, nonce, expiry and algorithm checks (`enterprise/oidc.ts`) |
 | I/S: SSRF through IdP or CIMD URLs | `idpFetch` / CIMD guard: https only, public addresses only, no redirects, size and time caps (`enterprise/fetch-guard.ts`, `oauth/cimd.ts`) |
 | E: SCIM token used across tenants | One SCIM token per tenant, hashed, rotatable (`enterprise/scim.ts`, `store.ts`) |

@@ -397,7 +397,15 @@ itself signed (enveloped, one reference to its own ID; a signed Response around 
 assertion is refused), RSA-SHA256/512 and SHA-256/512 only, verified against the configured
 certificates (never `KeyInfo`), every value read from the signed bytes, `Issuer`, audience,
 recipient, `InResponseTo`, validity window with skew, and the assertion id spent in a replay cache
-until it expires. Encrypted assertions and IdP-initiated sign-in are not supported. Library:
+until it expires. Also (E39): SAML `Version="2.0"` only; the Response's own `Issuer`, when present,
+must be the IdP; the Response and assertion `IssueInstant` may be neither ahead of now nor older
+than the ten-minute sign-in flow (each with the skew); one `Issuer`, `Subject` and `Conditions` per
+assertion; a bearer confirmation whose `NotBefore` is still ahead does not confirm. Not supported,
+and refused with a fixed code rather than half-handled: XML Encryption (an `EncryptedAssertion`,
+`EncryptedID` or `EncryptedAttribute` is `saml_encrypted_assertion_unsupported`; no XML-Enc library
+has been vetted to run on Workers, so configure the IdP to sign the assertion and not encrypt it —
+the POST travels over TLS) and IdP-initiated sign-in (no `InResponseTo` is
+`saml_in_response_to_mismatch`). Library:
 `xml-crypto` 6.4.0 over `@xmldom/xmldom` 0.8.15 — both run on Workers (`nodejs_compat`); the
 workerd test suite signs and verifies an assertion, so SAML is served on Workers, not behind a
 Node-only flag.
