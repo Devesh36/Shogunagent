@@ -329,6 +329,7 @@
 | E45 | first-party コネクタの拡大。書き込み系は L2/L3、スコアは第三者と同じ式（不変条件 13） | `apps/router/connectors/` |
 | E46 | エージェントの支払い。支払いの委任（上限・期限・用途）を型で L3 にし、承認台帳と結びつける | `shogun-agents`, `apps/api/src/billing/mandates.ts` |
 | E47 | export 形式の標準化。export v2 を CG 向けの草案に整える（提出はオーナーの確認後） | `docs/api/export-v2.md`, `docs/standards/` |
+| E50 | ホスト型コネクタの資格情報。サイドカーが principal のコネクタ行を開いて期限切れなら更新する内部エンドポイント（KMS とプロバイダへの送信は Rust コアの単一 egress のまま）、ゲートウェイの `connector-token` ルートはそれを呼ぶ。ホスト型の接続フロー（OAuth 開始・コールバック、トークンはサイドカーの principal ストアにだけ保存）、行ごとの更新ロック | `crates/shogun-core`, `crates/shogun-integrations`, `apps/api/src/connector-tokens.ts` |
 
 ---
 
