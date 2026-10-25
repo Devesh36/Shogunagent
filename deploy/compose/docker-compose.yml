@@ -57,6 +57,23 @@ services:
       AGENT_POW_SECRET: ${AGENT_POW_SECRET:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # The hosted /mcp relay to the sidecar next door (E34): the same values the sidecar gets below
+      # under its own names. One of the two bearer sources turns the relay on; neither = /mcp 503.
+      SHOGUN_SIDECAR_BEARER_SECRET: ${SHOGUN_SIDECAR_BEARER_SECRET:-}
+      SHOGUN_SIDECAR_PRINCIPAL_TOKENS: ${SHOGUN_PRINCIPAL_TOKENS:-}
+      SHOGUN_SIDECAR_ADMIN_TOKEN: ${SHOGUN_ADMIN_TOKEN:-}
+      # `<index>/<count>` only when several hosts split the principals (deploy/README.md §5.2);
+      # empty on a single host. Needs a bearer source above.
+      SHOGUN_SHARD: ${SHOGUN_SHARD:-}
+      # The router's wallet and connector tokens (E32, E48): the router's ROUTER_SETTLEMENT_TOKEN,
+      # when a router settles runs against this gateway. Empty = those routes are not served.
+      ROUTER_SETTLEMENT_TOKEN: ${ROUTER_SETTLEMENT_TOKEN:-}
+      # Body-free request spans to an OTLP/HTTP collector (E37); empty = off.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-shogunagent-gateway}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-1}
     read_only: true
     tmpfs:
       - /tmp:size=256m

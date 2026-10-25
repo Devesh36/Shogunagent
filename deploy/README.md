@@ -192,6 +192,24 @@ keys) must send a principal's requests to that pod. The chart refuses `replicaCo
 `sharding.acknowledged=true`. Changing `replicaCount` moves principals: stop traffic, copy each moved
 principal's directory (store **and** wrapped key) to its new shard's volume, then resume.
 
+With more than one replica the chart gives each pod's gateway `SHOGUN_SHARD=<pod index>/<replicaCount>`
+(from the StatefulSet's `apps.kubernetes.io/pod-index` label, Kubernetes 1.28 or later), so a
+gateway answers `421 wrong_shard` for a principal homed on another pod instead of creating its store
+on the wrong volume (E34). The gateway refuses to boot with a shard and no sidecar bearer source:
+set `SHOGUN_SIDECAR_BEARER_SECRET` (or `SHOGUN_PRINCIPAL_TOKENS`) in the Secret.
+
+### 5.2.1 Gateway settings the chart wires
+
+The gateway container reads its secrets from the same Secret as the sidecar (`envFrom`). The names
+that differ between the two are mapped from the sidecar's keys: `SHOGUN_PRINCIPAL_TOKENS` becomes
+the gateway's `SHOGUN_SIDECAR_PRINCIPAL_TOKENS`, `SHOGUN_ADMIN_TOKEN` its `SHOGUN_SIDECAR_ADMIN_TOKEN`;
+`SHOGUN_SIDECAR_BEARER_SECRET` has the same name on both. Gateway-only secrets go in the same Secret:
+`ROUTER_SETTLEMENT_TOKEN` (a router settling runs and fetching connector tokens here, E32 / E48),
+`OTEL_EXPORTER_OTLP_HEADERS` (E37), `METRICS_TOKEN`, `AGENT_POW_SECRET`. OpenTelemetry export is
+`gateway.otel.{endpoint,tracesEndpoint,serviceName,samplerArg}` (off while both endpoints are empty);
+any other non-secret gateway variable goes in `gateway.env`. Compose (`deploy/compose`) passes the
+same names from `.env`. Every variable is described in `docs/deploy/production.md` §5.1.
+
 ### 5.3 Security
 
 Non-root (uid 10001), read-only root file system (writable `/data` and an `emptyDir` `/tmp` only),

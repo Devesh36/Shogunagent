@@ -68,6 +68,20 @@ gateway:
   env:
     DAILY_SPEND_CAP_USD: "50"
     BATCH_PROVIDER: "openai"
+  # OpenTelemetry (E37, apps/api/src/observability.ts): body-free request spans to an OTLP/HTTP
+  # collector (https, or http to loopback). Both endpoints empty = off. The collector's auth
+  # headers are a secret: OTEL_EXPORTER_OTLP_HEADERS in `secrets`.
+  otel:
+    endpoint: ""          # OTEL_EXPORTER_OTLP_ENDPOINT (/v1/traces is appended)
+    tracesEndpoint: ""    # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT (used as is; wins over endpoint)
+    serviceName: ""       # OTEL_SERVICE_NAME (default shogunagent-gateway)
+    samplerArg: ""        # OTEL_TRACES_SAMPLER_ARG, 0 to 1 (default 1)
+  # The hosted /mcp relay (E34) reads the sidecar's secrets under its own names; the chart maps
+  # them from the same Secret keys: SHOGUN_SIDECAR_BEARER_SECRET (same name on both),
+  # SHOGUN_PRINCIPAL_TOKENS -> SHOGUN_SIDECAR_PRINCIPAL_TOKENS, SHOGUN_ADMIN_TOKEN ->
+  # SHOGUN_SIDECAR_ADMIN_TOKEN. With replicaCount > 1 each pod's gateway gets
+  # SHOGUN_SHARD=<pod index>/<replicaCount> (deploy/README.md section 5.2; needs Kubernetes >= 1.28
+  # for the pod-index label, and a bearer source, or the gateway refuses to boot).
   resources:
     requests:
       cpu: 250m
@@ -108,6 +122,8 @@ secrets:
   #   SHOGUN_SIDECAR_BEARER_SECRET (replaces SHOGUN_PRINCIPAL_TOKENS, E34 / R4),
   #   SHOGUN_PRINCIPAL_TOKENS, SHOGUN_ADMIN_TOKEN, SHOGUN_APPROVAL_SIGNING_KEY,
   #   WEBHOOK_SIGNING_SECRET, OPENAI_API_KEY, ANTHROPIC_API_KEY, LICENSE_PUBKEY_B64,
+  #   ROUTER_SETTLEMENT_TOKEN (E32 / E48: the router's wallet and connector tokens),
+  #   OTEL_EXPORTER_OTLP_HEADERS (E37), METRICS_TOKEN, AGENT_POW_SECRET,
   #   RELAY_DATABASE_URL, AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (only without IRSA),
   #   SHOGUN_GCP_ACCESS_TOKEN (only without Workload Identity), VAULT_TOKEN, SHOGUN_DB_KEY (env).
   # The sidecar and the gateway both read it; neither logs a value.
