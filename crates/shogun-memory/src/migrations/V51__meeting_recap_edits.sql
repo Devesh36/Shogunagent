@@ -1,0 +1,11 @@
+-- V51: the user's own edits to the generated minutes (docs/meeting-gap-analysis-2026-09.md D1).
+--
+-- Additive: one nullable column. `edited_at` (ms) marks a row whose summary / decisions /
+-- next_actions are the user's version rather than the model's. Edits are written into the same
+-- columns every reader already uses (export, meeting.recap.get, search projection, chat
+-- grounding), so nothing has to learn a second set of columns. A regeneration (template change,
+-- speaker rename) leaves an edited row alone until the user resets the edit — the model must
+-- never overwrite what a person wrote by hand.
+--
+-- Rollback: docs/migrations/V51-rollback.md.
+ALTER TABLE meeting_recaps ADD COLUMN edited_at INTEGER;

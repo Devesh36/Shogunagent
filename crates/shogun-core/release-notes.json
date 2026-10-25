@@ -1,0 +1,577 @@
+{
+  "schema": 1,
+  "_comment": [
+    "What ships in the app as 'What's new' (issue #67). One entry per released version,",
+    "newest first, authored BEFORE the release is tagged — the notes for version X ride",
+    "inside the build of version X, so nothing is fetched at launch.",
+    "",
+    "Rules the tests in crates/shogun-core/src/release_notes.rs enforce:",
+    "  - versions are semver-ish (major.minor.patch, optional -pre) and unique",
+    "  - the list is ordered newest first",
+    "  - every entry has a headline and at least one item",
+    "  - text is user-facing English (v1) and mentions no vendor, model or stack name",
+    "",
+    "A version with no entry here shows no modal at all — a dev build (0.0.0) is silent."
+  ],
+  "releases": [
+    {
+      "version": "0.2.15",
+      "date": "2026-10-23",
+      "headline": "Meeting notes for every plan, duplicate review in Memory, and a lighter touch on your Mac",
+      "items": [
+        {
+          "title": "Meeting notes without a speech key",
+          "detail": "Speech recognition for meeting notes and dictation now runs on the service included with ShogunAI, for every trial and paid plan. Your own speech key stays as an optional override."
+        },
+        {
+          "title": "Included AI comes first",
+          "detail": "Chat, drafts, Scribe, live meeting summaries, translation and dictation cleanup now ask the service included with ShogunAI first and use your own key only when it cannot answer."
+        },
+        {
+          "title": "Review possible duplicates",
+          "detail": "Memory lists pairs of people or projects whose names relate under Possible duplicates, with Merge and Keep separate. Nothing merges on its own: a merge moves sources, commitments and aliases to the record you keep, and Keep separate is remembered so the pair is never suggested again."
+        },
+        {
+          "title": "See where a memory comes from",
+          "detail": "People and projects now say where their evidence was seen: Mail, a meeting, or the app it was read in. The same detail is available to connected AI apps."
+        },
+        {
+          "title": "Cleaner people and project lists",
+          "detail": "Public figures, shows you watched and task labels no longer sit among the people and projects you work with. They are kept, ranked last, so nothing you knew is lost."
+        },
+        {
+          "title": "Lighter on your Mac",
+          "detail": "Capture pauses while your Mac is locked or has been idle for a minute, and the screen context refreshes every ten seconds instead of every three when nothing on screen has changed."
+        },
+        {
+          "title": "Meetings start without a wait",
+          "detail": "Reading your calendar no longer holds up meeting detection, so notes begin as soon as a call starts."
+        },
+        {
+          "title": "Setup speaks",
+          "detail": "Setup greets you a line at a time with real motion, shows permission icons in the style of System Settings, and sweeps a glow around the notch as it closes."
+        },
+        {
+          "title": "A calmer dashboard",
+          "detail": "Calmer type, centered columns and settings rows that match, with no white flash when the dashboard opens. Copy, controls and motion across the app were polished from the October audit."
+        }
+      ]
+    },
+    {
+      "version": "0.2.14",
+      "date": "2026-10-22",
+      "headline": "Updates install themselves, Settings get simpler, and recall uses far less memory",
+      "items": [
+        {
+          "title": "Updates install themselves",
+          "detail": "New versions download in the background and install at a quiet moment in the morning, never while you are in the middle of something. You can still check and install from Settings."
+        },
+        {
+          "title": "Settings, simplified",
+          "detail": "The notch Settings now match the dashboard, with the advanced controls moved into their own dashboard pages. Account shows your verified profile and the Macs signed in to it, each with a name."
+        },
+        {
+          "title": "Setup shows your trial",
+          "detail": "After you sign in, setup greets you by first name and shows the seven-day trial with its real end date, or the plan you chose at checkout and its first billing date."
+        },
+        {
+          "title": "Drop a text file into chat",
+          "detail": "Drag a .txt or .md file onto the notch composer to attach it, with the same limits as the Attach button. Nothing is stored."
+        },
+        {
+          "title": "Visual recall uses far less memory",
+          "detail": "Frames read for recall were kept in memory for the life of the app. They are released after each read, so the app stays lean through a long day."
+        },
+        {
+          "title": "Dictation types what you say",
+          "detail": "Names from your memory are no longer sent as speech hints, which had been pulling ordinary dictation toward them. Only your own dictionary goes out. Microphone capture also recovers when a headset switches modes mid-dictation."
+        },
+        {
+          "title": "Automatic connections stay out of meetings and recall",
+          "detail": "An AI app SHOGUN connected on its own cannot read meeting notes or screen recall until you allow it in Settings. Connections you made yourself are unchanged."
+        },
+        {
+          "title": "One trial per account and per Mac",
+          "detail": "Checkout starts at most one trial per account and per Mac, and Settings says plainly why a Mac has none."
+        },
+        {
+          "title": "Polish across the app",
+          "detail": "Consistent colors, spacing, typography and native controls across the dashboard, plus dozens of fixes to onboarding, settings, billing, account and connections from the October audit."
+        }
+      ]
+    },
+    {
+      "version": "0.2.13",
+      "date": "2026-10-20",
+      "headline": "Answers with sources in search, a dictionary that learns, and a calmer notch",
+      "items": [
+        {
+          "title": "Search answers your question",
+          "detail": "Memory search in the notch now writes a short answer as it finds results, with each point linked to the moment it came from."
+        },
+        {
+          "title": "Your dictionary learns from one correction",
+          "detail": "Fix a dictated word once and SHOGUN keeps the spelling, with one notice and one Undo for each dictation. It is on by default; turn it off in Settings."
+        },
+        {
+          "title": "Start your trial from the Plan step",
+          "detail": "Once you sign in, the Plan step takes you to checkout to start your seven-day trial. It continues as the plan you chose unless you cancel before it ends. Sign-in pages have a new look."
+        },
+        {
+          "title": "Chat keeps up with you",
+          "detail": "Paste images into the chat, send a message while an answer is still being written and it waits its turn, and a badge on the notch shows an answer that finished while it was closed."
+        },
+        {
+          "title": "Skills, simplified",
+          "detail": "Drop a skill file onto the Skills pane to add it, and start from the recommended skills that now ship with the app."
+        },
+        {
+          "title": "Form filling works out of the box",
+          "detail": "Filling a form from Scribe no longer needs a key of your own. Your own key stays as an optional override."
+        },
+        {
+          "title": "Quick Translate, redesigned",
+          "detail": "Flip between the original and the translation in one card, with clearer handling of empty, very long and mixed-language text."
+        },
+        {
+          "title": "Fewer Keychain prompts",
+          "detail": "AI apps connected to your memory no longer ask for Keychain access on every launch on Macs set up before this release. If a prompt still appears, nothing is lost; your memory stays where it is."
+        },
+        {
+          "title": "Privacy settings stay yours",
+          "detail": "Privacy settings changed outside the app are accepted only when they make SHOGUN more private, and the trial clock now runs on a signed token instead of a plain file."
+        },
+        {
+          "title": "Speech during a trial needs sign-in",
+          "detail": "Voice input and meeting transcription during a trial work once you sign in. Paid plans are unchanged."
+        },
+        {
+          "title": "Polish across the app",
+          "detail": "Dozens of fixes to the dashboard, Light mode, pinning, meetings, memory pages, settings, connections, the morning brief and the evening wrap. The morning brief can be reopened from the notch."
+        }
+      ]
+    },
+    {
+      "version": "0.2.12",
+      "date": "2026-10-17",
+      "headline": "Speech is included, with no personal key to set up",
+      "items": [
+        {
+          "title": "Dictation and meetings are ready to use",
+          "detail": "Use voice input and meeting transcription with your active plan or trial, without adding a personal speech key. Audio is streamed for transcription without saving an audio file on your Mac."
+        },
+        {
+          "title": "New meetings recognize your language automatically",
+          "detail": "New meeting settings recognize multiple languages, including Japanese. If you already chose a meeting language, your choice stays in place."
+        },
+        {
+          "title": "Keep your existing speech settings",
+          "detail": "A personal speech key remains an optional override. Speech sessions share your plan allowance, and reconnecting keeps the original session deadline."
+        }
+      ]
+    },
+    {
+      "version": "0.2.10",
+      "date": "2026-10-13",
+      "headline": "Memory that updates every hour, rewrites that sound like you, and a hardened core",
+      "items": [
+        {
+          "title": "Your memory updates every hour",
+          "detail": "The review that turns your day into people, projects, commitments and open loops used to run once overnight. It now runs every hour and catches up on anything missed while your Mac slept, so the Overview and the brief reflect the day as it happens."
+        },
+        {
+          "title": "Rewrites sound like you",
+          "detail": "Rewriting a draft now matches how you write by default, and learns from the edits you make afterwards. Settings → Writing Style shows the style notes it has gathered, and you can change or remove them."
+        },
+        {
+          "title": "People, projects and commitments are back on the Overview",
+          "detail": "The Overview and the Memory view list them again, with when each was last seen and how many sources back it. Open an item to land on the exact memory row."
+        },
+        {
+          "title": "Chat keeps notes for you",
+          "detail": "Chat remembers compact notes of what you discussed, automatically. Every note is visible and can be undone."
+        },
+        {
+          "title": "Hold Option to dictate",
+          "detail": "Hold the left Option key on its own to start dictating, release it to stop. The right Option key still drafts on a tap and opens Scribe on a double tap."
+        },
+        {
+          "title": "Fewer wrong merges in memory",
+          "detail": "The same commitment seen in several windows collapses into one entry, while items from different senders, or with different dates, stay apart."
+        },
+        {
+          "title": "Stronger privacy before anything leaves your Mac",
+          "detail": "Text sent for the memory review is screened for card numbers, national ID numbers and similar identifiers first. Pending approvals are stored sealed, and nothing is sent unless the activity log has recorded it. Plan checks are tied to this Mac."
+        },
+        {
+          "title": "Smoother Visual recall and notch",
+          "detail": "The Visual recall timeline scrolls smoothly, the notch recovers from a missed hover and shows what it is doing more plainly, and help is easier to read."
+        },
+        {
+          "title": "Plan and billing in Settings",
+          "detail": "Your plan and billing details now appear in the Dashboard Settings."
+        },
+        {
+          "title": "Imported memory brings its people",
+          "detail": "Importing memory from another assistant now adds the people it mentions to your People view."
+        }
+      ]
+    },
+    {
+      "version": "0.2.9",
+      "date": "2026-10-11",
+      "headline": "Your whole screen in Visual recall, search by meaning, and meetings that read like notes",
+      "items": [
+        {
+          "title": "Visual recall shows the whole screen",
+          "detail": "Saved screens now show the full display you were working on, as you saw it. Apps, websites and private windows you exclude are removed before the screen is captured, and text is still read only from the window you were using. Saved screens also take about half the space they did, so they last through the 7-day setting."
+        },
+        {
+          "title": "Text from every saved screen",
+          "detail": "ShogunAI now reads the text of every saved screen, and keeps it as memory when an app does not expose its text directly."
+        },
+        {
+          "title": "Search your memory by meaning",
+          "detail": "Search finds exact matches first, then ranks them by what you meant. Apps you connect to your memory can search the same way."
+        },
+        {
+          "title": "Mail is moving to a direct connection",
+          "detail": "Mail will connect straight to your mail provider, with no other service in between. Until that is ready, mail cannot be connected in this version. Mail already in your memory stays where it is."
+        },
+        {
+          "title": "Connected tools in chat, on your plan or your key",
+          "detail": "Chat can use your connected services whether it runs on your assistant app's plan or on your own key, and shows each step with the service's logo."
+        },
+        {
+          "title": "Connecting other apps to your memory",
+          "detail": "Apps you add from Settings now get their own permission, which you can remove at any time, instead of a copied token. If you added ShogunAI to another app before, add it again from Settings."
+        },
+        {
+          "title": "Meetings that read like notes",
+          "detail": "Saved meetings open as short points with their sources, and the transcript reads like a chat. The live summary keeps updating, lines wait for the end of a sentence, and a dropped connection recovers without starting over."
+        },
+        {
+          "title": "Calendar reminders",
+          "detail": "The notch reminds you before your next event."
+        },
+        {
+          "title": "Steadier dictation",
+          "detail": "Longer dictation with a live preview, a start sound only once your microphone is really listening, and recovery when a key release is missed. Speakers are no longer mistaken for a microphone."
+        },
+        {
+          "title": "Overnight review that survives sleep",
+          "detail": "The nightly memory review is sent before your Mac goes to sleep and picked up when it wakes."
+        },
+        {
+          "title": "Safer web reads",
+          "detail": "When chat reads a web page, it can no longer reach addresses on your private network."
+        }
+      ]
+    },
+    {
+      "version": "0.2.8",
+      "date": "2026-10-05",
+      "headline": "A new look, a way back when memory won't open, and tighter privacy around deletes",
+      "items": [
+        {
+          "title": "A new look",
+          "detail": "The workspace, Today, Mail, Skills, Settings, the notch home and the first steps of setup follow a refreshed design, in light and dark."
+        },
+        {
+          "title": "A way back when memory won't open",
+          "detail": "If your memory cannot open or an update did not finish, ShogunAI shows Retry, Quit and Help right where you are, with the updater one click away, instead of leaving you without a next step."
+        },
+        {
+          "title": "Deleting the last hour reaches a live meeting",
+          "detail": "Deleting recent data while a meeting is recording also clears those lines from the meeting window, so they cannot be used afterwards by the live summary or the meeting chat."
+        },
+        {
+          "title": "Excluded apps stay out of suggestions",
+          "detail": "Apps, websites and private windows you exclude from capture no longer shape the actions the notch suggests, and are not recorded when the notch opens over them."
+        },
+        {
+          "title": "Dictate during a meeting",
+          "detail": "Voice input now works while a meeting is being recorded. While you dictate, the meeting hears silence from your microphone, so your dictation stays out of the transcript."
+        },
+        {
+          "title": "Re-read a saved screen",
+          "detail": "In Visual recall you can ask ShogunAI to read a saved screen's text again. If turning Visual recall off could not remove every saved screen, it now tells you instead of failing quietly."
+        },
+        {
+          "title": "Clearer messages",
+          "detail": "When something cannot be done, chat, voice input, meeting tools and Help now say why in plain words, in your language, instead of showing technical error text."
+        },
+        {
+          "title": "Know when an assistant app needs an update",
+          "detail": "If the assistant app ShogunAI works through is too old, Settings, chat and translation say so and name the version you need."
+        },
+        {
+          "title": "An activity log that keeps less",
+          "detail": "The activity log now records which service an action went to, not the recipient or the title of what was sent."
+        },
+        {
+          "title": "When your trial ends",
+          "detail": "If your trial ends without a plan, ShogunAI stops recording and locks your memory until you choose one. Nothing is deleted, and choosing a plan brings everything back. Settings, privacy controls and deleting your data stay available."
+        }
+      ]
+    },
+    {
+      "version": "0.2.7",
+      "date": "2026-09-30",
+      "headline": "Faster voice input, an About you that learns from your days, and drafts you can hear land",
+      "items": [
+        {
+          "title": "Hear right Option at work",
+          "detail": "While right Option writes your draft, a soft clock ticks, and a short chime plays when the text lands in the field. It stays quiet while your microphone is in use and during quiet hours, and Settings › Sounds can turn it off."
+        },
+        {
+          "title": "Voice input starts and lands sooner",
+          "detail": "Voice input shows that it is recording as soon as you start, and your words land sooner after you let go. If the connection drops during a long dictation, the words already transcribed are kept instead of lost."
+        },
+        {
+          "title": "About you learns from your days",
+          "detail": "After a few active days, About you writes a profile from your saved daily summaries and shows how many summaries support it. Each update tells you what is sent, and it retries on its own if it cannot finish."
+        },
+        {
+          "title": "A Writing style page",
+          "detail": "See the tone, length and format you asked for, and how many examples from your own rewrites are kept on this Mac for up to 30 days, filtered by app. Only the app and count are shown."
+        },
+        {
+          "title": "Faster Visual recall search",
+          "detail": "Searching your past screens returns much faster, even with several days of screens kept."
+        },
+        {
+          "title": "A smaller search index",
+          "detail": "New text is indexed more compactly. Settings › Memory › Search index can also compact what is already there: it runs only when you start it, works in small steps while you keep working, and can be stopped and continued later. Search results stay the same."
+        },
+        {
+          "title": "A Morning Brief without screen clutter",
+          "detail": "\"What happened\" no longer repeats toolbar labels and window titles picked up from your screen, including on past days. When the written summary is missing, the Today card says why and offers Run now."
+        },
+        {
+          "title": "Overnight work picks up where it left off",
+          "detail": "If the connection drops while the overnight review, mail triage or a meeting recap is being handed off, the same job resumes instead of being lost or sent twice."
+        },
+        {
+          "title": "Chat says when it can look things up",
+          "detail": "The line under chat now tells you whether answers can search your memory and connected services with your current setup, and it updates as soon as you change your provider or key. Looking things up now works with more of the API keys you can add."
+        },
+        {
+          "title": "About you keeps every line",
+          "detail": "Preferences with line breaks, or written in Japanese and other non-Latin scripts, now save up to the full length the form allows."
+        },
+        {
+          "title": "More room in the full window",
+          "detail": "On large screens the full window uses more of its width, while settings forms stay at a comfortable width."
+        },
+        {
+          "title": "Skills and apps at a glance",
+          "detail": "The Skills page puts runs waiting for your approval at the top and shows which connections each skill uses. Add to … shows each app's icon."
+        },
+        {
+          "title": "Clearer plan status offline",
+          "detail": "After the offline grace period runs out, Refresh says your plan is locked until you reconnect, instead of saying it still works offline."
+        },
+        {
+          "title": "Right Option on web pages",
+          "detail": "Right Option now finds the field you are typing in on web pages too, such as post and comment boxes in your browser."
+        },
+        {
+          "title": "Every connection on one page",
+          "detail": "Connections now lists every service, including the ones that are coming soon, so you can see what is on the way."
+        },
+        {
+          "title": "Choose your translation language",
+          "detail": "Settings › General › Translation language sets the pair translation and reply drafts use: the same as this Mac, English, or Japanese."
+        },
+        {
+          "title": "Corrections can become vocabulary",
+          "detail": "Off by default. Turn it on and, after you correct the same dictated word in two separate dictations, it is added to your local dictionary. Undo it from the notch or Vocabulary settings. Nothing is sent to a speech provider."
+        },
+        {
+          "title": "Missed meeting prompts wait for you",
+          "detail": "A meeting prompt you did not answer stays available instead of disappearing, and you can turn prompts off for one app without turning them off everywhere."
+        },
+        {
+          "title": "Steadier memory in your other apps",
+          "detail": "Adding ShogunAI's memory to an app replaces an older entry instead of leaving two, and removing an app's access takes effect right away."
+        },
+        {
+          "title": "Backups use less disk",
+          "detail": "Your Mac now normally keeps one checked backup of your memory instead of up to three. A copy taken just before an update is also kept, within your backup retention, so a failed update can still be recovered."
+        }
+      ]
+    },
+    {
+      "version": "0.2.6",
+      "date": "2026-09-27",
+      "headline": "Your memory in your other apps, steer work mid-run, and minutes you can edit",
+      "items": [
+        {
+          "title": "Chat can look things up",
+          "detail": "Ask in the notch and ShogunAI can search your memory and connected services before it answers, and shows its sources. Anything that would send, post or create still waits for your approval."
+        },
+        {
+          "title": "Minutes you can edit",
+          "detail": "Fix a recap's wording in place, see when each point was said, and search or delete past meetings. Minutes can follow who spoke, use the language and instruction you choose, and offer a follow-up draft. Closing a meeting window keeps your draft."
+        },
+        {
+          "title": "Meeting notes hear your words",
+          "detail": "Pick terms from your voice dictionary for meetings, and import or export the dictionary in bulk. If the microphone is too quiet to transcribe, the meeting window tells you."
+        },
+        {
+          "title": "Your memory in your other apps",
+          "detail": "On Pro, Add to … sets up another app on your Mac to read your ShogunAI memory, and shows the exact change before making it. New access keys are read-only unless you choose otherwise, a panel shows what the app can see, and removing an app revokes its key at once."
+        },
+        {
+          "title": "Bring your memory along",
+          "detail": "Import memory from another assistant: paste or drop an export, review what will be kept, then commit. Imported memories show up in search and answers, held more loosely than what ShogunAI saw itself, and every import can be undone."
+        },
+        {
+          "title": "Steer work while it runs",
+          "detail": "While a chat is still working through its steps, add a note under the answer and it takes the note into its next step. When an action needs one detail from you, the question appears in the notch with quick answers."
+        },
+        {
+          "title": "Pick your model",
+          "detail": "Choose the model for each AI provider you connect, with current defaults. Before a large-context run, you see a token and cost estimate, and a costly run asks first."
+        },
+        {
+          "title": "Right Option drafts reliably",
+          "detail": "A tap on right Option could end in \"Couldn't draft\" when your AI wrapped its answer in an extra sentence or formatting. Those answers now land in the field, and if a draft still fails the notch says why."
+        },
+        {
+          "title": "Chat types the way you expect",
+          "detail": "Shift+Enter adds a new line, and confirming Japanese or Chinese input no longer sends. Insert appears only when a text field is waiting for it, and running out of tool steps or time shows as a status instead of inside the answer."
+        },
+        {
+          "title": "Connections you can see through",
+          "detail": "Each connection shows what it is allowed to do and whether it passes through a third party. Disconnecting asks first, and you can revoke access from the same place."
+        },
+        {
+          "title": "A Morning Brief for the whole day",
+          "detail": "The brief now reads the whole day, not just its first captures. If a night's run was missed or failed, the next morning says why."
+        },
+        {
+          "title": "Secret fields stay unread",
+          "detail": "Fields for passwords, PINs, card numbers and one-time codes are skipped even when an app labels them as plain text fields."
+        },
+        {
+          "title": "Connected tools ask first",
+          "detail": "When a connected tool asks to share your writing style or to stop excluding an app from capture, the request waits for your approval in the app. Changes that share less still apply right away."
+        },
+        {
+          "title": "Updates keep downloading",
+          "detail": "Leave the update pane and the download carries on, counting in megabytes. A failed download or restart now says which one it was."
+        },
+        {
+          "title": "A simpler first run",
+          "detail": "Setup is shorter, and it handles the restarts some permissions need for you."
+        },
+        {
+          "title": "Calmer windows",
+          "detail": "Tooltips wait a moment before appearing, the dashboard looks softer, and a collapsed sidebar keeps its icons. Full details read in your language, the panel drops its black band away from the notch, and What's new reads line by line."
+        },
+        {
+          "title": "Erase all means all",
+          "detail": "Erasing everything now also removes people, projects and quotes pulled from your activity, and every backup. Backups are kept for seven days by default."
+        }
+      ]
+    },
+    {
+      "version": "0.2.5",
+      "date": "2026-09-24",
+      "headline": "In your language, a panel that fits, and updates that come to you",
+      "items": [
+        {
+          "title": "Choose your language",
+          "detail": "Settings › General › Language switches ShogunAI to English, 日本語, Español or Deutsch. English stays the default, and every window follows the choice."
+        },
+        {
+          "title": "Answers stay in view",
+          "detail": "While you chat, the suggestions under the notch step aside, so a reply is never squeezed out of the panel. Suggestions sit on one line and read shorter."
+        },
+        {
+          "title": "Settings that fit the notch",
+          "detail": "Settings uses an icon rail and tighter spacing in the panel, so each section reads without endless wrapping. The overview tabs are a little denser too."
+        },
+        {
+          "title": "Updates come to you",
+          "detail": "Check for updates under Settings › General and the new build installs when you say so. No more downloading a disk image and swapping the app by hand."
+        },
+        {
+          "title": "What's new reads like a paragraph",
+          "detail": "The notes in this window wrapped one word per line on the last release. They flow properly again."
+        }
+      ]
+    },
+    {
+      "version": "0.2.4",
+      "date": "2026-09-24",
+      "headline": "Chat and actions on every plan, and nothing to paste after you buy",
+      "items": [
+        {
+          "title": "Standard now includes chat, actions and drafts",
+          "detail": "Everything that runs on your own AI plan — chat, the context actions under the notch, drafts and Scribe — is part of Standard from this release. Pro keeps the Memory API and real sending through connected tools."
+        },
+        {
+          "title": "Your Mac activates itself",
+          "detail": "Buy from Settings › Plan and this Mac picks up the plan on its own — even if you quit the app in between. There is no licence key to copy, paste or remove any more."
+        },
+        {
+          "title": "Plan changes land right away",
+          "detail": "Change your plan in billing management and the app notices within a minute, and again whenever you come back to it."
+        },
+        {
+          "title": "Clearer action chips",
+          "detail": "Reply suggestions say who they are for, and a plan that cannot run actions shows one line instead of four dimmed buttons."
+        },
+        {
+          "title": "A heart for as long as the pointer stays",
+          "detail": "Rest the pointer on the ShogunAI icon in the Dock and the mark folds into a heart and holds it until you move away, the way the mark in the app does. A click still gives the short beat."
+        },
+        {
+          "title": "There at every sign-in",
+          "detail": "ShogunAI opens when you sign in to your Mac, and puts its login item back if it ever goes missing. Turn that off in Settings › Launch at login if you prefer to open it yourself."
+        }
+      ]
+    },
+    {
+      "version": "0.2.3",
+      "date": "2026-09-24",
+      "headline": "Launch codes that land, and a Dock icon that says hello",
+      "items": [
+        {
+          "title": "Your launch code, in either place",
+          "detail": "Type it in Settings › Plan before choosing a monthly plan, or add it on the payment page itself. The first month is free: you add a card at checkout and are first charged a month later. Codes cover monthly plans only."
+        },
+        {
+          "title": "The Dock icon answers the pointer",
+          "detail": "Move the pointer onto the ShogunAI icon in the Dock and the mark folds into a heart and back, the way it does in the menu bar and in the app. Nothing runs while the pointer rests there."
+        }
+      ]
+    },
+    {
+      "version": "0.1.0",
+      "date": "2026-09-23",
+      "headline": "ShogunAI is here",
+      "items": [
+        {
+          "title": "The notch is the whole app",
+          "detail": "Hover the notch for what you are working on, press the hotkey for anything else. No window to find, no app to switch to."
+        },
+        {
+          "title": "It remembers your work",
+          "detail": "People, projects, commitments and open loops are kept up to date from what is on your screen, on this Mac. Search it any time."
+        },
+        {
+          "title": "Meeting notes without a recorder",
+          "detail": "Notes, minutes and a recap for the meetings you are in. Nothing is written to disk but the text."
+        },
+        {
+          "title": "Translate without leaving the page",
+          "detail": "Select anything and press the translate hotkey to read it in your own language under the notch."
+        }
+      ]
+    }
+  ]
+}

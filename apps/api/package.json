@@ -1,0 +1,39 @@
+{
+  "name": "@shogun-ai/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "description": "SHOGUN batch relay (docs/batch-relay-design.md): license-JWT-authenticated relay in front of the Anthropic Batch API, on Cloudflare Workers (src/worker.ts) with a Node entry for development (src/index.ts). Stores no chunk content — usage aggregates only.",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "dev:worker": "wrangler dev --config wrangler.jsonc",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run && vitest run -c vitest.workers.config.ts",
+    "test:node": "vitest run",
+    "test:workers": "vitest run -c vitest.workers.config.ts",
+    "check:bundle": "rm -rf dist/dry-run && wrangler deploy --config wrangler.jsonc --dry-run --outdir dist/dry-run && ! grep -lE 'node-server|node:fs|node:child_process|node:worker_threads' dist/dry-run/*.js",
+    "deploy": "wrangler deploy --config wrangler.jsonc",
+    "load-test": "tsx scripts/load-test.ts",
+    "gmail:setup": "swift scripts/gmail-setup.swift",
+    "google:setup": "swift scripts/google-oauth-setup.swift",
+    "gmail:dev": "tsx src/gmail-local-index.ts",
+    "gmail:check-config": "tsx scripts/gmail-check-config.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "hono": "^4.13.13",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.21",
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7",
+    "wrangler": "^4.151.3"
+  }
+}

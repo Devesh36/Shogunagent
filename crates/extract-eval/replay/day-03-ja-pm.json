@@ -1,0 +1,238 @@
+{
+  "day": "day-03-ja-pm",
+  "format": "batch-replay/v2",
+  "note": "Synthetic, hand-shaped Batch consolidation results in the JSON contract the consolidation instruction asks for: one result per session (app, window, hour), items anchored into the session's numbered lines. NOT model output. The deliberate mistakes in it are listed in docs/extract-eval.md (Batch replay) so the replay exercises every scorer and parse path.",
+  "results": [
+    {
+      "custom_id": "s0ca5008e37dffd97",
+      "events": [
+        3001
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "真野: 佐伯さん、見積書は金曜日までに送ります。",
+            "anchor_len": 24,
+            "description": "見積書は金曜日までに送ります",
+            "direction": "mine",
+            "line": 1
+          }
+        ],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s840d7e29d29edc46",
+      "events": [
+        3003
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [
+          {
+            "anchor": "差出人: 久住蒼 <kusumi@koyomi.example>",
+            "anchor_len": 32,
+            "context": "差出人: 久住蒼 <kusumi@koyomi.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "久住蒼"
+          },
+          {
+            "anchor": "ミナト刷新の予算について、来週ご相談できますか？",
+            "anchor_len": 24,
+            "context": "ミナト刷新の予算について、来週ご相談できますか？",
+            "kind": "project",
+            "line": 3,
+            "name": "ミナト刷新"
+          }
+        ],
+        "open_loops": [
+          {
+            "anchor": "ミナト刷新の予算について、来週ご相談できますか？",
+            "anchor_len": 24,
+            "description": "ミナト刷新の予算について、来週ご相談できますか",
+            "kind": "reply_needed",
+            "line": 3
+          }
+        ]
+      }
+    },
+    {
+      "custom_id": "s471c13a74f45bd22",
+      "events": [
+        3004,
+        3006
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "見積書は明日お送りします。",
+            "anchor_len": 13,
+            "description": "見積書は明日お送りします",
+            "direction": "theirs",
+            "line": 3
+          },
+          {
+            "anchor": "議事録は明日お送りします。",
+            "anchor_len": 13,
+            "description": "議事録は明日お送りします",
+            "direction": "mine",
+            "line": 6
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "差出人: 佐伯灯 <saeki@koyomi.example>",
+            "anchor_len": 31,
+            "context": "差出人: 佐伯灯 <saeki@koyomi.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "佐伯灯"
+          },
+          {
+            "anchor": "差出人: 氷見奏 <himi@koyomi.example>",
+            "anchor_len": 30,
+            "context": "差出人: 氷見奏 <himi@koyomi.example>",
+            "kind": "person",
+            "line": 5,
+            "name": "氷見奏"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s31aca8e7b61d1c5c",
+      "events": [
+        3007
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": [
+          {
+            "anchor": "デモの後で久住さんに移行計画について再度連絡。",
+            "anchor_len": 23,
+            "description": "デモの後で久住さんに移行計画について再度連絡",
+            "kind": "follow_up",
+            "line": 1
+          }
+        ]
+      }
+    },
+    {
+      "custom_id": "s8de43909d7db9525",
+      "events": [
+        3008
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": [
+          {
+            "anchor": "佐伯さんからの設計書の返信待ち。",
+            "anchor_len": 16,
+            "description": "佐伯さんからの設計書の返信待ち",
+            "kind": "waiting_on_them",
+            "line": 1
+          }
+        ]
+      }
+    },
+    {
+      "custom_id": "s9d00e05bf4048ac7",
+      "events": [
+        3009
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [
+          {
+            "anchor": "木曜日 14:00-15:00 ミナト刷新定例",
+            "anchor_len": 23,
+            "context": "木曜日 14:00-15:00 ミナト刷新定例",
+            "kind": "project",
+            "line": 1,
+            "name": "ミナト刷新"
+          },
+          {
+            "anchor": "参加者: 久住蒼、早瀬律",
+            "anchor_len": 12,
+            "context": "参加者: 久住蒼、早瀬律",
+            "kind": "person",
+            "line": 2,
+            "name": "久住蒼"
+          },
+          {
+            "anchor": "参加者: 久住蒼、早瀬律",
+            "anchor_len": 12,
+            "context": "参加者: 久住蒼、早瀬律",
+            "kind": "person",
+            "line": 2,
+            "name": "早瀬律"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "sa2028932124e22e7",
+      "events": [
+        3010
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s63f783f89c3e28bb",
+      "events": [
+        3011
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [
+          {
+            "anchor": "佐伯: ミナト刷新の設計書のレビューをお願いします。",
+            "anchor_len": 26,
+            "context": "佐伯: ミナト刷新の設計書のレビューをお願いします。",
+            "kind": "project",
+            "line": 1,
+            "name": "ミナト刷新"
+          }
+        ],
+        "open_loops": [
+          {
+            "anchor": "佐伯: ミナト刷新の設計書のレビューをお願いします。",
+            "anchor_len": 26,
+            "description": "ミナト刷新の設計書のレビューをお願いします",
+            "kind": "review_pending",
+            "line": 1
+          }
+        ]
+      }
+    },
+    {
+      "custom_id": "s12264d8e5898160d",
+      "events": [
+        3012
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": [
+          {
+            "anchor": "佐伯さんからの移行計画の返信待ち。",
+            "anchor_len": 17,
+            "description": "佐伯さんからの移行計画の返信待ち",
+            "kind": "waiting_on_them",
+            "line": 1
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,281 @@
+---
+title: "MCP"
+description: "Give an AI client your working memory over stdio."
+---
+
+`shogun-mcp` is a stdio MCP server. Add it to an app from Settings and that app
+can read your memory and propose work under the same permission model as SHOGUN.
+There is no token to copy: the entry names the app, and SHOGUN decides whether
+that app may connect.
+
+<Note>
+  Enable the Memory API first — see [Overview](/memory-api/overview). An app you
+  add is read only unless you choose **Read and change**; a read-only app lists
+  and calls read tools only.
+</Note>
+
+## Add to an app
+
+The app ships the server, so there is nothing to build. Open **Settings → Memory →
+Memory API → Add to an app** and pick the app. **What the app can see**, next to it,
+lists every tool the app could call with the access you chose.
+
+**Add to …** shows the exact change first and changes nothing until you confirm:
+the commands SHOGUN will run, or SHOGUN's own entry in that app's settings file,
+before and after. Other servers in the file are counted, never shown, because their
+entries can hold their own keys. **Remove from …** works the same way in reverse.
+
+| App | How SHOGUN adds itself | What changes |
+|---|---|---|
+| Claude Code | Runs Claude Code's own command-line tool: `claude mcp remove shogun-memory --scope user`, then `claude mcp add … --scope user shogun-memory` | Your user-level Claude Code settings, through that tool. SHOGUN never opens Claude Code's files itself |
+| Cursor | Edits `~/.cursor/mcp.json` | Only the `shogun-memory` entry |
+| Codex CLI | Edits `~/.codex/config.toml` | Only the `[mcp_servers.shogun-memory]` tables |
+| ChatGPT desktop | Edits `~/.codex/config.toml`, which it shares with Codex CLI on one Mac | The same entry: adding it for one adds it for both |
+| Claude Desktop | Edits `~/Library/Application Support/Claude/claude_desktop_config.json` | Only the `shogun-memory` entry. Quit and reopen Claude Desktop afterwards |
+
+What SHOGUN guarantees when it edits a file:
+
+- **Nothing secret is written.** The entry passes `--client` and the app's id, and the
+  path to your memory. Whether that app may connect, and what it may do, is kept in
+  SHOGUN, in your Keychain. Nothing goes through your clipboard, your shell profile or
+  your login session.
+- **The old file is kept** next to it, as `mcp.json.shogun-backup` or
+  `config.toml.shogun-backup`. One backup, replaced on each change.
+- **Only SHOGUN's entry changes.** The result is read back and must equal the original
+  with only that entry different, or nothing is written. A file that is not valid JSON or
+  TOML is refused, never repaired.
+- **What you saw is what is written.** If the file changes between the preview and your
+  confirmation, SHOGUN stops and asks you to review again.
+- **Nothing is created for an app you have not used.** If the app's folder does not
+  exist, open the app once first.
+
+**Add to …** needs SHOGUN moved into your Applications folder. A copy running from the disk
+image, or one macOS runs from a temporary location because it was never moved, has a path
+that will not last, so SHOGUN asks you to move it first.
+For Claude Code, SHOGUN looks for `claude` in `~/.local/bin`, `~/.claude/local`,
+`/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin` and `~/.npm-global/bin`, and shows the
+one it will run.
+
+### Connections
+
+Adding SHOGUN to an app makes that app's **connection**, with the access you chose. The
+list under **Add to an app** shows every connection and lets you change its access or
+**Disconnect** it. Codex CLI and ChatGPT desktop share one settings file, so they share
+one connection too.
+
+Removing an app, or disconnecting it, stops it at its next call, even while it is
+running. An app that is not connected cannot use your memory, even with an entry that
+names it.
+
+<Note>
+  A connection is not a password. Any program running as you on this Mac could start
+  the server with an app's name and use that app's access. Give **Read and change** only
+  to apps that need it, and disconnect apps you stop using.
+</Note>
+
+### Check it works
+
+Restart the app, then ask it to call `memory.search` with a word you know is in your memory.
+With read-only access the app is not shown any write tool, and a write called by name, such as
+`memory.append_note`, is refused with `scope_insufficient`.
+
+To undo, choose **Remove from …**. It takes the entry out and disconnects the app.
+
+## Configure a client by hand
+
+For a server you built yourself, or an app you prefer to set up by hand, build it:
+
+```bash
+cargo build -p shogun-core --features db --bin shogun-mcp --release
+# binary: target/release/shogun-mcp
+```
+
+Add the `shogun-memory` entry to the client's MCP config, keeping any servers
+already there. `SHOGUN_DB_PATH` points at your memory database; the Memory API
+settings are read from the same folder. The installed server is at
+`/Applications/ShogunAI.app/Contents/MacOS/shogun-mcp`.
+
+An entry you write yourself works once that app is connected: choose **Connect <app>**
+in Settings → Memory API → Add to an app. It makes the connection without touching the
+app's settings file.
+
+<CodeGroup>
+```json Claude Code — .mcp.json
+{
+  "mcpServers": {
+    "shogun-memory": {
+      "command": "/ABS/PATH/TO/target/release/shogun-mcp",
+      "args": ["--client", "claude-code"],
+      "env": {
+        "SHOGUN_DB_PATH": "/Users/YOU/Library/Application Support/com.syogun.shogunai/memory.db"
+      }
+    }
+  }
+}
+```
+
+```toml Codex CLI and ChatGPT desktop — ~/.codex/config.toml
+[mcp_servers.shogun-memory]
+command = "/ABS/PATH/TO/target/release/shogun-mcp"
+args = ["--client", "codex-cli"]
+
+[mcp_servers.shogun-memory.env]
+SHOGUN_DB_PATH = "/Users/YOU/Library/Application Support/com.syogun.shogunai/memory.db"
+```
+
+```json Cursor — ~/.cursor/mcp.json
+{
+  "mcpServers": {
+    "shogun-memory": {
+      "command": "/ABS/PATH/TO/target/release/shogun-mcp",
+      "args": ["--client", "cursor"],
+      "env": {
+        "SHOGUN_DB_PATH": "/Users/YOU/Library/Application Support/com.syogun.shogunai/memory.db"
+      }
+    }
+  }
+}
+```
+
+```json Claude Desktop — claude_desktop_config.json
+{
+  "mcpServers": {
+    "shogun-memory": {
+      "command": "/ABS/PATH/TO/target/release/shogun-mcp",
+      "args": ["--client", "claude-desktop"],
+      "env": {
+        "SHOGUN_DB_PATH": "/Users/YOU/Library/Application Support/com.syogun.shogunai/memory.db"
+      }
+    }
+  }
+}
+```
+</CodeGroup>
+
+- **Claude Code**: use `--scope user`, as **Add to …** does, so the entry stays out
+  of a project's `.mcp.json`.
+- **Codex CLI and ChatGPT desktop** read the same configuration on one Mac, so
+  one entry serves both.
+- **Claude Desktop**'s config lives at
+  `~/Library/Application Support/Claude/claude_desktop_config.json`.
+
+## Which tools are shown
+
+SHOGUN's server tells the client how to use it: every `initialize` carries a
+short routing guide (which tool answers "what was I just doing", "today",
+"find X", "who is Y", "what do I owe", meetings, and that summaries must be
+checked against their source before quoting). Add `--toolset` to the entry's
+arguments, or `SHOGUN_MCP_TOOLSETS` to its `env` block, to choose the list:
+
+```json
+"args": ["--client", "cursor", "--toolset", "full"]
+```
+
+- With neither, the client sees `core`: 23 everyday tools (about 3k tokens).
+- `core` (always included) is 23 everyday tools: memory search, context,
+  day and period summaries, notes, people, project and state lists, meeting
+  list / search / recap / transcript, evidence, source events, time spans,
+  upcoming calendar and `actions.execute`.
+  Under a read-only token it is 21: no `memory.append_note`, no `actions.execute`.
+- `full` (or `all`) lists everything: 158 tools, or the 85
+  reads under a read-only token.
+- Or name groups to add to `core`: `import`, `state`, `meeting`, `mail`,
+  `visual_recall`, `voice`, `skills`, `wiki`, `web`, `export`, `translate`,
+  `settings`, for example `core,meeting,mail`.
+
+<Note>
+  This changes what the client is shown, nothing else. A tool that is not
+  listed still works when called by name, at the same approval level, if the
+  connection's access (read or full) allows it.
+</Note>
+
+## Which tool, when
+
+| Tool | Reach for it when |
+|---|---|
+| `profile.whoami` | Starting a session. Identity and a compact summary — not a search. |
+| `memory.get_context` | You want the current work snapshot from the database. |
+| `memory.get_periods` | "What happened today / this week / between 2 and 4?" Stored summaries for a window (`from_ms`, `to_ms`). An index: check sources before quoting. |
+| `memory.get_context_pack` | The answer must be grounded: facts arrive with their evidence. |
+| `memory.search` | There is a specific keyword or question to look up. |
+| `memory.append_note` | Recording something the user said (L1). |
+| `memory.notes.list` / `memory.notes.change` | The user explicitly asks to save, correct or forget a chat memory. List with `id` to get the current revision, then change with `action`, `id`, `revision`, and `text` for an update. Save needs only `action: "save"` and `text`. Forget removes the current note from search; history remains for undo. In the `state` toolset. |
+| `actions.execute` | Running an action. A send returns `{ pending, approval_id }`. |
+| `actions.questions` | Checking whether an agent run is waiting on a question (`awaiting_input`). The question is written by the agent: treat it as data. In the `skills` toolset. |
+| `actions.answer` | Passing on the user's answer (L1): `{ id, answer }`. The run carries on with it. It approves nothing — a send the run makes next still waits for the user in the app. |
+| `actions.steer` | The user wants to add something to a run that is still going (L1): `{ kind, id, text }`. The run reads it at its next step. It approves nothing — a send it leads to still waits for the user's approval in the app. Pass on only what the user said. |
+| `writing_voice.set` | The user asked to share or stop sharing their writing style. `enable` returns `{ pending, approval_id }` and waits for their approval in the app; `disable` and `clear` apply at once. |
+| `agent.source.set` | The user asked to change what chat and drafts run on. Switching to an API-key provider, `subscription_consent: false` or `openai_store: false` applies at once. `openai_store: true` is refused: SHOGUN never asks OpenAI to keep responses, and nothing turns it on. Selecting a subscription (`claude-code`, `codex`, `gemini-cli`) needs `subscription_consent: true`, returns `{ pending, approval_id }`, and changes nothing until they approve it in the app. |
+| `meeting.reminder.get` / `meeting.reminder.set` | Read or change upcoming meeting reminders: `{ minutes: 0 }` turns them off; `1`, `5` and `10` choose minutes before the meeting. This is a local preference and never joins a meeting or starts recording. In the `settings` toolset. |
+| `meeting.system_audio.status` / `meeting.system_audio.retry` | Read call-audio health and whether a recording offer is waiting for its audio choice. Retry asks the human to confirm within 10 seconds; it cannot grant macOS permission or start capture directly. In the `meeting` toolset. |
+| `connections.list` | You need to know which services are connected before reading or drafting through them. States and booleans only; a state is `null` while the app is not running. In the `settings` toolset. |
+| `connections.gmail.set` | Enable Gmail draft-only mode (L1): `{ draft_stop: true }`. Disabling it is refused over the API; only the user can enable sending in Settings. Gmail connects directly to Google. In the `settings` toolset. |
+| `connections.disconnect` | The user asked to disconnect a service (L1): `{ service }`. The app applies it within seconds, or when it next starts. To connect, point the user to the app. |
+| `connections.composio.set` | The user asked to stop Mail going through Composio (`consent: false`) or to keep emails as drafts (`draft_stop: true`). Both apply at once. Granting consent (`consent: true`) or turning draft-only mode off (`draft_stop: false`) is refused: the user does those in the app. |
+| `memory.import.preview` / `memory.import` | The user wants to bring memory from another assistant. Preview first and show them what would be added; commit only the item ids they chose (`select`), or `"default"`. Nothing is written by a preview. Imported items are never high confidence. In the `import` toolset. |
+| `dream.status` | The user asks whether the nightly review ran. It answers with the night it describes, a status and, when it did not finish, a reason code. In the `settings` toolset. |
+| `dream.retry` | The user asks to retry or unstick the pending review. Safe to repeat |
+| `api.tokens.list` | You need to know your own scope (`caller_scope`) or what a scope may call. It cannot issue or widen a token, or add SHOGUN to an app: point the user to Settings. |
+| `translate.text` | The user wants text translated between their languages (English and Japanese) (L1): `{ text, target? }`. The SHOGUN app runs it on the user's own model access, so it must be running. Returns the translation, or a `job_id` to poll with `translate.status`. In the `translate` toolset. |
+| `translate.reply_draft` | The user wants to answer a message in the language it was written in (L1): `{ incoming }`. Returns the draft and a back-translation into the user's language, plus any `placeholders` still to fill. It never sends: show the draft to the user. |
+| `visual_recall.set_enabled` | The user asked to turn Visual recall on or off. Turning it on while it is off returns `{ pending, approval_id }` and changes nothing until they approve it in the app. Turning it off applies at once and **deletes all automatically captured frames and their OCR text immediately**; if the user only wants capture to stop for a while, use `capture.set_paused` instead, which deletes nothing. |
+| `visual_recall.set_retention` | The user asked how long saved screens are kept (1–3650 days). A shorter or equal retention applies at once. A longer one returns `{ pending, approval_id }` and changes nothing until they approve it in the app. |
+| `capture.set_paused` | The user asked to pause screen capture: `{ paused: true }`, with an optional `resume_at_ms` within 26 hours. It applies at once and deletes nothing. `{ paused: false }` while capture is paused returns `{ pending, approval_id }` and capture stays paused until they approve it in the app. Ending a timed pause early is refused. |
+| `capture_exclusions.set` | The user asked to change what capture skips. A request that only adds exclusions applies at once. A request that removes any exclusion returns `{ pending, approval_id }` and changes nothing until they approve it in the app. |
+
+<Warning>
+  A standalone MCP process reads the database. The live capture cache behind
+  the notch is not available to it, so `memory.get_context` is the
+  database-derived snapshot rather than what is on screen this second.
+</Warning>
+
+## Smoke check
+
+<Steps>
+  <Step title="Enable and issue">
+    Turn on the Memory API and issue a token in Settings. Choose **Read and
+    change** for this check; with a read-only token the note in step 3 is
+    refused with `scope_insufficient`.
+  </Step>
+  <Step title="Wire the client">
+    Use **Add to …**, or add the entry above by hand, give the app its token,
+    and restart it.
+  </Step>
+  <Step title="Call three tools">
+    In the client's chat: `profile.whoami`, then `memory.get_context`, then
+    `memory.append_note` with a short note.
+  </Step>
+  <Step title="Prove it fails closed">
+    Turn the Memory API off, restart the client. The process must refuse to
+    start and say so on stderr.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+If the app says the server failed to start, or every call fails, open the app's MCP server
+log. The server's start-up checks print lines that begin with `shogun-mcp:` and name the file
+they checked. They never show your token.
+
+| The log says | What to do |
+| --- | --- |
+| `no Memory API settings at …`, or `… old dev.shogun.spike folder` | The app's entry is out of date. Use **Add to …** to replace it. |
+| `SHOGUN_DB_PATH starts with ~ or names a variable` | The entry uses `~` or `$HOME`, which the app does not expand. Write the full path, or use **Add to …** to replace it. |
+| `Memory API is disabled` | Turn on the Memory API in Settings. |
+| `could not load Memory API tokens securely` | Choose **Always Allow** on the keychain prompt for `shogun-mcp`, then restart the app. |
+| `SHOGUN is not connected to …` | The app was never added from this Mac, or it was removed. Use **Add to …** (or **Connect …** for an entry you wrote yourself). |
+| `SHOGUN_API_TOKEN must match an issued Memory API token.` | The app's entry is from before connections. Use **Add to …** to replace it. |
+| `the Memory API is locked on this Mac (…)` | Follow the sentence after it. It names your plan's state, for example `trial_ended`. |
+
+When your plan does not include the Memory API, the server still starts. The app is told why when
+it connects, and every refused call carries the same reason, so your assistant can tell you what
+to do instead of retrying.
+
+### Forms group
+
+The `forms` toolset exposes `forms.inspect`, `forms.plan`, `forms.status`,
+`forms.apply` and `forms.close`. Inspection uses the focused source in the running
+desktop. Plans return immediately in `planning`; poll status for the reviewed
+suggestions. Apply returns `pending_confirmation`: the user must select values
+and click Fill in SHOGUN. There is no remote confirmation or answer payload.
+The current session revision is required for plan/apply so stale requests fail.

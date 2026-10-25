@@ -1,0 +1,102 @@
+{
+  "format": "synthday/v1",
+  "id": "day-06-en-dashboard-noise",
+  "generator": {
+    "seed": 317006,
+    "template_set": "v1",
+    "required_templates": [
+      "dash_trap_announcement",
+      "dash_trap_pr_rows",
+      "dash_trap_agent_rows",
+      "dash_commit_theirs_to_you"
+    ]
+  },
+  "persona": {
+    "id": "p-eng-lead",
+    "name": "Mara Quint",
+    "role": "Engineering lead",
+    "org": "Larkspur Freight",
+    "lang": "en",
+    "utc_offset_secs": 0
+  },
+  "date": "2026-03-11",
+  "events": [
+    {
+      "id": 6001,
+      "ts_ms": 1773220140000,
+      "local_time": "09:09",
+      "source": "capture",
+      "app": "Agents",
+      "window": "Sessions",
+      "text": "Idle Code review and follow up plan\nRunning Waiting for review on Atlas Ledger",
+      "template": "dash_trap_agent_rows"
+    },
+    {
+      "id": 6002,
+      "ts_ms": 1773220620000,
+      "local_time": "09:17",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Updates to our terms",
+      "text": "From: Larkspur Freight <notices@larkspur.example>\nHi Mara,\nWe've updated our terms of service. The details are here, and they'll go into effect on October 1.\nThe Larkspur Freight team",
+      "template": "dash_trap_announcement"
+    },
+    {
+      "id": 6003,
+      "ts_ms": 1773222300000,
+      "local_time": "09:45",
+      "source": "capture",
+      "app": "Browser",
+      "window": "Pull requests · Atlas Ledger",
+      "text": "#549 • Needs review · Fix cost estimate totals\n#549 · Merged · Code review and E2E tests",
+      "template": "dash_trap_pr_rows"
+    },
+    {
+      "id": 6004,
+      "ts_ms": 1773222720000,
+      "local_time": "09:52",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#heron-launch",
+      "text": "Kasimir Lode: Legal signed off, they'll send you the countersigned design doc by Friday.",
+      "template": "dash_commit_theirs_to_you"
+    }
+  ],
+  "gold": [
+    {
+      "id": "g01",
+      "table": "commitments",
+      "fields": {
+        "description": "Legal signed off, they'll send you the countersigned design doc by Friday",
+        "direction": "theirs",
+        "due": "2026-03-13"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        6004
+      ]
+    },
+    {
+      "id": "g02",
+      "table": "people",
+      "fields": {
+        "name": "Kasimir Lode"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        6004
+      ]
+    },
+    {
+      "id": "g03",
+      "table": "projects",
+      "fields": {
+        "name": "Atlas Ledger"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        6001
+      ]
+    }
+  ]
+}

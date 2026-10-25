@@ -1,0 +1,27 @@
+[package]
+name = "dedup-bench"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN memory repetition benchmark: how many state rows one real memory becomes, and how often distinct memories wrongly merge."
+
+# Platform-independent, like pii-bench and memory-bench: shogun-memory bundles SQLCipher, so this
+# runs on the Linux CI runner (CLAUDE.md CI budget rules — never add a macOS job for it).
+#
+# Deliberately NOT a dependent of shogun-core. The capture-side near-duplicate collapse
+# (`shogun_core::capture::dedup`, FR-CAP-03) runs *upstream* of everything measured here: a body
+# >= 98% similar to a recent one never becomes an event, and a view that changes >= 40% of its lines
+# is stored as a full checkpoint. Scenarios are written as the post-collapse event stream — every
+# capture in them differs from its predecessor by a new-view checkpoint — so this crate measures the
+# state layer's input exactly as the capture layer emits it, without pulling in the daemon.
+
+[dependencies]
+shogun-memory = { path = "../shogun-memory" }
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

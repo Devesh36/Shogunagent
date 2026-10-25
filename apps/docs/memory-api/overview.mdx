@@ -1,0 +1,210 @@
+---
+title: "Overview"
+description: "Three faces on one memory: MCP, CLI, and local REST."
+---
+
+Anything you can do in the app, you can do from an API — that symmetry is a
+design rule, not a roadmap item. The same permission levels apply to both:
+an agent calling `actions.execute` hits the same L3 confirmation you do.
+
+<CardGroup cols={3}>
+  <Card title="MCP" icon="plug" href="/memory-api/mcp">
+    For AI clients. Stdio server, one binary.
+  </Card>
+  <Card title="CLI" icon="terminal" href="/memory-api/cli">
+    `shogun` — every read and write from a shell.
+  </Card>
+  <Card title="REST" icon="server" href="/memory-api/rest">
+    Loopback HTTP for scripts and local tools.
+  </Card>
+</CardGroup>
+
+<Note>
+  The Memory API is a Pro capability, and the trial is Pro-equivalent.
+</Note>
+
+## Enable it
+
+The API is off until you turn it on, and it fails closed: with the setting
+absent or false, `shogun-mcp` and `shogun-api` exit non-zero with a clear
+message on stderr rather than serving anything.
+
+<Steps>
+  <Step title="Turn it on">
+    **Settings → Memory API → On.**
+  </Step>
+  <Step title="Add it to an app">
+    **Settings → Memory API → Add to an app**, then **Add to …** for the app.
+    Choose its access first: **Read only** (the default) or **Read and change**.
+    There is nothing to copy — see [MCP](/memory-api/mcp).
+  </Step>
+  <Step title="Or issue a token, for REST and the CLI">
+    **Settings → Memory API → Issue.** Choose its access the same way. The token
+    is shown once — copy it.
+
+    Once any app is connected or any token exists, an MCP entry must name a
+    connected app or pass a matching `SHOGUN_API_TOKEN`. Before that, local
+    process trust is accepted so you can try things out.
+  </Step>
+</Steps>
+
+## Token access
+
+Each token has a scope, set when you issue it.
+
+| Scope | In Settings | What the client can do |
+|---|---|---|
+| `read` | Read only (default) | Search and read. Every write and `actions.execute` is refused |
+| `full` | Read and change | Every tool, each at its own level. Sends still wait for your approval |
+
+A refused call answers `scope_insufficient` before anything runs: HTTP 403 on
+REST and the CLI, JSON-RPC error `-32004` on MCP (its message starts with
+`scope_insufficient:`). A read-only MCP client is not shown the tools it cannot
+call: of the 158 tools, it lists the 85 reads. Tokens issued before scopes
+existed are `full` and keep working. Before the first token exists, local
+process trust is `full` too.
+
+No API can issue a token, widen one, or add SHOGUN to an app. Those happen only
+in Settings, where you see what you are agreeing to: to let a client change
+things, issue a **Read and change** token in Settings and swap it in. Revoke a
+token in Settings at any time.
+
+### What `api.tokens.list` returns
+
+The same answer on MCP (`api.tokens.list`), REST (`GET /v1/api/tokens`) and the
+CLI (`shogun api tokens`). It never contains a token or a token's verifier.
+
+| Field | What it holds |
+|---|---|
+| `tokens` | One entry per issued token: `id`, `name` (the client name you gave it), `created_at`, `scope` (`read` or `full`) |
+| `connections` | One entry per connected app: `client`, `label`, `scope` (`read` or `full`), `created_at` |
+| `caller_scope` | The scope of the token making this call |
+| `scopes` / `default_scope` | Every scope, and the one a new token gets (`read`) |
+| `access` | Every tool by group, each with its `level` (`read`, `l1`, `l2`, `l3`, `per_action`) and the `scopes` that may call it. Settings shows this as **What the app can see** |
+| `mount` | The setup for each supported app: `server_name` (`shogun-memory`), `token_env` (`SHOGUN_API_TOKEN`) and `clients`. Settings shows this as **Add to an app** |
+| `mount.clients[]` | Per app: `id`, `label`, `format`, `config_location`, the entry as `config`, the vendor command as `cli_command` where there is one, and the `connection` the entry names. `token_source` is `connection` and there is no token step |
+| `mount.clients[].install` | How one-click setup reaches the app: `method` (`vendor_cli` or `config_file`), the `file` it would edit, the text or commands it `adds`, and `apply`, always `"in_app_only"` |
+
+Paths in `mount` are placeholders
+(`/ABS/PATH/TO/target/release/shogun-mcp`, `/Users/YOU/…`): an answer never
+carries this Mac's paths, which include your user name, to a client whose
+conversation may leave the Mac. Settings fills in the real ones.
+
+## Where things live
+
+On macOS, the app keeps memory under its application-support directory:
+
+```text
+~/Library/Application Support/com.syogun.shogunai/
+  memory.db            # the encrypted memory database
+  memory_api.json      # enable flag + profile
+  l3_approvals.json    # the shared approval queue
+  visual_recall.json
+  backup.json          # how many days encrypted snapshots are kept
+  backups/             # the encrypted snapshots themselves
+```
+
+Standalone binaries read `SHOGUN_DB_PATH` (default `./shogun.db`). They never
+create or upgrade the database. If the database does not exist yet, the server
+exits at start-up with `memory_update_pending`: open the SHOGUN app once, then
+restart the server from your AI app. A database the app has not upgraded yet
+(after an update) answers each memory call with `memory_update_pending` and
+recovers on its own, with no restart, once the app has opened it. If the app
+upgraded the database while an older server was still running, calls answer
+`memory_newer_than_app`: restart the SHOGUN connection in your AI app. Settings
+are read from `memory_api.json` beside the database. Approvals resolve from
+`SHOGUN_L3_APPROVALS`, otherwise `l3_approvals.json` beside the database.
+
+## Tools
+
+| Tool | Level | What it is for |
+|---|---|---|
+| `profile.whoami` | read | Session start: identity, preferences, a compact work summary (weaker items listed apart under `work.inferred`) |
+| `api.tokens.list` | read | Issued tokens with their scope, the caller's own scope, what each scope can call, and the setup per app (never a token) |
+| `dream.status` | read | The nightly review: whether last night's run finished, and if not, why (asleep, in use, low battery, interrupted, service unreachable, …), and which actions are available right now, with a code when one is off. Dates, counts and reason codes only |
+| `dream.retry` | write | Resume the pending Batch review now. Safe to repeat; it picks up an existing batch instead of sending it again |
+| `memory.get_context` | read | The current work snapshot from the database |
+| `memory.get_context_pack` | read | Grounded pack: facts plus evidence with provenance |
+| `memory.search` | read | Local text search over events and notes |
+| `memory.get_wrap` | read | Today's evening wrap |
+| `calendar.upcoming` | read | Upcoming events from the synced calendar, the next 7 days (REST `/v1/calendar/upcoming`, CLI `shogun calendar`) |
+| `memory.get_periods` | read | What happened in a window: stored hour / day / week / month summaries (`from_ms`, `to_ms`; REST `/v1/memory/periods`, CLI `shogun periods`) |
+| `state.people.*` / `projects.*` / `commitments.*` / `open_loops.*` | read | List or get state records |
+| `lessons.list` | read | Learned lessons |
+| `visual_recall.*` | read / L1 | Status, frame search and deletion |
+| `visual_recall.set_enabled` | L3 / L1 | Turning Visual recall on returns `pending` until you approve it in the app. Turning it off applies directly and deletes the automatically captured frames and their OCR text at once; to stop capturing without deleting anything, use `capture.set_paused` |
+| `visual_recall.set_retention` | L1 / L3 | How many days saved screens are kept (1–3650). Shorter or the same applies directly; longer returns `pending` until you approve it in the app |
+| `backup.status` | read | How many days encrypted database snapshots are kept (1–30, default 7), the pruning rule, and how many snapshots exist and how old they are |
+| `backup.set_retention` | L1 | Keep snapshots at most this many days. Applies at once, shorter or longer |
+| `search_index.status` | read | The "Compact search index" job: its state, steps done and left, space before and after, and whether the disk has room |
+| `search_index.compact.start` / `.stop` | L1 | Start, continue or stop compacting the search index. The app runs it in small steps; search results do not change |
+| `storage.preview` | read | Bounded, read-only preview of exact duplicate event-history text: bytes scanned, kept, extra, protected and uncertain, plus database page use. Counts only, never text; it frees nothing |
+| `voice_dictionary.*` | read / L1 | Local vocabulary |
+| `voice_dictionary.autoadd` / `autoadd_manage` | read / L3 / L1 | Automatic dictionary additions: status and recent additions; `autoadd_manage` with `enable` returns `pending` until you approve it in the app, while `disable` and `undo` apply directly |
+| `memory.append_note` | L1 | Append a note |
+| `memory.notes.list` | read | Saved chat memories; with `id`, current text and revision history |
+| `memory.notes.change` | L1 | Save, update, forget or undo a saved chat memory; changes require its current revision |
+| `memory.import.preview` | read | Check a memory package, or the text of memory files you exported from another assistant, and show what would be added. Writes nothing |
+| `memory.import` | L1 | Save the items you chose from a preview |
+| `memory.import.list` / `memory.import.delete` | read / L1 | Past imports, and undoing one whole import |
+| `profile.set` | L1 | Update display name, role, preferences |
+| `lessons.set_active` | L1 | Switch a learned lesson on or off |
+| `state.disputes.list` | read | Open contradictions: two readings of one promise with different due dates |
+| `state.disputes.resolve` | L1 | Settle one: `keep_earlier`, `keep_later`, `keep_both` or `dismiss_both` |
+| `writing_voice.set` | L3 / L1 | Enable writing-style sharing (returns `pending` until you approve it in the app); disable or clear it directly |
+| `agent.source.get` | read | What chat and drafts run on: the selected source, the subscription opt-in, whether OpenAI may store responses, installed assistant CLIs, which providers have a key (presence only), and the models each provider offers |
+| `agent.source.set` | L1 / L3 | Switch to an API-key provider or one of its listed models, withdraw the subscription opt-in, or stop OpenAI storing responses directly; selecting a subscription returns `pending` until you approve it in the app; nothing turns OpenAI response storage on |
+| `connections.list` | read | Each connection's state, access and third party, a pending disconnect, and Mail's consent and draft-only mode (states only, never an account) |
+| `connections.disconnect` | L1 | Disconnect a service. The app deletes its stored sign-in, now or when it next starts |
+| `connections.composio.set` | L1 | Revoke Mail's consent or turn draft-only mode on. Granting consent or turning draft-only mode off is refused: do those in the app |
+| `capture.set_paused` | L1 / L3 | Pause capture, now or until a time within 26 hours. Resuming while capture is paused returns `pending` until you approve it in the app |
+| `capture_exclusions.get` | read | The apps and websites capture skips |
+| `capture_exclusions.set` | L1 / L3 | Replace those lists. Adding exclusions applies directly; any removal returns `pending` until you approve it in the app |
+| `actions.execute` | per action | Run an action; sends return `pending` |
+| `actions.status` | read | Poll an approval |
+| `actions.questions` | read | Questions an agent run is waiting on, or one by id with its status |
+| `actions.answer` | L1 | Answer one question; the run carries on. Approves nothing |
+| `actions.steer` | L1 | Add one more instruction to a run that is still going; it reads it at its next step. Approves nothing |
+
+Reads exclude results below 0.5 confidence unless you ask for them.
+
+<Note>
+Connecting a service is only in the app, on purpose. Calendar and Drive need you to
+sign in to Google in your browser. Mail needs a Composio API key, which is stored in
+your Keychain and must never pass through an assistant. Granting Mail's consent and
+turning its draft-only mode off also stay in the app, where you confirm each of the
+three disclosures yourself. The API can only take access away.
+</Note>
+
+## The binaries
+
+The app ships all three faces, signed and notarized with it. In an installed
+copy they are in `/Applications/ShogunAI.app/Contents/MacOS/`:
+
+| File | Face | |
+|---|---|---|
+| `shogun-mcp` | MCP | [Add to an app](/memory-api/mcp#add-to-an-app) points each client at it |
+| `shogun-api` | REST | [Start it](/memory-api/rest#start-the-server) in a Terminal window |
+| `shogun` | CLI | [Link it](/memory-api/cli) onto your `PATH`; it calls `shogun-api` |
+
+To build them yourself from the repository instead:
+
+```bash
+cargo build -p shogun-core --features db --bin shogun-mcp --release
+cargo build -p shogun-core --features daemon-server --bin shogun-api --release
+cargo build -p shogun-cli --bin shogun --release
+```
+
+## Reviewed form filling
+
+`forms.inspect` opens the selected form in SHOGUN. `forms.plan` uses TypeSafe
+Jev to match supplied facts and bounded memory excerpts to blank fields; `forms.status` reads that review. `forms.apply` only opens pending
+human confirmation in the app. It cannot accept answers or approval from another
+assistant. `forms.close` cancels the review. Existing values and unsupported or
+sensitive controls are skipped; SHOGUN never clicks Submit.
+
+CLI: `shogun forms inspect`, `forms plan <session> <revision> <instruction...>`,
+`forms status <session>`, `forms apply <session> <revision>`, `forms close <session>`.
+The desktop must be running. Only status is available to a read-only token.
+
+For matching, save your TypeSafe key in **Settings → Privacy & Security → Jev form decisions**. Form decisions use Jev directly, independently of the chat model. Supply separate facts, such as `Name: Mira Rao; Email: mira@example.com`. Uncertain matches stay blank.

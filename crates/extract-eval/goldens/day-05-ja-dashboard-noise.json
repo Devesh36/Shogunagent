@@ -1,0 +1,217 @@
+{
+  "format": "synthday/v1",
+  "id": "day-05-ja-dashboard-noise",
+  "generator": {
+    "seed": 317005,
+    "template_set": "v1",
+    "required_templates": [
+      "dash_trap_ja_greeting",
+      "dash_trap_ja_request_closing",
+      "dash_trap_ja_marketing",
+      "dash_trap_ja_pr_rows",
+      "dash_trap_ja_agent_rows",
+      "dash_ja_commit_fix_mention",
+      "dash_ja_commit_humble",
+      "dash_ja_review_cc",
+      "dash_ja_reply_offer"
+    ]
+  },
+  "persona": {
+    "id": "p-ja-pm",
+    "name": "真野湊",
+    "role": "プロダクトマネージャー",
+    "org": "株式会社コヨミ",
+    "lang": "ja",
+    "utc_offset_secs": 32400
+  },
+  "date": "2026-03-10",
+  "events": [
+    {
+      "id": 5001,
+      "ts_ms": 1773102240000,
+      "local_time": "09:24",
+      "source": "capture",
+      "app": "ブラウザ",
+      "window": "料金プラン · ハコニワ",
+      "text": "ハコニワは安心をお約束します。\n今すぐ無料で始める",
+      "template": "dash_trap_ja_marketing"
+    },
+    {
+      "id": 5002,
+      "ts_ms": 1773104160000,
+      "local_time": "09:56",
+      "source": "gmail",
+      "app": "メール",
+      "window": "Re: 議事録",
+      "text": "差出人: 佐伯灯 <saeki@koyomi.example>\n真野さん\n議事録の件、明日、以下でお願いいたします。\n佐伯",
+      "template": "dash_trap_ja_request_closing"
+    },
+    {
+      "id": 5003,
+      "ts_ms": 1773106380000,
+      "local_time": "10:33",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#minato",
+      "text": "久住: 本日17時からミナト刷新の定例です。よろしくお願いいたします。",
+      "template": "dash_trap_ja_greeting"
+    },
+    {
+      "id": 5004,
+      "ts_ms": 1773107880000,
+      "local_time": "10:58",
+      "source": "capture",
+      "app": "エージェント",
+      "window": "セッション",
+      "text": "アイドル コードレビューと実装計画\n実行中 議事録のレビュー待ち対応",
+      "template": "dash_trap_ja_agent_rows"
+    },
+    {
+      "id": 5005,
+      "ts_ms": 1773109080000,
+      "local_time": "11:18",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#pm-team",
+      "text": "真野: アプリ全体で30以上のバグを見つけましたので、明日修正します @saeki",
+      "template": "dash_ja_commit_fix_mention"
+    },
+    {
+      "id": 5006,
+      "ts_ms": 1773109740000,
+      "local_time": "11:29",
+      "source": "capture",
+      "app": "ブラウザ",
+      "window": "プルリクエスト · コヨミ移行",
+      "text": "#177 · マージ済み コードレビューとE2Eテスト\n#177 · オープン 見積書のレビュー依頼対応",
+      "template": "dash_trap_ja_pr_rows"
+    },
+    {
+      "id": 5007,
+      "ts_ms": 1773111180000,
+      "local_time": "11:53",
+      "source": "gmail",
+      "app": "メール",
+      "window": "Re: 設計書",
+      "text": "宛先: 早瀬律 <hayase@koyomi.example>\n早瀬さん\n設計書は水曜日までに送付いたします。\nよろしくお願いいたします。\n真野",
+      "template": "dash_ja_commit_humble"
+    },
+    {
+      "id": 5008,
+      "ts_ms": 1773112800000,
+      "local_time": "12:20",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#pm-team",
+      "text": "真野: ・リリース共有 cc @kusumi （確認お願いします）",
+      "template": "dash_ja_review_cc"
+    },
+    {
+      "id": 5009,
+      "ts_ms": 1773113580000,
+      "local_time": "12:33",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#minato",
+      "text": "久住: 議事録は明日送りますか？",
+      "template": "dash_ja_reply_offer"
+    }
+  ],
+  "gold": [
+    {
+      "id": "g01",
+      "table": "commitments",
+      "fields": {
+        "description": "アプリ全体で30以上のバグを見つけましたので、明日修正します",
+        "direction": "mine",
+        "due": "2026-03-11"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        5005
+      ]
+    },
+    {
+      "id": "g02",
+      "table": "commitments",
+      "fields": {
+        "description": "設計書は水曜日までに送付いたします",
+        "direction": "mine",
+        "due": "2026-03-11"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        5007
+      ]
+    },
+    {
+      "id": "g03",
+      "table": "open_loops",
+      "fields": {
+        "description": "・リリース共有 cc @kusumi （確認お願いします）",
+        "kind": "review_pending"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        5008
+      ]
+    },
+    {
+      "id": "g04",
+      "table": "open_loops",
+      "fields": {
+        "description": "議事録は明日送りますか",
+        "kind": "reply_needed"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        5009
+      ]
+    },
+    {
+      "id": "g05",
+      "table": "people",
+      "fields": {
+        "name": "佐伯灯"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        5002
+      ]
+    },
+    {
+      "id": "g06",
+      "table": "people",
+      "fields": {
+        "name": "久住蒼"
+      },
+      "expected_band": "high",
+      "evidence": [
+        5003,
+        5009
+      ]
+    },
+    {
+      "id": "g07",
+      "table": "people",
+      "fields": {
+        "name": "早瀬律"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        5007
+      ]
+    },
+    {
+      "id": "g08",
+      "table": "projects",
+      "fields": {
+        "name": "ミナト刷新"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        5003
+      ]
+    }
+  ]
+}

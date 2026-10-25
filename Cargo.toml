@@ -1,0 +1,60 @@
+# ShogunAgent Cargo workspace.
+#
+# Migrated from Torutesu/ShogunAI- (see docs/shogunai-origin/SOURCE.txt). The macOS desktop shell
+# (apps/desktop/src-tauri), the logo crate and the AX capture bench
+# were not carried over: ShogunAgent is a server/sidecar product and every crate here must build
+# and test on Linux. macOS-only code paths that remain inside these crates are cfg-gated and are
+# scheduled for removal or relocation in docs/implementation-plan.md.
+[workspace]
+resolver = "2"
+members = [
+    "crates/shogun-core",
+    "crates/shogun-memory",
+    "crates/shogun-redact",
+    "crates/shogun-fusion",
+    "crates/shogun-agents",
+    "crates/shogun-license",
+    "crates/shogun-mcp",
+    "crates/shogun-microphone",
+    "crates/shogun-integrations",
+    "crates/shogun-cli",
+    "crates/memory-bench",
+    "crates/pii-bench",
+    "crates/extract-eval",
+    "crates/fusion-eval",
+    "crates/dedup-bench",
+    "crates/spike-harness",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+publish = false
+
+# Carried over from ShogunAI: clippy warnings deny, no unwrap() outside tests, rustc `unused` deny.
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+
+[workspace.lints.rust]
+unused = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[profile.release]
+# Never set `panic = "abort"`: shogun-memory's migrate_and_check needs unwinding.
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = "none"
+
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true

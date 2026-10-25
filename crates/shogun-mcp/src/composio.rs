@@ -1,0 +1,317 @@
+//! The second-layer (Composio) opt-in gate (§6.10, FR-C2-01..05). Since the 2026-07-30 decision
+//! **all Gmail traffic** — read sync, drafts, and sends — runs through Composio; the consent
+//! below therefore gates the whole mailbox (reads included, enforced service-wide by
+//! [`crate::service_gate::authorize_op`], issue #80 §2-A0). The *send* remains the most
+//! consequential operation and gets the extra type-system gates here: a send is unreachable
+//! unless two gates are passed, both enforced by types rather than a runtime flag:
+//!
+//! 1. **Opt-in consent** (FR-C2-02): a [`ComposioConsent`] can only be produced by [`grant_consent`],
+//!    which requires every disclosure (third-party routing, data types, revocability) acknowledged.
+//!    A [`ComposioSender`] cannot be built without one — so with no opt-in, no send path exists
+//!    (§6.10 acceptance: "opt-in なしで送信経路のコードに到達しない").
+//! 2. **Draft-stop mode** (FR-C2-03, default ON): while ON, [`ComposioSender::send_capability`]
+//!    returns `None` and [`ComposioSender::offered_actions`] omits `Send` entirely (hidden, not
+//!    greyed). Only a [`SendCapability`] — obtainable solely when draft-stop is OFF — lets
+//!    [`prepare_send`] be called.
+//!
+//! A third gate composes on top (issue #97, never replacing the two above):
+//! [`ComposioSender::send_capability`] also requires [`Entitlements::composio_send_unlock`]
+//! (Pro / active trial) — the Pro "Composio第2層" boundary means exactly this send unlock, and
+//! nothing about reads (Gmail read stays Standard, 2026-07-30 decision).
+//!
+//! A prepared send is always L3 with a `ViaComposio` route (FR-C2-04), and its traceability entry
+//! always carries the third-party badge ([`COMPOSIO_THIRD_PARTY`]). On Composio failure the send is
+//! never silently rerouted — it is treated as failed and a draft is saved instead (FR-C2-05).
+
+use shogun_agents::approval::{Preview, Route};
+use shogun_agents::entitlement::Entitlements;
+use shogun_agents::permission::SendAction;
+
+/// The disclosures the opt-in consent screen must present and the user must acknowledge (FR-C2-02).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Disclosures {
+    /// (a) Gmail inbox reads, drafts, and sends are routed through Composio, a third party.
+    pub via_third_party: bool,
+    /// (b) inbox content and outgoing recipient / subject / body are exposed to Composio.
+    pub data_types: bool,
+    /// (c) it can be disabled at any time; revoking stops syncing and sending immediately.
+    pub revocable: bool,
+}
+
+impl Disclosures {
+    /// All three disclosures acknowledged.
+    pub fn all_acknowledged(self) -> bool {
+        self.via_third_party && self.data_types && self.revocable
+    }
+}
+
+/// Why consent could not be granted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsentError {
+    /// One or more disclosures were not acknowledged (FR-C2-02: no consent → no connection flow).
+    IncompleteDisclosures,
+}
+
+/// Proof that the user completed the Composio opt-in. The inner field is private, so the only way
+/// to obtain a value is [`grant_consent`] — there is no `Default`, no public constructor. This is
+/// the compile-time form of "default disabled, explicit opt-in required".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComposioConsent {
+    _acknowledged: Disclosures,
+}
+
+/// Grant consent iff every disclosure is acknowledged (FR-C2-02). Returns the capability token that
+/// gates the whole second layer.
+pub fn grant_consent(disclosures: Disclosures) -> Result<ComposioConsent, ConsentError> {
+    if disclosures.all_acknowledged() {
+        Ok(ComposioConsent { _acknowledged: disclosures })
+    } else {
+        Err(ConsentError::IncompleteDisclosures)
+    }
+}
+
+/// The actions the Composio integration offers in the UI. `Send` appears only when draft-stop is OFF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposioAction {
+    /// Save a Gmail draft (first-layer, never leaves as a send).
+    SaveDraft,
+    /// Send via Composio (second-layer, L3). Hidden while draft-stop is ON.
+    Send,
+}
+
+/// The Composio sender. Cannot be constructed without a [`ComposioConsent`]. Draft-stop defaults ON
+/// (FR-C2-03).
+pub struct ComposioSender {
+    _consent: ComposioConsent,
+    draft_stop: bool,
+}
+
+/// A capability to perform a Composio send. Obtainable only from a sender whose draft-stop is OFF
+/// (see [`ComposioSender::send_capability`]); its existence proves both gates passed. Without one,
+/// [`prepare_send`] cannot be called.
+pub struct SendCapability<'a> {
+    _sender: &'a ComposioSender,
+}
+
+impl ComposioSender {
+    /// Build a sender from consent. Draft-stop starts ON (FR-C2-03 default).
+    pub fn new(consent: ComposioConsent) -> Self {
+        Self { _consent: consent, draft_stop: true }
+    }
+
+    /// Turn draft-stop on/off. (Off requires a deliberate settings change.)
+    pub fn set_draft_stop(&mut self, on: bool) {
+        self.draft_stop = on;
+    }
+
+    pub fn draft_stop(&self) -> bool {
+        self.draft_stop
+    }
+
+    /// The actions to show in the UI. While draft-stop is ON, `Send` is omitted entirely — hidden,
+    /// not greyed (FR-C2-03).
+    pub fn offered_actions(&self) -> Vec<ComposioAction> {
+        if self.draft_stop {
+            vec![ComposioAction::SaveDraft]
+        } else {
+            vec![ComposioAction::SaveDraft, ComposioAction::Send]
+        }
+    }
+
+    /// A send capability, available only when draft-stop is OFF **and** the plan includes the
+    /// Composio send unlock (issue #97: Pro / active trial). `None` otherwise — so no send can be
+    /// prepared on a Standard plan or an expired trial, no matter the toggles.
+    pub fn send_capability(&self, ent: &Entitlements) -> Option<SendCapability<'_>> {
+        if self.draft_stop || !ent.composio_send_unlock {
+            None
+        } else {
+            Some(SendCapability { _sender: self })
+        }
+    }
+}
+
+/// A Gmail send — v1's only second-layer operation (FR-C2-01).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GmailSend {
+    pub to: String,
+    pub subject: String,
+    pub body: String,
+}
+
+/// Composio routing is always third-party (FR-C2-04): every traceability entry for a Composio send
+/// carries the badge (`TraceRecord.third_party = true`).
+pub const COMPOSIO_THIRD_PARTY: bool = true;
+
+/// Prepare a Composio Gmail send for L3 approval. Requires a [`SendCapability`] — so this is
+/// unreachable unless consent was granted, draft-stop is OFF, and the plan holds the send unlock
+/// (issue #97). Returns the [`SendAction`] (always
+/// a send → L3) and the L3 [`Preview`] with a `ViaComposio` route and the full subject+body text
+/// (FR-AG-03 / FR-C2-04). The returned action is meant to be enqueued in the L3 approval queue.
+pub fn prepare_send(_cap: SendCapability<'_>, mail: GmailSend) -> (SendAction, Preview) {
+    let action = SendAction::SendEmail { to: mail.to.clone() };
+    // Full preview text: subject + body, never a summary (FR-AG-03). The subject is folded to a
+    // single line first: [`parse_gmail_full_body`] splits on the FIRST blank line, so a subject
+    // containing "\n\n" would make the approved preview and the sent mail disagree.
+    let full = format!(
+        "Subject: {}\n\n{}",
+        mail.subject.replace(['\r', '\n'], " "),
+        mail.body
+    );
+    let preview = Preview::for_send(&action, full, Route::ViaComposio);
+    (action, preview)
+}
+
+/// Split a confirmed Gmail send's full preview body back into `(subject, body)` — the inverse of the
+/// `format!("Subject: {subject}\n\n{body}")` in [`prepare_send`]. The executor needs the parts
+/// separately because Composio's `GMAIL_SEND_EMAIL` takes `subject` and `body` as distinct fields.
+/// Kept next to `prepare_send` so the two never drift. A body that doesn't match the shape falls
+/// back to an empty subject + the whole text (never loses content).
+pub fn parse_gmail_full_body(full: &str) -> (String, String) {
+    if let Some(rest) = full.strip_prefix("Subject: ") {
+        if let Some((subject, body)) = rest.split_once("\n\n") {
+            return (subject.to_string(), body.to_string());
+        }
+    }
+    (String::new(), full.to_string())
+}
+
+/// The outcome of attempting a Composio send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendResult {
+    /// The send succeeded via Composio.
+    Sent,
+    /// Composio failed → the send is treated as **failed** and a Gmail draft was saved as the
+    /// fallback, with the user notified (FR-C2-05). The route is never silently changed to "sent".
+    FailedDraftSaved,
+}
+
+/// Resolve a Composio failure. Never reports [`SendResult::Sent`] — on failure the send fails and a
+/// draft is saved (FR-C2-05).
+pub fn on_composio_failure() -> SendResult {
+    SendResult::FailedDraftSaved
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn full_consent() -> ComposioConsent {
+        grant_consent(Disclosures { via_third_party: true, data_types: true, revocable: true }).unwrap()
+    }
+
+    /// A plan holding the Composio send unlock (Pro).
+    fn pro() -> Entitlements {
+        shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0)
+    }
+
+    #[test]
+    fn consent_requires_every_disclosure() {
+        // any missing acknowledgement → no consent
+        for d in [
+            Disclosures { via_third_party: false, data_types: true, revocable: true },
+            Disclosures { via_third_party: true, data_types: false, revocable: true },
+            Disclosures { via_third_party: true, data_types: true, revocable: false },
+        ] {
+            assert_eq!(grant_consent(d), Err(ConsentError::IncompleteDisclosures));
+        }
+        // all acknowledged → ok
+        assert!(grant_consent(Disclosures { via_third_party: true, data_types: true, revocable: true }).is_ok());
+    }
+
+    #[test]
+    fn draft_stop_defaults_on_and_hides_send() {
+        let sender = ComposioSender::new(full_consent());
+        assert!(sender.draft_stop(), "draft-stop must default ON (FR-C2-03)");
+        assert_eq!(sender.offered_actions(), vec![ComposioAction::SaveDraft]);
+        assert!(!sender.offered_actions().contains(&ComposioAction::Send), "Send must be hidden");
+        assert!(sender.send_capability(&pro()).is_none(), "no send capability while draft-stop ON");
+    }
+
+    #[test]
+    fn disabling_draft_stop_exposes_send() {
+        let mut sender = ComposioSender::new(full_consent());
+        sender.set_draft_stop(false);
+        assert!(sender.offered_actions().contains(&ComposioAction::Send));
+        assert!(sender.send_capability(&pro()).is_some());
+    }
+
+    #[test]
+    fn plan_without_send_unlock_blocks_the_capability_even_with_consent_and_draft_stop_off() {
+        // Issue #97: Standard and an expired trial have no composio_send_unlock — the capability
+        // is unobtainable even when both older gates (consent, draft-stop OFF) are open. The
+        // entitlement gate composes with them; it never replaces them.
+        use shogun_agents::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
+        let mut sender = ComposioSender::new(full_consent());
+        sender.set_draft_stop(false);
+        let standard = entitlements(Plan::Standard, 0);
+        let expired = entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS);
+        assert!(sender.send_capability(&standard).is_none(), "Standard has no send unlock");
+        assert!(sender.send_capability(&expired).is_none(), "expired trial has no send unlock");
+        // an active trial (Pro-equivalent) does
+        let trial = entitlements(Plan::Trial { started_at_ms: Some(0) }, 1);
+        assert!(sender.send_capability(&trial).is_some());
+    }
+
+    #[test]
+    fn prepared_send_is_l3_via_composio_with_full_text() {
+        let mut sender = ComposioSender::new(full_consent());
+        sender.set_draft_stop(false);
+        let cap = sender.send_capability(&pro()).unwrap();
+        let (action, preview) = prepare_send(
+            cap,
+            GmailSend { to: "bob@example.com".into(), subject: "Ship date".into(), body: "Friday.".into() },
+        );
+        // it's a send → L3
+        use shogun_agents::permission::{Action, Level};
+        assert_eq!(Action::Send(action.clone()).required_level(), Level::L3);
+        assert!(matches!(action, SendAction::SendEmail { .. }));
+        // preview: composio route, full subject+body
+        assert_eq!(preview.route, Route::ViaComposio);
+        assert!(preview.full_body.contains("Subject: Ship date"));
+        assert!(preview.full_body.contains("Friday."));
+        assert_eq!(preview.destination, "bob@example.com");
+    }
+
+    #[test]
+    fn composio_send_is_always_third_party() {
+        // FR-C2-04: Composio traceability entries carry the third-party badge. Bound through a
+        // value so this checks the constant we actually expose, not a literal.
+        let badge = COMPOSIO_THIRD_PARTY;
+        assert!(badge, "Composio entries must carry the third-party badge");
+    }
+
+    #[test]
+    fn parse_gmail_full_body_inverts_prepare_send() {
+        let mut sender = ComposioSender::new(full_consent());
+        sender.set_draft_stop(false);
+        let cap = sender.send_capability(&pro()).unwrap();
+        let (_action, preview) = prepare_send(
+            cap,
+            GmailSend { to: "b@e.com".into(), subject: "Ship date".into(), body: "Friday.\n\nThanks".into() },
+        );
+        let (subject, body) = parse_gmail_full_body(&preview.full_body);
+        assert_eq!(subject, "Ship date");
+        assert_eq!(body, "Friday.\n\nThanks");
+    }
+
+    #[test]
+    fn parse_gmail_full_body_falls_back_without_losing_content() {
+        let (subject, body) = parse_gmail_full_body("no subject header here");
+        assert_eq!(subject, "");
+        assert_eq!(body, "no subject header here");
+    }
+
+    #[test]
+    fn failure_never_reports_sent() {
+        // FR-C2-05: on failure the send fails and a draft is saved — never silently "sent".
+        assert_eq!(on_composio_failure(), SendResult::FailedDraftSaved);
+        assert_ne!(on_composio_failure(), SendResult::Sent);
+    }
+
+    // Structural note (FR-C2 acceptance): `prepare_send` takes a `SendCapability`, whose only source
+    // is `ComposioSender::send_capability(&Entitlements)` returning `Some` — which happens only when
+    // draft-stop is OFF AND the plan holds the send unlock (#97), on a sender that required a
+    // `ComposioConsent` to build, which required full disclosures. So the send path is unreachable
+    // without: consent → draft-stop OFF → Pro/Trial plan. None of it is a runtime flag that could be
+    // bypassed; it is the type graph.
+}

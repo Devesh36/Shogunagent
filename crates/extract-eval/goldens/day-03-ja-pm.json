@@ -1,0 +1,349 @@
+{
+  "format": "synthday/v1",
+  "id": "day-03-ja-pm",
+  "generator": {
+    "seed": 317003,
+    "template_set": "v1",
+    "required_templates": [
+      "ja_review",
+      "ja_trap_quoted",
+      "ja_commit_theirs",
+      "ja_decision",
+      "ja_reply",
+      "ja_commit_mine"
+    ]
+  },
+  "persona": {
+    "id": "p-ja-pm",
+    "name": "真野湊",
+    "role": "プロダクトマネージャー",
+    "org": "株式会社コヨミ",
+    "lang": "ja",
+    "utc_offset_secs": 32400
+  },
+  "date": "2026-03-04",
+  "events": [
+    {
+      "id": 3001,
+      "ts_ms": 1772583180000,
+      "local_time": "09:13",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#release",
+      "text": "真野: 佐伯さん、見積書は金曜日までに送ります。",
+      "template": "ja_commit_mine"
+    },
+    {
+      "id": 3002,
+      "ts_ms": 1772584020000,
+      "local_time": "09:27",
+      "source": "meeting",
+      "app": "会議メモ",
+      "window": "コヨミ移行定例",
+      "text": "早瀬律: コヨミ移行のリリース日はまだ未定です。\n真野: 了解です。",
+      "template": "ja_decision"
+    },
+    {
+      "id": 3003,
+      "ts_ms": 1772585520000,
+      "local_time": "09:52",
+      "source": "gmail",
+      "app": "メール",
+      "window": "ミナト刷新の予算",
+      "text": "差出人: 久住蒼 <kusumi@koyomi.example>\n真野さん\nミナト刷新の予算について、来週ご相談できますか？\n久住",
+      "template": "ja_reply"
+    },
+    {
+      "id": 3004,
+      "ts_ms": 1772586240000,
+      "local_time": "10:04",
+      "source": "gmail",
+      "app": "メール",
+      "window": "Re: ミナト刷新",
+      "text": "差出人: 佐伯灯 <saeki@koyomi.example>\n真野さん\n見積書は明日お送りします。\n佐伯",
+      "template": "ja_commit_theirs"
+    },
+    {
+      "id": 3005,
+      "ts_ms": 1772587980000,
+      "local_time": "10:33",
+      "source": "meeting",
+      "app": "会議メモ",
+      "window": "ミナト刷新定例",
+      "text": "氷見奏: ミナト刷新のリリース日はまだ未定です。\n真野: 了解です。",
+      "template": "ja_decision"
+    },
+    {
+      "id": 3006,
+      "ts_ms": 1772588700000,
+      "local_time": "10:45",
+      "source": "gmail",
+      "app": "メール",
+      "window": "Re: ミナト刷新",
+      "text": "差出人: 氷見奏 <himi@koyomi.example>\n真野さん\n議事録は明日お送りします。\n氷見",
+      "template": "ja_commit_theirs"
+    },
+    {
+      "id": 3007,
+      "ts_ms": 1772589120000,
+      "local_time": "10:52",
+      "source": "capture",
+      "app": "メモ",
+      "window": "メモ",
+      "text": "デモの後で久住さんに移行計画について再度連絡。",
+      "template": "ja_followup"
+    },
+    {
+      "id": 3008,
+      "ts_ms": 1772590800000,
+      "local_time": "11:20",
+      "source": "capture",
+      "app": "メモ",
+      "window": "メモ",
+      "text": "佐伯さんからの設計書の返信待ち。",
+      "template": "ja_waiting"
+    },
+    {
+      "id": 3009,
+      "ts_ms": 1772593020000,
+      "local_time": "11:57",
+      "source": "gcal",
+      "app": "カレンダー",
+      "window": "カレンダー",
+      "text": "木曜日 14:00-15:00 ミナト刷新定例\n参加者: 久住蒼、早瀬律",
+      "template": "ja_calendar"
+    },
+    {
+      "id": 3010,
+      "ts_ms": 1772593980000,
+      "local_time": "12:13",
+      "source": "capture",
+      "app": "ブラウザ",
+      "window": "社内ガイド",
+      "text": "例文：「資料は明日までに送ります。」この書き方を参考にしてください。",
+      "template": "ja_trap_quoted"
+    },
+    {
+      "id": 3011,
+      "ts_ms": 1772596200000,
+      "local_time": "12:50",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#release",
+      "text": "佐伯: ミナト刷新の設計書のレビューをお願いします。",
+      "template": "ja_review"
+    },
+    {
+      "id": 3012,
+      "ts_ms": 1772597040000,
+      "local_time": "13:04",
+      "source": "capture",
+      "app": "メモ",
+      "window": "メモ",
+      "text": "佐伯さんからの移行計画の返信待ち。",
+      "template": "ja_waiting"
+    }
+  ],
+  "gold": [
+    {
+      "id": "g01",
+      "table": "commitments",
+      "fields": {
+        "description": "見積書は金曜日までに送ります",
+        "direction": "mine",
+        "due": "2026-03-06"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3001
+      ]
+    },
+    {
+      "id": "g02",
+      "table": "open_loops",
+      "fields": {
+        "description": "コヨミ移行のリリース日はまだ未定です",
+        "kind": "decision_pending"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3002
+      ]
+    },
+    {
+      "id": "g03",
+      "table": "open_loops",
+      "fields": {
+        "description": "ミナト刷新の予算について、来週ご相談できますか",
+        "kind": "reply_needed"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3003
+      ]
+    },
+    {
+      "id": "g04",
+      "table": "commitments",
+      "fields": {
+        "description": "見積書は明日お送りします",
+        "direction": "theirs",
+        "due": "2026-03-05"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3004
+      ]
+    },
+    {
+      "id": "g05",
+      "table": "open_loops",
+      "fields": {
+        "description": "ミナト刷新のリリース日はまだ未定です",
+        "kind": "decision_pending"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3005
+      ]
+    },
+    {
+      "id": "g06",
+      "table": "commitments",
+      "fields": {
+        "description": "議事録は明日お送りします",
+        "direction": "theirs",
+        "due": "2026-03-05"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3006
+      ]
+    },
+    {
+      "id": "g07",
+      "table": "open_loops",
+      "fields": {
+        "description": "デモの後で久住さんに移行計画について再度連絡",
+        "kind": "follow_up"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3007
+      ]
+    },
+    {
+      "id": "g08",
+      "table": "open_loops",
+      "fields": {
+        "description": "佐伯さんからの設計書の返信待ち",
+        "kind": "waiting_on_them"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3008
+      ]
+    },
+    {
+      "id": "g09",
+      "table": "open_loops",
+      "fields": {
+        "description": "ミナト刷新の設計書のレビューをお願いします",
+        "kind": "review_pending"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3011
+      ]
+    },
+    {
+      "id": "g10",
+      "table": "open_loops",
+      "fields": {
+        "description": "佐伯さんからの移行計画の返信待ち",
+        "kind": "waiting_on_them"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3012
+      ]
+    },
+    {
+      "id": "g11",
+      "table": "people",
+      "fields": {
+        "name": "佐伯灯"
+      },
+      "expected_band": "high",
+      "evidence": [
+        3001,
+        3004,
+        3008,
+        3011,
+        3012
+      ]
+    },
+    {
+      "id": "g12",
+      "table": "people",
+      "fields": {
+        "name": "久住蒼"
+      },
+      "expected_band": "high",
+      "evidence": [
+        3003,
+        3007,
+        3009
+      ]
+    },
+    {
+      "id": "g13",
+      "table": "people",
+      "fields": {
+        "name": "早瀬律"
+      },
+      "expected_band": "high",
+      "evidence": [
+        3002,
+        3009
+      ]
+    },
+    {
+      "id": "g14",
+      "table": "people",
+      "fields": {
+        "name": "氷見奏"
+      },
+      "expected_band": "high",
+      "evidence": [
+        3005,
+        3006
+      ]
+    },
+    {
+      "id": "g15",
+      "table": "projects",
+      "fields": {
+        "name": "ミナト刷新"
+      },
+      "expected_band": "high",
+      "evidence": [
+        3003,
+        3005,
+        3009,
+        3011
+      ]
+    },
+    {
+      "id": "g16",
+      "table": "projects",
+      "fields": {
+        "name": "コヨミ移行"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        3002
+      ]
+    }
+  ]
+}

@@ -1,0 +1,163 @@
+[package]
+name = "shogun-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN core: pure, platform-independent behavioural logic (notch UI + capture policy)."
+
+# The daemon-side core (spec §5.1): notch behaviour + capture policy + SLO metrics + the
+# internal event bus. The `notch` / `capture` / `metrics` modules stay macOS-free and
+# dependency-light so they are exhaustively unit-testable on Linux CI (carried forward from the
+# Phase 0 spike). The `bus` module adds tokio for the async broadcast; it too runs under Linux
+# tests. Makes no process-boundary assumptions (AR-03) so a later daemon split is an
+# architecture no-op.
+
+[lib]
+name = "shogun_core"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Local relay override (SHOGUN_RELAY_BASE_URL / relay_override.json, loopback only) and plain-http
+# loopback requests. OFF in shipping builds; the owner testing build enables it.
+local-relay = []
+# `net` pulls in the real HTTPS transport (reqwest). It is OFF by default so the pure-logic CI
+# job (and every Linux unit test of request-building / parsing / traceability) compiles without
+# reqwest; the macOS shell enables it.
+net = ["dep:reqwest", "dep:shogun-integrations", "dep:shogun-license", "dep:shogun-mcp", "dep:tungstenite", "dep:tokio-tungstenite", "dep:futures-util", "tokio/rt", "tokio/time", "tokio/macros", "tokio/net"]
+# `db` pulls in the storage + fusion layers for the daemon's wiring (DB-backed traceability sink,
+# capture writes, state reads → Fusion supply). OFF by default so the pure-logic tests stay
+# rusqlite-free; the daemon (and its CI step) enable it.
+db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-mcp", "dep:shogun-integrations", "dep:shogun-agents", "dep:shogun-license"]
+# `daemon-server` builds the runnable `shogun-api` binary: it composes the DB, the DB-backed
+# Memory API backend, the shared approval queue, and the axum REST listener into one process.
+# `exec` is the connector execution path WITHOUT the standalone axum server: the send-execution
+# transports (send_exec) + the HTTP clients (net) + the approval vocabulary (agents). The desktop
+# enables this; the daemon-server bundle builds on it and adds axum.
+exec = ["db", "net", "dep:shogun-agents"]
+daemon-server = ["exec", "shogun-mcp/server", "tokio/rt-multi-thread", "tokio/macros"]
+# The MT3 audio lane: the real capture + ASR backends. macOS-only heavy deps (whisper.cpp/Metal,
+# cpal, Core Audio via objc2), so OFF by default — the pure-logic audio tests compile without them.
+audio = [
+    "dep:whisper-rs",
+    "dep:cpal",
+    "dep:objc2-foundation",
+    "dep:objc2",
+    "dep:objc2-core-audio",
+    "dep:objc2-core-audio-types",
+    "dep:objc2-core-foundation",
+    "dep:block2",
+    "dep:dispatch2",
+]
+
+[dependencies]
+dirs = "5"
+base64 = "0.22"
+# The WHATWG URL parser reqwest uses, so a link is judged exactly as it will be fetched (#775).
+url = "2"
+tokio = { version = "1", features = ["sync", "time"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Local wall-clock time on Memory API rows (`when::when_json`).
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+twox-hash = "1"
+unicode-normalization = "0.1"
+unicode-segmentation = "1"
+# Real HTTPS transport, feature-gated. rustls only (no system OpenSSL); certificate verification
+# is never disabled (NFR-SEC-04).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"], optional = true }
+# Deepgram live listen (Wispr-style streaming). Blocking tungstenite matches the existing
+# reqwest::blocking audio-thread style; rustls only (same as reqwest).
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
+# Cancellable meeting reconnects reuse tungstenite, rustls, and the existing Tokio runtime stack.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"], optional = true }
+futures-util = { version = "0.3", features = ["sink"], optional = true }
+# Stable Batch request IDs and SHA256 verification of fetched static assets.
+sha2 = "0.10"
+# HMAC-SHA256 seals on the privacy settings files (audit 2026-10-20 M6, `settings_seal`). Already
+# in the graph through `hkdf`.
+hmac = "0.12"
+# The pure secret-redaction logic for the log path (`log_redact::scrub`, #28). Dependency-free, so
+# it is a normal (non-optional) dep and does NOT pull rusqlite into the default/`net`/`audio`
+# builds — that is why redaction was extracted out of shogun-memory into its own crate.
+shogun-redact = { path = "../shogun-redact" }
+# Exact-name device discovery is shared with MCP/REST/CLI so every surface accepts and rejects the
+# same microphone selections. Its CPAL dependency exists only on macOS.
+shogun-microphone = { path = "../shogun-microphone" }
+# Storage layer + its rusqlite handle, feature-gated (see the `db` feature). Same rusqlite version
+# as shogun-memory so the bundled SQLite compiles once.
+shogun-memory = { path = "../shogun-memory", optional = true }
+# Context Fusion (pure, no third-party deps). Always on since issue #398: the deep-context
+# estimate (`deep_context`) reads its cap and token estimator from `shogun_fusion::budget` in every
+# build, so Settings and `agent.source.get` show the numbers the run is held to.
+shogun-fusion = { path = "../shogun-fusion" }
+# The daemon implements the Memory API's data backend (dependency-inverted: the trait lives in mcp).
+shogun-mcp = { path = "../shogun-mcp", optional = true }
+# The first-layer connector adapter. The daemon implements its `IngestSink` (over `Db`) and owns the
+# `ConnectorRuntime`; the effectful transport/OAuth/Keychain need `live`. (integrations → mcp only,
+# so no cycle.)
+shogun-integrations = { path = "../shogun-integrations", features = ["live"], optional = true }
+# The account sign-in's pure half (#148 P2): PKCE, the loopback callback, the wire shapes and the
+# session rules. The account client (`account_client`, feature `net`) only moves bytes.
+shogun-license = { path = "../shogun-license", optional = true }
+# The `shogun-api` binary composes the shared approval queue (agents) into the server state.
+shogun-agents = { path = "../shogun-agents", optional = true }
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl", "hooks"], optional = true }
+# On-device ASR: whisper.cpp with Metal. Fed in-memory f32 PCM (no file path), so invariant 2 holds.
+whisper-rs = { version = "0.16", features = ["metal"], optional = true }
+# Microphone capture.
+cpal = { version = "0.18", optional = true }
+# Cross-process settings locks use flock on Unix (desktop on macOS, pure-crate CI/tests on Linux).
+libc = "0.2"
+# NSProcessInfo for the macOS version gate, plus NSArray/NSString/NSDictionary/NSNumber/NSUUID used
+# to build the CATapDescription and the aggregate-device description (system_tap.rs).
+objc2-foundation = { version = "0.3", optional = true }
+# macOS 14.4+ Core Audio process tap: CATapDescription, AudioHardwareCreate{ProcessTap,
+# AggregateDevice}, AudioDeviceCreateIOProcIDWithBlock, AudioDeviceStart/Stop. Feeds an in-memory
+# f32 channel only (invariant 2 — no file/temp). objc2-core-foundation supplies the CFDictionary the
+# aggregate-device create call takes; block2/dispatch2 back the IOProc block + its dispatch queue.
+objc2 = { version = "0.6", optional = true }
+objc2-core-audio = { version = "0.3.2", optional = true }
+objc2-core-audio-types = { version = "0.3.2", optional = true }
+objc2-core-foundation = { version = "0.3.2", optional = true }
+block2 = { version = "0.6", optional = true }
+dispatch2 = { version = "0.3", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-vision = { version = "0.3", features = ["VNRecognizeTextRequest", "VNRequestHandler", "VNObservation", "block2", "objc2-core-foundation"] }
+# CGRect for Vision's region of interest: a frame re-read covers the focused window only (#969).
+objc2-core-foundation = { version = "0.3.2", features = ["CFCGTypes"] }
+
+[[bin]]
+name = "shogun-api"
+path = "src/bin/shogun_api.rs"
+required-features = ["daemon-server"]
+
+# The MCP server face — a stdio JSON-RPC loop (no axum; only the storage layer).
+[[bin]]
+name = "shogun-mcp"
+path = "src/bin/shogun_mcp.rs"
+required-features = ["db"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "test-util"] }
+# For the daemon-server end-to-end test: drive the real server with the CLI's loopback client.
+shogun-cli = { path = "../shogun-cli" }
+# The audio worker is sink-agnostic (SegmentSink trait); the crate never depends on shogun-memory
+# in non-test builds. Pulled in only so tests can exercise the DB-backed sink path.
+shogun-memory = { path = "../shogun-memory" }
+# The extraction eval (issue #317): `tests/extract_eval.rs` scores the Dream Cycle's
+# LocalRuleClassifier and the Batch parse path against its synthetic golden days. It does not
+# depend on shogun-core, so there is no cycle; see its Cargo.toml for why the arrow points this way.
+extract-eval = { path = "../extract-eval" }
+# The MCP start-up test signs the licence API's trial token (issue #1031) with a test key the
+# debug binary is told to trust; the trial no longer runs on the local stamp alone.
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
+
+[lints]
+workspace = true

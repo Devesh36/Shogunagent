@@ -1,0 +1,165 @@
+{
+  "day": "day-05-ja-dashboard-noise",
+  "format": "batch-replay/v2",
+  "note": "Synthetic, hand-shaped Batch consolidation results in the JSON contract the consolidation instruction asks for: one result per session (app, window, hour), items anchored into the session's numbered lines. NOT model output. This dashboard-noise day carries no deliberate mistakes: it answers what a correct model would, so the traps score the parse path only.",
+  "results": [
+    {
+      "custom_id": "s839a1bc98a0d7232",
+      "events": [
+        5001
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s5b0f3320ae7822e0",
+      "events": [
+        5002
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [
+          {
+            "anchor": "差出人: 佐伯灯 <saeki@koyomi.example>",
+            "anchor_len": 31,
+            "context": "差出人: 佐伯灯 <saeki@koyomi.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "佐伯灯"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s48446b96b8cd3fa2",
+      "events": [
+        5003
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [
+          {
+            "anchor": "久住: 本日17時からミナト刷新の定例です。よろしくお願いいたします。",
+            "anchor_len": 35,
+            "context": "久住: 本日17時からミナト刷新の定例です。よろしくお願いいたします。",
+            "kind": "project",
+            "line": 1,
+            "name": "ミナト刷新"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s8ec18b8dc3527a8b",
+      "events": [
+        5004
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "sc0d63c6750d9afbb",
+      "events": [
+        5005
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "真野: アプリ全体で30以上のバグを見つけましたので、明日修正します @saek",
+            "anchor_len": 41,
+            "description": "アプリ全体で30以上のバグを見つけましたので、明日修正します",
+            "direction": "mine",
+            "line": 1
+          }
+        ],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "sea0b5bb97efea173",
+      "events": [
+        5006
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s6fe37b723732bb9c",
+      "events": [
+        5007
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "設計書は水曜日までに送付いたします。",
+            "anchor_len": 18,
+            "description": "設計書は水曜日までに送付いたします",
+            "direction": "mine",
+            "line": 3
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "宛先: 早瀬律 <hayase@koyomi.example>",
+            "anchor_len": 31,
+            "context": "宛先: 早瀬律 <hayase@koyomi.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "早瀬律"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s52f4ff0b3d2e35b9",
+      "events": [
+        5008
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": [
+          {
+            "anchor": "真野: ・リリース共有 cc @kusumi （確認お願いします）",
+            "anchor_len": 33,
+            "description": "リリース共有 cc @kusumi （確認お願いします）",
+            "kind": "review_pending",
+            "line": 1
+          }
+        ]
+      }
+    },
+    {
+      "custom_id": "sa7e71a58fdd119a5",
+      "events": [
+        5009
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": [
+          {
+            "anchor": "久住: 議事録は明日送りますか？",
+            "anchor_len": 16,
+            "description": "議事録は明日送りますか",
+            "kind": "reply_needed",
+            "line": 1
+          }
+        ]
+      }
+    }
+  ]
+}

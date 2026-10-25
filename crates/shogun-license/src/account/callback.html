@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Return to ShogunAI</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #fff; color: #15171b; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 100vh; min-height: 100dvh; }
+    .art { display: flex; flex-direction: column; overflow: hidden; min-height: 580px; margin: 20px 0 20px 20px; border-radius: 20px; background: #101b2b; }
+    .landscape { position: relative; flex: 1; min-height: 260px; }
+    .landscape img { position: absolute; width: 100%; height: 100%; object-fit: cover; object-position: center 36%; }
+    .caption { padding: 32px 44px 44px; color: #eeeae2; }
+    .caption p { margin: 0 0 16px; font-size: clamp(40px, 4.6vw, 70px); line-height: 1.03; font-weight: 500; letter-spacing: -.055em; }
+    .caption span { font-size: 14px; color: #b2bbc7; }
+    .confirmation { display: grid; align-items: center; padding: 64px 48px; }
+    .content { width: 100%; max-width: 390px; margin-inline: auto; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 52px; font-size: 21px; font-weight: 600; letter-spacing: -.05em; }
+    .brand svg { width: 42px; height: 28px; flex: none; }
+    .handoff { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 24px; border: 1px solid #dce6ff; border-radius: 16px; background: #eff4ff; color: #004bfc; }
+    .handoff svg { width: 26px; height: 26px; }
+    h1 { margin: 0 0 18px; font-size: clamp(30px, 2.8vw, 40px); font-weight: 500; line-height: 1.12; letter-spacing: -.045em; text-wrap: balance; }
+    .description { margin: 0; color: #68707b; font-size: 16px; line-height: 1.65; }
+    .close-note { margin: 30px 0 0; padding-top: 22px; border-top: 1px solid #e8ebf0; color: #737b87; font-size: 13px; line-height: 1.6; }
+    @media (max-width: 760px) {
+      main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
+      .art { min-height: 0; margin: 12px 12px 0; border-radius: 16px; }
+      .landscape { flex: none; height: 150px; min-height: 0; }
+      .landscape img { object-position: center 28%; }
+      .caption { padding: 20px 24px 24px; }
+      .caption p { font-size: 34px; margin: 0; }
+      .caption span { display: none; }
+      .confirmation { align-items: start; padding: 40px 26px 48px; }
+      .brand { margin-bottom: 32px; }
+    }
+    @media (max-width: 400px) {
+      .landscape { height: 110px; }
+      .confirmation { padding-inline: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <aside class="art" aria-hidden="true">
+      <div class="landscape"><img src="https://shogunai.si/app/assets/signin-dither-dark.png" alt="" referrerpolicy="no-referrer"></div>
+      <div class="caption"><p>Your work.<br>Remembered.</p><span>A private memory of your work.</span></div>
+    </aside>
+    <section class="confirmation" aria-labelledby="heading">
+      <div class="content">
+        <div class="brand">
+          <svg viewBox="0 0 960 614" fill="#004bfc" aria-hidden="true"><path d="M332 493L172 413L63 613Z M0 100L177 390L447 524L277 264Z M470 0L297 254L470 525Z M489 0L489 525L662 255Z M959 100L682 264L512 524L779 391Z M627 493L896 613L787 413Z"/></svg>
+          <span>ShogunAI</span>
+        </div>
+        <div class="handoff" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M9 10h6m-3-3 3 3-3 3"/></svg>
+        </div>
+        <h1 id="heading">Back to ShogunAI.</h1>
+        <p class="description">Return to the app to finish signing in.</p>
+        <p class="close-note">You can close this tab.</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

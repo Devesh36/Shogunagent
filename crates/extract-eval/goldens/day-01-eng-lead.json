@@ -1,0 +1,426 @@
+{
+  "format": "synthday/v1",
+  "id": "day-01-eng-lead",
+  "generator": {
+    "seed": 317001,
+    "template_set": "v1",
+    "required_templates": [
+      "restated_commit",
+      "commit_theirs_chat",
+      "trap_quoted_example"
+    ]
+  },
+  "persona": {
+    "id": "p-eng-lead",
+    "name": "Mara Quint",
+    "role": "Engineering lead",
+    "org": "Larkspur Freight",
+    "lang": "en",
+    "utc_offset_secs": 0
+  },
+  "date": "2026-03-02",
+  "events": [
+    {
+      "id": 1001,
+      "ts_ms": 1772444220000,
+      "local_time": "09:37",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#ops-sync",
+      "text": "Tamsin Ekberg: I'll get the rollout plan to you by Thursday.\nMara: Perfect, thanks!",
+      "template": "commit_theirs_chat"
+    },
+    {
+      "id": 1002,
+      "ts_ms": 1772445480000,
+      "local_time": "09:58",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Re: Heron Rollout",
+      "text": "To: Oren Vale <oren.vale@larkspur.example>\nHi Oren,\nThanks for the notes on Heron Rollout. I'll send the rollout plan by Thursday.\nBest, Mara",
+      "template": "commit_mine_email"
+    },
+    {
+      "id": 1003,
+      "ts_ms": 1772446920000,
+      "local_time": "10:22",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#ops-sync",
+      "text": "Juno Farrant: I'll get the test report to you by Tuesday.\nMara: Perfect, thanks!",
+      "template": "commit_theirs_chat"
+    },
+    {
+      "id": 1004,
+      "ts_ms": 1772448180000,
+      "local_time": "10:43",
+      "source": "capture",
+      "app": "Browser",
+      "window": "Pull request #481 · Heron Rollout",
+      "text": "Kasimir Lode requested your review on this pull request.\nPlease review the cost estimate changes before the release branch is cut.",
+      "template": "loop_review_pr"
+    },
+    {
+      "id": 1005,
+      "ts_ms": 1772448900000,
+      "local_time": "10:55",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Atlas Ledger: migration checklist",
+      "text": "To: Kasimir Lode <kasimir.lode@larkspur.example>\nAttached is the migration checklist for Atlas Ledger.\nLet me know if anything looks off.\nMara",
+      "template": "trap_let_me_know"
+    },
+    {
+      "id": 1006,
+      "ts_ms": 1772450340000,
+      "local_time": "11:19",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Re: Kestrel Onboarding",
+      "text": "To: Idris Solano <idris.solano@larkspur.example>\nHi Idris,\nThanks for the notes on Kestrel Onboarding. I'll send the cost estimate by Friday.\nBest, Mara",
+      "template": "commit_mine_email"
+    },
+    {
+      "id": 1007,
+      "ts_ms": 1772452440000,
+      "local_time": "11:54",
+      "source": "capture",
+      "app": "Browser",
+      "window": "Writing guide · Larkspur Freight wiki",
+      "text": "Example reply: \"I'll send the report by Friday.\" Use this tone for customer emails.",
+      "template": "trap_quoted_example"
+    },
+    {
+      "id": 1008,
+      "ts_ms": 1772454120000,
+      "local_time": "12:22",
+      "source": "meeting",
+      "app": "Meeting notes",
+      "window": "Heron Rollout sync",
+      "text": "Kasimir Lode: Can we get the migration checklist before the review?\nMara: Yes, I'll draft the migration checklist by Friday.",
+      "template": "commit_mine_meeting"
+    },
+    {
+      "id": 1009,
+      "ts_ms": 1772455560000,
+      "local_time": "12:46",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Atlas Ledger: migration checklist",
+      "text": "From: Juno Farrant <juno.farrant@larkspur.example>\nHi Mara,\nWe will send you the signed migration checklist tomorrow.\nJuno",
+      "template": "commit_theirs_email"
+    },
+    {
+      "id": 1010,
+      "ts_ms": 1772456160000,
+      "local_time": "12:56",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Re: test report",
+      "text": "To: Juno Farrant <juno.farrant@larkspur.example>\nI'll share the test report with the team tomorrow.\nMara",
+      "template": "restated_commit"
+    },
+    {
+      "id": 1011,
+      "ts_ms": 1772457300000,
+      "local_time": "13:15",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#ops-sync",
+      "text": "Mara: Heads up, I'll share the test report with the team tomorrow.",
+      "template": "restated_commit"
+    },
+    {
+      "id": 1012,
+      "ts_ms": 1772458860000,
+      "local_time": "13:41",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#ops-sync",
+      "text": "Mara: Maybe I could look at the cost estimate next week if there is time.",
+      "template": "trap_hedge"
+    },
+    {
+      "id": 1013,
+      "ts_ms": 1772459640000,
+      "local_time": "13:54",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#ops-sync",
+      "text": "Mara: Still waiting on Kasimir for the design doc numbers.",
+      "template": "loop_waiting_chat"
+    },
+    {
+      "id": 1014,
+      "ts_ms": 1772460360000,
+      "local_time": "14:06",
+      "source": "meeting",
+      "app": "Meeting notes",
+      "window": "Atlas Ledger sync",
+      "text": "Idris Solano: Can we get the test report before the review?\nMara: Yes, I'll draft the test report by Tuesday.",
+      "template": "commit_mine_meeting"
+    },
+    {
+      "id": 1015,
+      "ts_ms": 1772461440000,
+      "local_time": "14:24",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Kestrel Onboarding: test report",
+      "text": "From: Juno Farrant <juno.farrant@larkspur.example>\nHi Mara,\nWe will send you the signed test report tomorrow.\nJuno",
+      "template": "commit_theirs_email"
+    },
+    {
+      "id": 1016,
+      "ts_ms": 1772463120000,
+      "local_time": "14:52",
+      "source": "gcal",
+      "app": "Calendar",
+      "window": "Calendar",
+      "text": "Friday 10:00-10:30 · Heron Rollout review\nAttendees: Idris Solano, Oren Vale",
+      "template": "calendar_entry"
+    }
+  ],
+  "gold": [
+    {
+      "id": "g01",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll get the rollout plan to you by Thursday",
+        "direction": "theirs",
+        "due": "2026-03-05"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1001
+      ]
+    },
+    {
+      "id": "g02",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll send the rollout plan by Thursday",
+        "direction": "mine",
+        "due": "2026-03-05"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1002
+      ]
+    },
+    {
+      "id": "g03",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll get the test report to you by Tuesday",
+        "direction": "theirs",
+        "due": "2026-03-03"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1003
+      ]
+    },
+    {
+      "id": "g04",
+      "table": "open_loops",
+      "fields": {
+        "description": "Please review the cost estimate changes before the release branch is cut",
+        "kind": "review_pending"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1004
+      ]
+    },
+    {
+      "id": "g05",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll send the cost estimate by Friday",
+        "direction": "mine",
+        "due": "2026-03-06"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1006
+      ]
+    },
+    {
+      "id": "g06",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll draft the migration checklist by Friday",
+        "direction": "mine",
+        "due": "2026-03-06"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1008
+      ]
+    },
+    {
+      "id": "g07",
+      "table": "commitments",
+      "fields": {
+        "description": "We will send you the signed migration checklist tomorrow",
+        "direction": "theirs",
+        "due": "2026-03-03"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1009
+      ]
+    },
+    {
+      "id": "g08",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll share the test report with the team tomorrow",
+        "direction": "mine",
+        "due": "2026-03-03"
+      },
+      "expected_band": "high",
+      "evidence": [
+        1010,
+        1011
+      ]
+    },
+    {
+      "id": "g09",
+      "table": "open_loops",
+      "fields": {
+        "description": "Still waiting on Kasimir for the design doc numbers",
+        "kind": "waiting_on_them"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1013
+      ]
+    },
+    {
+      "id": "g10",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll draft the test report by Tuesday",
+        "direction": "mine",
+        "due": "2026-03-03"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1014
+      ]
+    },
+    {
+      "id": "g11",
+      "table": "commitments",
+      "fields": {
+        "description": "We will send you the signed test report tomorrow",
+        "direction": "theirs",
+        "due": "2026-03-03"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1015
+      ]
+    },
+    {
+      "id": "g12",
+      "table": "people",
+      "fields": {
+        "name": "Oren Vale"
+      },
+      "expected_band": "high",
+      "evidence": [
+        1002,
+        1016
+      ]
+    },
+    {
+      "id": "g13",
+      "table": "people",
+      "fields": {
+        "name": "Tamsin Ekberg"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1001
+      ]
+    },
+    {
+      "id": "g14",
+      "table": "people",
+      "fields": {
+        "name": "Idris Solano"
+      },
+      "expected_band": "high",
+      "evidence": [
+        1006,
+        1014,
+        1016
+      ]
+    },
+    {
+      "id": "g15",
+      "table": "people",
+      "fields": {
+        "name": "Juno Farrant"
+      },
+      "expected_band": "high",
+      "evidence": [
+        1003,
+        1009,
+        1010,
+        1015
+      ]
+    },
+    {
+      "id": "g16",
+      "table": "people",
+      "fields": {
+        "name": "Kasimir Lode"
+      },
+      "expected_band": "high",
+      "evidence": [
+        1004,
+        1005,
+        1008,
+        1013
+      ]
+    },
+    {
+      "id": "g17",
+      "table": "projects",
+      "fields": {
+        "name": "Heron Rollout"
+      },
+      "expected_band": "high",
+      "evidence": [
+        1002,
+        1016
+      ]
+    },
+    {
+      "id": "g18",
+      "table": "projects",
+      "fields": {
+        "name": "Atlas Ledger"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1005
+      ]
+    },
+    {
+      "id": "g19",
+      "table": "projects",
+      "fields": {
+        "name": "Kestrel Onboarding"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        1006
+      ]
+    }
+  ]
+}

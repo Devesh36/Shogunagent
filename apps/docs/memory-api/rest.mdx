@@ -1,0 +1,310 @@
+---
+title: "REST"
+description: "Loopback HTTP over the same memory, the same levels."
+---
+
+`shogun-api` serves the Memory API on loopback, on port 7464 unless another
+app already uses it. Find the port with `shogun api status`; authenticate with a
+bearer token.
+
+## Start the server
+
+The app ships `shogun-api` next to the [CLI](/memory-api/cli), at
+`/Applications/ShogunAI.app/Contents/MacOS/shogun-api`. The app does not start
+it: run it in a Terminal window and leave that window open.
+
+```bash
+SHOGUN_DB_PATH="$HOME/Library/Application Support/com.syogun.shogunai/memory.db" \
+  /Applications/ShogunAI.app/Contents/MacOS/shogun-api
+```
+
+`SHOGUN_DB_PATH` points at your memory database; the Memory API settings are
+read from the same folder, so the server refuses to start while the Memory API
+is off in Settings. If macOS asks whether `shogun-api` may use SHOGUN's
+keychain items, choose **Always Allow**. It listens on `127.0.0.1:7464`, or on
+another free port when that one is taken (`SHOGUN_API_PORT` picks one). Stop it
+with Control-C.
+
+## Call it
+
+```bash
+export SHOGUN_API_TOKEN=shogun_...
+export SHOGUN_PORT=$(shogun api status | jq -r .port)
+
+curl -s -H "Authorization: Bearer $SHOGUN_API_TOKEN" \
+  "http://127.0.0.1:$SHOGUN_PORT/v1/memory/search?q=quarterly+review"
+```
+
+Writes are `POST` with a JSON body. Reads return the same JSON the other two
+faces return.
+
+A read-only token gets **403** on every write and on `/v1/actions/execute`,
+before anything runs:
+
+```json
+{"error":"scope_insufficient","scope":"read","message":"This Memory API token is read-only. …"}
+```
+
+A missing or wrong token is still 401, and a plan without the Memory API is
+still 403 `plan_required`.
+
+## Status and health
+
+| Method | Path | |
+|---|---|---|
+| `GET` | `/v1/status` | Server status |
+| `GET` | `/v1/metrics` | SLO snapshot and lesson counters |
+| `GET` | `/v1/device/onboarding` | This device's first-run state |
+| `GET` | `/v1/device/account` | This device's account: signed in or out, email, sign-in methods, devices, plan (read-only) |
+
+## Memory
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/memory/search` | read | Local text search — `?q=` |
+| `GET` | `/v1/memory/context` | read | Current context |
+| `GET` | `/v1/memory/context_pack` | read | Grounded pack — `?q=` carries the task |
+| `GET` | `/v1/memory/wrap` | read | Today's evening wrap |
+| `POST` | `/v1/memory/notes` | L1 | Append a note |
+
+## Memory import
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `POST` | `/v1/memory/import/preview` | read | What a package would add. Writes nothing |
+| `POST` | `/v1/memory/import` | L1 | Save the chosen items: the same body plus `"select": ["entities/0", …]` or `"select": "default"` |
+| `GET` | `/v1/memory/imports` | read | Past imports |
+| `GET` | `/v1/memory/imports/{id}` | read | One import and its items |
+| `POST` | `/v1/memory/imports/{id}/delete` | L1 | Undo one whole import |
+
+The body is `{"package": …}`, a `shogun-memory-import/v1` package, or
+`{"computer_history": [{"name": "memory.md", "markdown": "…"}]}`, the text of memory files
+another assistant wrote. The API takes file contents, never a path, so no caller can make
+SHOGUN open another app's folder. Everything runs on your Mac with no model call. An item
+carrying something shaped like a credential, or text addressed to an assistant, is rejected,
+and the error never repeats its value. Imported items are stored apart from what SHOGUN
+observed, and never at high confidence. A bad package or selection is `400`
+(`invalid_package`, `invalid_request`, `invalid_selection`), an unknown import `404`.
+
+## State
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/state/{noun}` | read | List — `people`, `projects`, `commitments`, `open_loops` |
+| `GET` | `/v1/state/{noun}/{id}` | read | Get one record |
+
+State-change proposals are unavailable until durable proposal storage and a confirmation UI exist.
+
+## Capture pause
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/capture/status` | read | Effective pause status, resume deadline, and `capture_events_10m` (screen-text capture events in the last 10 minutes — a count only) |
+| `POST` | `/v1/capture/paused` | L1 / L3 | `{"paused":true,"resume_at_ms":null}` pauses indefinitely (L1). `{"paused":false}` while capture is paused returns `202` `pending` until you approve it in the app (L3); ending a timed pause early is refused (`400`) |
+
+For a timed pause, supply a future Unix-millisecond `resume_at_ms` within 26 hours.
+Pause persists across launches and stops new screen reads, ingestion and context-cache writes.
+The write waits for an in-flight capture to finish. Integration sync and existing local memory
+remain available. Invalid deadlines leave the previous setting unchanged.
+
+## Meeting call audio
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/meeting/system_audio` | read | Current audio health, session/generation, pause state, and whether a recording offer needs an audio choice |
+| `POST` | `/v1/meeting/system_audio/retry` | L2 | `{}` asks the human to retry call audio; `202` means pending confirmation, with a 10-second expiry |
+
+Status contains no audio or transcript. A stale desktop snapshot reports unknown/unavailable.
+Retry cannot grant macOS permission or restart capture directly. Without an active online,
+unpaused meeting, it returns `409` `meeting_audio_retry_unavailable`.
+
+## Profile
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/profile/whoami` | read | Identity and work summary |
+| `POST` | `/v1/profile` | L1 | Update display name, role, preferences |
+
+## Actions
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `POST` | `/v1/actions/execute` | per action | Run an action |
+| `GET` | `/v1/actions/status/{id}` | read | Poll an approval |
+
+A send returns `{ pending, approval_id }` and waits in **Settings → Approvals**
+until you confirm it there.
+
+### Questions from an agent run
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/actions/questions` | read | Questions waiting for an answer (`awaiting_input`), newest first |
+| `GET` | `/v1/actions/questions/{id}` | read | One question: `awaiting_input`, `answered`, `expired` or `cancelled` |
+| `POST` | `/v1/actions/answer` | L1 | Body `{ "id": 4, "answer": "Sam Lee" }`. The run carries on with the answer |
+| `POST` | `/v1/actions/steer` | L1 | Body `{ "kind": "chat", "id": 7, "text": "only this week" }`. The run reads it at its next step. `404` with `open_runs` when the run is not running, `409` once it has finished |
+
+An agent run can stop on one short question when it needs a fact to finish.
+It keeps going with the answer. A question waits **10 minutes** by default (a run
+may ask for anything from 30 seconds to 60 minutes). With no answer before the
+deadline, it stops that step and keeps what it has as a draft. An answer approves nothing: a send
+the run makes afterwards still waits in **Settings → Approvals**. A second
+answer returns `409 already_answered`, a late one `409 expired`, an unknown id
+`404 unknown_question`. Question ids are separate from approval ids.
+
+## Writing style
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/writing_voice` | read | Whether learned writing style is shared |
+| `POST` | `/v1/writing_voice` | L3 / L1 | `{"action":"enable","consent":true}`, `{"action":"disable"}` or `{"action":"clear"}` |
+
+Enabling sends your own examples to your model provider, so it is L3: the call
+returns `202` with `{ pending, approval_id }`, like a send, and nothing changes
+until you approve it in **Settings → Approvals**. `disable` and `clear` apply at
+once.
+
+## Capture exclusions
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/capture_exclusions` | read | The apps and websites capture skips |
+| `POST` | `/v1/capture_exclusions` | L1 / L3 | `{"apps":[…],"websites":[…]}`: the complete new lists |
+
+A request that only adds exclusions narrows capture, so it applies at once and
+returns the saved lists. A request that removes any exclusion would start
+capturing that app or site again, so it is L3: the call returns `202` with
+`{ pending, approval_id }`, like a send, and the lists stay as they are until you
+approve it in **Settings → Approvals**. The approval names every app and website
+that would start being captured. A request that both adds and removes waits as a
+whole and is applied in one step. If your exclusions change before you approve,
+approving changes nothing; ask again.
+
+## Agent source
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/agent/source` | read | What chat and drafts run on |
+| `POST` | `/v1/agent/source` | L1 / L3 | `{"source":"openai","model":"gpt-6-sol"}`, `{"subscription_consent":false}` or `{"source":"claude-code","subscription_consent":true}` |
+
+The read names the selected source, whether you opted into running on your
+subscription, which assistant CLIs are installed (`--version` only), and whether
+each API-key provider has a key. It reports presence only, never a key. `null`
+means SHOGUN could not tell.
+
+Switching to an API-key provider, changing the model, or withdrawing the
+subscription opt-in narrows where your prompts go, so it applies at once.
+Selecting a subscription (`claude-code`, `codex`, `gemini-cli`) sends later
+prompts through that vendor's plan, whose data handling is set by the vendor.
+That is the opt-in the app asks you for, so it is L3: the call needs
+`"subscription_consent": true`, returns `202` with `{ pending, approval_id }`,
+and nothing changes until you approve it in **Settings → Approvals**. The
+approval shows the same notes as Settings. `"subscription_consent": true` on its
+own, without a subscription source, is refused.
+
+## Tokens
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/api/tokens` | read | Each issued token's `id`, `name`, `created_at` and `scope`, plus `caller_scope`, `access` and `mount` |
+
+The answer never holds a token or a verifier. Every field is described in
+[Token access](/memory-api/overview#token-access). There
+is no write: a token is issued, its access widened, and SHOGUN added to another app only in
+**Settings → Memory API**.
+
+## Connections
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/connections` | read | Each service's state, access and third party, and Mail's consent and draft-only mode |
+| `POST` | `/v1/connections/disconnect` | L1 | `{"service":"gcal"}` |
+| `POST` | `/v1/connections/composio` | L1 | `{"consent":false}` or `{"draft_stop":true}` |
+
+The read lists every service the Connections screen shows. `state` is
+`connected`, `needs_reauth`, `disconnected` or `coming_soon`, exactly as the app
+shows it, and `null` when the app is not running (`"app_running": false`).
+`third_party` is `"composio"` for Mail and `null` for the rest. The answer holds
+states and booleans only: never a token, an account or an id.
+
+Disconnecting only takes access away, so it applies at once. The app deletes the
+stored sign-in and stops syncing, like its Disconnect button, within a few
+seconds, or before it restores anything at its next launch. Until then
+`disconnect_pending` is `true`. Memory already saved stays.
+
+`"consent": false` revokes Mail's consent: draft-only mode turns back on and Mail
+disconnects. `"draft_stop": true` keeps confirmed emails as drafts. Granting
+consent and turning draft-only mode off answer `400`: you do both in
+**Settings → Connections**, where each of the three disclosures is confirmed. Connecting
+a service has no route: it needs your browser sign-in or a key you paste into the
+app.
+
+## Lessons
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/lessons` | read | All lessons |
+| `POST` | `/v1/lessons/active` | L1 | Switch one on or off |
+| `GET` | `/v1/state/disputes` | read | Open contradictions (`?include_low` to include low-confidence pairs) |
+| `POST` | `/v1/state/disputes/resolve` | L1 | Settle one: `{"id": 1, "resolution": "keep_later"}` |
+
+## Visual recall
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/visual_recall/status` | read | Status and frame stats |
+| `POST` | `/v1/visual_recall/enabled` | L3 / L1 | `{"enabled": true}` while it is off returns `202` + `{"pending": true, "approval_id": …}`; `{"enabled": false}` applies at once and deletes the automatically captured frames and their OCR text |
+| `POST` | `/v1/visual_recall/retention` | L1 / L3 | Retention, 1–3650 days: `{"days": 7}`. Shorter or the same applies at once; longer returns `202` + `pending` |
+| `GET` | `/v1/visual_recall/frames/search` | read | Search stored frames |
+| `GET` | `/v1/visual_recall/frames/{id}` | read | Frame metadata and OCR text |
+| `POST` | `/v1/visual_recall/frames/{id}/rescan` | L1 | Re-OCR the focused window inside a stored frame (replaces its OCR text) |
+| `POST` | `/v1/visual_recall/frames/delete` | L1 | Delete frames |
+
+Turning Visual recall on, or keeping saved screens longer, starts or lengthens keeping
+images of your screen, so it is L3: the call returns `202` with `{ pending, approval_id }`,
+like a send, and nothing changes until you approve it in **Settings → Approvals**. The
+approval says how long saved screens would be kept. If the retention grew past what the
+approval showed before you approve, approving turns nothing on; ask again. Turning Visual
+recall off, or a shorter retention, applies at once. Turning it off deletes every
+automatically captured frame immediately; to stop capturing for a while without deleting
+anything, use `POST /v1/capture/paused` instead.
+
+## Backups
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/backup/status` | read | Snapshot retention in days, its bounds, the pruning rule, snapshot count and ages |
+| `POST` | `/v1/backup/retention` | L1 | Retention, 1–30 days: `{"days": 7}` |
+
+## Search index
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/search_index/status` | read | The compaction job's state and progress, the index shape, and the free-disk check |
+| `POST` | `/v1/search_index/compact/start` | L1 | Start or continue compacting. `507 insufficient_disk` when the disk is too full |
+| `POST` | `/v1/search_index/compact/stop` | L1 | Stop between two steps; a later start continues |
+| `GET` | `/v1/storage/preview` | read | Bounded preview of exact duplicate event-history text (at most 10,000 rows, 8 MiB in total, 1 MiB per text). Counts and page use only; a partial scan says so in `partial_reason` and is never a database-wide estimate |
+
+## Nightly review
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/dream/status` | read | The same view as **Settings → Memory → Nightly review** |
+| `POST` | `/v1/dream/retry` | write | Resume the pending Batch review now (the same as **Run now**) |
+
+The answer names the night a result is expected for, its `status` (`never`, `pending`,
+`running`, `completed`, `failed` or `not_run`) and, when it failed, did not run or found
+nothing, a reason code: `asleep`, `not_idle`, `low_battery`, `interrupted`,
+`submission_rejected`, `relay_unreachable`, `batch_expired`, `batch_pending`, `daily_cap`,
+`plan_inactive`, `storage_error`, `no_new_data` or `unknown`. `stale` is `true` when the newest
+result is older than last night. `last_send` holds the latest night's send counts: items considered and
+sent, and what the on-device filter dropped before sending, or `null`. Dates, counts and codes only.
+
+## Voice dictionary
+
+| Method | Path | Level | |
+|---|---|---|---|
+| `GET` | `/v1/voice_dictionary/terms` | read | List terms |
+| `POST` | `/v1/voice_dictionary/terms` | L1 | Create a term |
+| `POST` | `/v1/voice_dictionary/terms/{id}` | L1 | Update a term |
+| `POST` | `/v1/voice_dictionary/terms/{id}/delete` | L1 | Delete a term |

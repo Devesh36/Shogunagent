@@ -1,0 +1,140 @@
+{
+  "format": "synthday/v1",
+  "id": "day-04-mixed",
+  "generator": {
+    "seed": 317004,
+    "template_set": "v1",
+    "required_templates": [
+      "mix_commit_mine",
+      "mix_commit_theirs",
+      "mix_waiting",
+      "mix_trap_quoted"
+    ]
+  },
+  "persona": {
+    "id": "p-eng-lead",
+    "name": "Mara Quint",
+    "role": "Engineering lead",
+    "org": "Larkspur Freight",
+    "lang": "en",
+    "utc_offset_secs": 0
+  },
+  "date": "2026-03-05",
+  "events": [
+    {
+      "id": 4001,
+      "ts_ms": 1772702880000,
+      "local_time": "09:28",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#heron-launch",
+      "text": "Mara: Idris, I'll send the 資料 for Atlas Ledger by Friday.",
+      "template": "mix_commit_mine"
+    },
+    {
+      "id": 4002,
+      "ts_ms": 1772704020000,
+      "local_time": "09:47",
+      "source": "capture",
+      "app": "Browser",
+      "window": "Writing guide",
+      "text": "Example: \"I'll send 資料 by Friday.\" Use this phrasing in client emails.",
+      "template": "mix_trap_quoted"
+    },
+    {
+      "id": 4003,
+      "ts_ms": 1772706180000,
+      "local_time": "10:23",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#eng-platform",
+      "text": "Mara: Still waiting on Idris for the 承認 on Atlas Ledger.",
+      "template": "mix_waiting"
+    },
+    {
+      "id": 4004,
+      "ts_ms": 1772707920000,
+      "local_time": "10:52",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Re: Atlas Ledger",
+      "text": "From: Oren Vale <oren.vale@larkspur.example>\nHi Mara,\nWe will send you the 議事録 tomorrow.\nOren",
+      "template": "mix_commit_theirs"
+    }
+  ],
+  "gold": [
+    {
+      "id": "g01",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll send the 資料 for Atlas Ledger by Friday",
+        "direction": "mine",
+        "due": "2026-03-06"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        4001
+      ]
+    },
+    {
+      "id": "g02",
+      "table": "open_loops",
+      "fields": {
+        "description": "Still waiting on Idris for the 承認 on Atlas Ledger",
+        "kind": "waiting_on_them"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        4003
+      ]
+    },
+    {
+      "id": "g03",
+      "table": "commitments",
+      "fields": {
+        "description": "We will send you the 議事録 tomorrow",
+        "direction": "theirs",
+        "due": "2026-03-06"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        4004
+      ]
+    },
+    {
+      "id": "g04",
+      "table": "people",
+      "fields": {
+        "name": "Oren Vale"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        4004
+      ]
+    },
+    {
+      "id": "g05",
+      "table": "people",
+      "fields": {
+        "name": "Idris Solano"
+      },
+      "expected_band": "high",
+      "evidence": [
+        4001,
+        4003
+      ]
+    },
+    {
+      "id": "g06",
+      "table": "projects",
+      "fields": {
+        "name": "Atlas Ledger"
+      },
+      "expected_band": "high",
+      "evidence": [
+        4001,
+        4003
+      ]
+    }
+  ]
+}

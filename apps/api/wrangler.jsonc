@@ -1,0 +1,102 @@
+// The SHOGUN batch relay on Cloudflare Workers (docs/unit-economics.md §4 / §4.1; runbook:
+// apps/api/DEPLOY.md). Same public hostname and HTTP API as before; the code is `src/worker.ts`,
+// which shares everything but the server glue with the Node entry (`src/boot.ts`).
+//
+// Secrets — `wrangler secret put <NAME> --config apps/api/wrangler.jsonc`, NEVER here:
+//   ANTHROPIC_API_KEY   the operator's Anthropic key (the only copy; CLAUDE.md invariant 5)
+//   OPENAI_API_KEY      the operator's OpenAI key (background classes on gpt-6-luna; owner decision 2026-10-13)
+//   DEEPGRAM_API_KEY    company speech grants (#1101 D2; Member permission, exactly one project). Unset = 503 speech_unavailable
+//   METRICS_TOKEN       optional bearer for GET /metrics (unset = 404)
+//   TYPESAFE_API_KEY    the operator's TypeSafe key for Jev form decisions (/v1/ai/form_decide, issue #1144; unset = that route answers 503)
+// Non-secrets are `vars` below. Every name is documented in src/boot.ts.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shogunai-relay",
+  "main": "src/worker.ts",
+  // The runtime date both the deployed Worker and the test runtime (vitest.workers.config.ts)
+  // run under; keep them equal. ≥ 2024-09-23 so `nodejs_compat` is the v2 shim that gives
+  // `node:crypto` Ed25519 (auth.ts) and `node:net`/`node:tls` for the Postgres driver.
+  "compatibility_date": "2026-03-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // No *.workers.dev hostname and no preview URLs: api.shogunaios.com is the only front door, so
+  // the WAF rate-limit rule on /v1/batch (DEPLOY.md) cannot be bypassed by a second name.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "api.shogunaios.com", "custom_domain": true }],
+  // Workers Logs. Only `src/logging.ts` writes to the console, so what lands here is route
+  // templates, status codes, counters and env-variable names — never a body, header, id or value.
+  // Invocation logs are OFF: the runtime's own per-request record carries request metadata,
+  // headers included, and every relay request's `Authorization` is a licence bearer token. The
+  // relay's own request line (method, route template, status, latency) replaces it.
+  // Set the dataset's retention short in the dashboard (DEPLOY.md).
+  "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "enabled": true, "invocation_logs": false } },
+  // The periodic sweep (src/boot.ts `sweepOnce`: store retention maintenance, then the bounded,
+  // idempotent settlement pass of audit M9), every 15 minutes. Replaces the Node entry's
+  // `setInterval`. `SETTLE_INTERVAL_SECONDS=0` in `vars` stops it without touching this schedule.
+  "triggers": { "crons": ["*/15 * * * *"] },
+  // CPU time per invocation (ms), above the 30 s default of the Workers Paid plan. The only
+  // CPU-bound work is the sweep: up to SETTLE_MAX_PER_TICK (500) ended batches, each streamed and
+  // JSON-parsed line by line — at 1,000 items × ~1 KB a batch, a full tick is ~500 MB of JSON,
+  // which is minutes of CPU, not seconds. Wall time is not the issue (a cron invocation may run
+  // 15 minutes); CPU time would be. Requests never approach this; it is a ceiling, not a cost.
+  "limits": { "cpu_ms": 300000 },
+  // The relay's Postgres store (src/pg-store.ts) on the Supabase project, through Hyperdrive.
+  //
+  // REQUIRED: query caching DISABLED on this Hyperdrive config. The default cache (60 s) would
+  // let the batch-ownership check (`GET /v1/batch/:id` — who may read these results) and the
+  // idempotency `SELECT … FOR UPDATE` be answered from a stale copy; the audit judged those
+  // reads correct only because they are live. Create it with
+  //   wrangler hyperdrive create shogunai-relay-store --caching-disabled \
+  //     --connection-string "postgres://shogun_relay:<password>@<host>:5432/postgres?sslmode=require"
+  // (a SEPARATE config from the website's — the website's one has its own role), then paste the
+  // id it prints below. Verify with `wrangler hyperdrive get <id>`: `caching.disabled: true`.
+  // Hyperdrive→origin TLS is set on the config (sslmode=require); the Worker→Hyperdrive leg
+  // stays inside Cloudflare's network (src/sql.ts).
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "d03ad6cb91784287bb904bcaa507410e",
+      // `wrangler dev` / miniflare only; never used by the deployed Worker and not a secret.
+      "localConnectionString": "postgres://postgres:postgres@localhost:5432/shogun_relay?sslmode=disable"
+    }
+  ],
+  // Dashboard-only vars survive a deploy. ASR_ALLOWED_SUBJECTS (the speech rollout allowlist,
+  // DEPLOY.md "Company-funded speech rollout") is set in the dashboard on purpose — licence ids are
+  // not committed — and without this a `wrangler deploy` deletes it. An unset allowlist means no
+  // allowlist (src/boot.ts), so that would open company speech to every licence before the
+  // rollout checks pass. Vars listed below still
+  // win over a dashboard value of the same name, so an emergency `DAILY_SPEND_CAP_USD=0` set in
+  // the dashboard must also be committed here before the next deploy.
+  "keep_vars": true,
+  "vars": {
+    // Company speech: dedicated provider key is a Worker secret; see DEPLOY.md for rollback.
+    "ASR_ENABLED": "1",
+    // The licence API's Ed25519 PUBLIC key — the value in packages/config/license-public-key.json
+    // (`ed25519`). Not a secret; boot refuses any other value. During a key rotation add
+    // "LICENSE_PUBKEY_NEXT_B64" with the file's `ed25519_next` (src/auth.ts).
+    "LICENSE_PUBKEY_B64": "VeGhNqy8v8KfM1/flVxJIBzgDjbQ+U8g4NQBF9nDCr8=",
+    // REQUIRED: the global daily spend breaker, USD per UTC day across every licence (FR-SVC-08).
+    // Without it the Worker answers 503 to everything. Size: active licences × 0.50 × 1.5
+    // (docs/unit-economics.md §3.3) — 15.00 covers 20 active licences. Revisit at each month's
+    // start; "0" is the emergency stop for the whole Batch lane.
+    "DAILY_SPEND_CAP_USD": "15.00",
+    // Per-licence and per-trial-device daily budgets. These ARE the defaults in src/boot.ts
+    // (unit-economics §3.3: ≈ 2× a typical night; ≤ $1.75 of company spend over a 7-day trial);
+    // spelled out so the dashboard shows the numbers in force.
+    "LICENSE_DAILY_SPEND_CAP_USD": "0.50",
+    "TRIAL_DAILY_SPEND_CAP_USD": "0.25",
+    // Defaults, listed for the same reason. Whole decimal digits only.
+    "DAILY_CHUNK_CAP": "2000",
+    "TRIAL_DAILY_CHUNK_CAP": "500",
+    "TRIAL_SPEND_SHARE": "0.5",
+    "RATE_BURST": "12",
+    "RATE_PER_MIN": "12",
+    // 0 turns the periodic sweep off; any other value leaves the cron above in charge.
+    "SETTLE_INTERVAL_SECONDS": "900",
+    // The sweep's per-tick poll budget and the re-poll holdoff for a batch still processing
+    // (src/boot.ts DEFAULT_SETTLE_MAX_PER_TICK has the ceiling math: 500 × 96 ticks = 48,000/day).
+    "SETTLE_MAX_PER_TICK": "500",
+    "SETTLE_RECHECK_SECONDS": "900"
+    // Optional: "SPEND_PRICE_TABLE_JSON" — override of the Batch price table (src/spend.ts).
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "day": "day-06-en-dashboard-noise",
+  "format": "batch-replay/v2",
+  "note": "Synthetic, hand-shaped Batch consolidation results in the JSON contract the consolidation instruction asks for: one result per session (app, window, hour), items anchored into the session's numbered lines. NOT model output. This dashboard-noise day carries no deliberate mistakes: it answers what a correct model would, so the traps score the parse path only.",
+  "results": [
+    {
+      "custom_id": "sde02c65d19e22c11",
+      "events": [
+        6001
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "sb4e85fcd35c6dd94",
+      "events": [
+        6002
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s0118bad077eb5ef7",
+      "events": [
+        6003
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s040c3a95991eeef6",
+      "events": [
+        6004
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "Kasimir Lode: Legal signed off, they'll ",
+            "anchor_len": 88,
+            "description": "Legal signed off, they'll send you the countersigned design doc by Friday",
+            "direction": "theirs",
+            "line": 1
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "Kasimir Lode: Legal signed off, they'll ",
+            "anchor_len": 88,
+            "context": "Kasimir Lode: Legal signed off, they'll send you the countersigned design doc by Friday.",
+            "kind": "person",
+            "line": 1,
+            "name": "Kasimir Lode"
+          }
+        ],
+        "open_loops": []
+      }
+    }
+  ]
+}

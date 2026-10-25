@@ -1,0 +1,16 @@
+[package]
+name = "shogun-microphone"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Shared exact-name microphone discovery and validation for every ShogunAI surface."
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Device discovery only. Keeping CPAL target-specific prevents the Linux MCP/REST test graph from
+# pulling alsa-sys while every supported production face validates against the same CoreAudio list.
+cpal = "0.18"
+
+[lints]
+workspace = true

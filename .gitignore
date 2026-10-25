@@ -1,0 +1,26 @@
+node_modules/
+.turbo/
+dist/
+build/
+*.log
+.DS_Store
+# Local environment and Worker secrets. Only the documented templates are committed.
+.env*
+!.env.example
+**/.dev.vars
+**/.dev.vars.*
+!**/.dev.vars.example
+*.p12
+*.p8
+*.pem
+
+# Rust / Cargo
+/target/
+**/target/
+*.jsonl
+# Model weights a developer fetched locally. Never committed.
+models/
+
+__pycache__/
+.wrangler/
+.claude/worktrees/

@@ -1,0 +1,7 @@
+[mcp_servers.shogun-memory]
+command = "/ABS/PATH/TO/target/release/shogun-mcp"
+args = ["--client", "codex-cli"]
+
+[mcp_servers.shogun-memory.env]
+SHOGUN_DB_PATH = "/Users/YOU/Library/Application Support/com.syogun.shogunai/memory.db"
+SHOGUN_MCP_TOOLSETS = "all"

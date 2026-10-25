@@ -1,0 +1,38 @@
+[package]
+name = "shogun-memory"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN memory: SQLite schema, versioned migrations, event log, state tables, search."
+
+# Platform-independent (bundled SQLite) so the schema, migrations, and repository logic are
+# testable on Linux CI. Data centre of gravity is Rust (AR-04); the webview never touches this.
+
+[dependencies]
+# The pure secret-redaction logic (DB write path + log path). Kept in its own dependency-free crate.
+shogun-redact = { path = "../shogun-redact" }
+# The canonical event_log dedup hash (event_log::content_hash). Same crate/version as shogun-core.
+twox-hash = "1"
+rusqlite = { version = "0.31", features = ["backup", "blob", "bundled-sqlcipher-vendored-openssl", "hooks"] }
+sqlite-vec = "0.1"
+zerocopy = "0.7"
+refinery = { version = "0.8", features = ["rusqlite"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic", "ndarray"], optional = true }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"], optional = true }
+thiserror = "2"
+unicode-normalization = "0.1"
+
+[lints]
+workspace = true
+
+[features]
+# The ONNX-backed embedder. OFF by default and — since issue #237 — off in every shipping build:
+# the desktop app bundles neither model weights nor the ONNX Runtime, and search is lexical
+# (FTS5). This stays for the developer opt-in and for retrieval evaluation
+# (`apps/desktop` feature `local-embedder`, docs/embedding-model-setup.md). `load-dynamic`
+# resolves libonnxruntime at RUNTIME, so enabling it never makes the build need the network.
+onnx = ["dep:ort", "dep:tokenizers"]

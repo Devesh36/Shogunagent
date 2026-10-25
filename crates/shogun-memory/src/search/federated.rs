@@ -1,0 +1,2098 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
+
+use rusqlite::{params_from_iter, Connection, OptionalExtension};
+
+use crate::memory_import::package::Platform;
+use crate::memory_import::{search_imported, ImportedMatch};
+use crate::search_documents::{
+    self, EvidenceRef, SearchDocument, SearchDocumentError, SearchDocumentKind, SourceRef,
+};
+
+use super::retrieval::FtsSearchHit;
+use super::terms::{normalize, query_concepts, Concept, MatchText};
+use super::{
+    excerpt, lexical_terms, search_cold_partitions, search_meetings_in_range, ColdScan,
+    ColdScanStats, MemoryQueryFocus, MemorySourceFamily, QueryAnchor,
+    SearchDepth, SearchRange, SourceConstraint, DEFAULT_MAX_COLD_PARTITIONS,
+};
+
+const RRF_K: f64 = 60.0;
+const DEFAULT_PER_SOURCE_LIMIT: usize = 40;
+const DEFAULT_EXCERPT_CHARS: usize = 480;
+const MAX_SEMANTIC_L2_DISTANCE: f32 = 1.0;
+const MIN_QUALITY_WEIGHT: f64 = 0.2;
+const CORROBORATION_RATE: f64 = 0.1;
+const MAX_CORROBORATION_FRACTION: f64 = 0.1;
+const SCORE_LANE_COUNT: usize = 8;
+/// Imported claims (#391) rank below observed memory at equal match quality: another assistant's
+/// summary is weaker evidence than something SHOGUN saw, so it fills gaps rather than displacing.
+const IMPORTED_SCORE_WEIGHT: f64 = 0.5;
+const SOURCE_PREFERENCE_BOOST: f64 = 0.1;
+const MAX_ANSWER_ANCHORS: usize = 3;
+const MIN_RARE_ANCHOR_CHARS: usize = 10;
+// Stay below SQLite's default 999 bind-variable limit while retaining a little headroom for
+// future predicates. Evidence sets can contain every event in a long meeting.
+const EVIDENCE_BIND_CHUNK_SIZE: usize = 900;
+
+/// Derived facts below this confidence remain searchable as raw evidence, but are not returned as
+/// facts. This matches Fusion's existing Low band (`confidence < 0.5`).
+pub const MIN_FACT_CONFIDENCE: f64 = 0.5;
+
+/// Closed retrieval lanes. `Derived` retains the canonical document kind for attribution.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FederatedSourceKind {
+    UserNote,
+    Event,
+    Derived(SearchDocumentKind),
+    Meeting,
+    /// A claim the user imported from another assistant (#391), labelled with its origin. Never
+    /// observed capture: capped below High, never answer-eligible, always read as `possibly`.
+    Imported(Platform),
+}
+
+impl FederatedSourceKind {
+    /// True for an imported claim — the one kind that may never be stated as fact.
+    pub const fn is_imported(&self) -> bool {
+        matches!(self, Self::Imported(_))
+    }
+}
+
+/// Typed source identity. Derived hits name the canonical owner, not a rebuildable projection id.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FederatedSourceId {
+    UserNote(i64),
+    Event(i64),
+    Derived(SourceRef),
+    Meeting(i64),
+    /// `memory_import_items.id`.
+    Imported(i64),
+}
+
+/// One source retained after a logical cluster is deduplicated.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FederatedSource {
+    pub kind: FederatedSourceKind,
+    pub id: FederatedSourceId,
+}
+
+/// Canonical provenance identity, with namespaces kept distinct.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CanonicalEvidenceId {
+    UserNote(i64),
+    Event(i64),
+    Session(i64),
+    TranscriptSegment(i64),
+    SessionNote(i64),
+    MeetingRecap(i64),
+    Brief(String),
+    FeedbackEvent(i64),
+    PeriodSummary(i64),
+    /// `memory_imports.id` — the import record an imported claim points at (never an event).
+    MemoryImport(i64),
+}
+
+/// One-based ranks from every retrieval component. `None` means the lane did not find the hit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ComponentRanks {
+    pub event_fts: Option<usize>,
+    pub derived_fts: Option<usize>,
+    pub derived_knn: Option<usize>,
+    pub meeting: Option<usize>,
+    pub warm_knn: Option<usize>,
+    pub cold_scan: Option<usize>,
+    pub imported: Option<usize>,
+}
+
+impl ComponentRanks {
+    fn merge(&mut self, other: Self) {
+        self.event_fts = min_rank(self.event_fts, other.event_fts);
+        self.derived_fts = min_rank(self.derived_fts, other.derived_fts);
+        self.derived_knn = min_rank(self.derived_knn, other.derived_knn);
+        self.meeting = min_rank(self.meeting, other.meeting);
+        self.warm_knn = min_rank(self.warm_knn, other.warm_knn);
+        self.cold_scan = min_rank(self.cold_scan, other.cold_scan);
+        self.imported = min_rank(self.imported, other.imported);
+    }
+}
+
+fn min_rank(left: Option<usize>, right: Option<usize>) -> Option<usize> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(rank), None) | (None, Some(rank)) => Some(rank),
+        (None, None) => None,
+    }
+}
+
+/// Storage-tier attribution. `canonical` covers lexical canonical rows; semantic flags show which
+/// vector tiers also contributed. Default federated search always leaves `cold` false.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TierMetadata {
+    pub canonical: bool,
+    pub warm: bool,
+    pub cold: bool,
+}
+
+impl TierMetadata {
+    fn merge(&mut self, other: Self) {
+        self.canonical |= other.canonical;
+        self.warm |= other.warm;
+        self.cold |= other.cold;
+    }
+}
+
+/// Typed, provenance-preserving result from all local retrieval lanes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FederatedHit {
+    pub source_kind: FederatedSourceKind,
+    pub source_id: FederatedSourceId,
+    /// Every source collapsed into this logical result, stable-sorted and deduplicated.
+    pub sources: Vec<FederatedSource>,
+    pub evidence_ids: Vec<CanonicalEvidenceId>,
+    pub title: String,
+    pub excerpt: String,
+    pub confidence: f64,
+    pub period_start_ms: Option<i64>,
+    pub period_end_ms: Option<i64>,
+    pub component_ranks: ComponentRanks,
+    pub fused_score: f64,
+    pub tiers: TierMetadata,
+    /// False hits may remain useful suggestions but cannot support an assertive answer.
+    pub answer_eligible: bool,
+    /// Content-free P0 quality inputs used by the answerability layer.
+    pub match_quality: MatchQualitySummary,
+}
+
+impl FederatedHit {
+    /// Event ids behind this hit: its own event first, then evidence events newest first.
+    pub fn event_ids(&self, max: usize) -> Vec<i64> {
+        let own = match self.source_id {
+            FederatedSourceId::Event(id) => Some(id),
+            _ => None,
+        };
+        let evidence = self.evidence_ids.iter().rev().filter_map(|evidence| match evidence {
+            CanonicalEvidenceId::Event(id) if Some(*id) != own => Some(*id),
+            _ => None,
+        });
+        own.into_iter().chain(evidence).take(max).collect()
+    }
+}
+
+/// When and in which app/window one event was captured (`when` / `where` on API hits).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventPlace {
+    pub ts: i64,
+    pub app: Option<String>,
+    pub window_title: Option<String>,
+}
+
+/// One batched read of the event rows behind search hits. Missing ids are simply absent.
+pub fn event_places(
+    conn: &Connection,
+    ids: &[i64],
+) -> Result<BTreeMap<i64, EventPlace>, rusqlite::Error> {
+    if ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let sql = format!(
+        "SELECT id, ts, app_bundle_id, window_title FROM event_log WHERE id IN ({})",
+        vec!["?"; ids.len()].join(",")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(ids), |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            EventPlace {
+                ts: row.get(1)?,
+                app: row.get(2)?,
+                window_title: row.get(3)?,
+            },
+        ))
+    })?;
+    rows.collect()
+}
+
+/// Bounded, content-free match measurements retained from P0 scoring.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MatchQualitySummary {
+    pub lexical_quality: f64,
+    pub term_coverage: f64,
+    pub anchor_coverage: f64,
+    pub anchor_count: usize,
+}
+
+/// Federated retrieval controls. Default is Warm-only and therefore never opens Cold storage.
+#[derive(Debug, Clone)]
+pub struct FederatedSearchOptions {
+    pub since_ts: Option<i64>,
+    pub to_ts: Option<i64>,
+    pub focus: MemoryQueryFocus,
+    pub source: SourceConstraint,
+    pub anchors: Vec<QueryAnchor>,
+    pub depth: SearchDepth,
+    pub max_cold_partitions: usize,
+    pub min_derived_confidence: f64,
+    pub per_source_limit: usize,
+    pub excerpt_chars: usize,
+    /// Search raw event FTS across all history. Derived, meeting, and vector lanes remain inside
+    /// `since_ts..to_ts`, avoiding archive-wide scans outside bounded indexed event text.
+    pub widen_event_lexical: bool,
+}
+
+impl Default for FederatedSearchOptions {
+    fn default() -> Self {
+        Self {
+            since_ts: None,
+            to_ts: None,
+            focus: MemoryQueryFocus::Any,
+            source: SourceConstraint::Any,
+            anchors: Vec::new(),
+            depth: SearchDepth::WarmOnly,
+            max_cold_partitions: DEFAULT_MAX_COLD_PARTITIONS,
+            min_derived_confidence: MIN_FACT_CONFIDENCE,
+            per_source_limit: DEFAULT_PER_SOURCE_LIMIT,
+            excerpt_chars: DEFAULT_EXCERPT_CHARS,
+            widen_event_lexical: false,
+        }
+    }
+}
+
+/// Federated hits plus Cold and latency accounting. Latency measures this synchronous local call.
+#[derive(Debug, Clone)]
+pub struct FederatedSearchResult {
+    pub hits: Vec<FederatedHit>,
+    /// Raw event candidates before cross-source clustering/truncation. Legacy in-process callers
+    /// consume this lane while typed API callers retain the richer cluster-primary result.
+    pub raw_event_ranks: Vec<(i64, f64)>,
+    /// True only when bounded archive-wide raw-event BM25 completed.
+    pub event_lexical_all_history: bool,
+    pub cold: ColdScanStats,
+    pub elapsed_micros: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum CandidateKey {
+    UserNote(i64),
+    Event(i64),
+    Derived(i64),
+    Meeting(i64),
+    Imported(i64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum ClusterKey {
+    Session(i64),
+    Candidate(CandidateKey),
+}
+
+struct Candidate {
+    key: CandidateKey,
+    source: FederatedSource,
+    evidence: BTreeSet<CanonicalEvidenceId>,
+    title: String,
+    body: String,
+    confidence: f64,
+    period_start_ms: Option<i64>,
+    period_end_ms: Option<i64>,
+    ranks: ComponentRanks,
+    lane_scores: [f64; SCORE_LANE_COUNT],
+    lexical_coverage: f64,
+    answerability_coverage: f64,
+    lexical_quality: f64,
+    anchor_coverage: f64,
+    anchor_count: usize,
+    normalized_text: String,
+    /// Per query concept: does this candidate's text match it (`terms.rs`).
+    concept_hits: Vec<bool>,
+    /// Source-quality prior: distilled memory and connector text over raw window / OCR chrome.
+    source_weight: f64,
+    answer_eligible: bool,
+    score: f64,
+    tiers: TierMetadata,
+}
+
+struct MeetingDetails {
+    ended_at: Option<i64>,
+    confidence: f64,
+    evidence: BTreeSet<CanonicalEvidenceId>,
+}
+
+impl Candidate {
+    fn cluster_key(&self) -> ClusterKey {
+        self.evidence
+            .iter()
+            .find_map(|evidence| match evidence {
+                CanonicalEvidenceId::Session(id) => Some(ClusterKey::Session(*id)),
+                _ => None,
+            })
+            .unwrap_or_else(|| ClusterKey::Candidate(self.key.clone()))
+    }
+
+    fn record_score(&mut self, lane: ScoreLane, contribution: f64) {
+        self.lane_scores[lane.index()] = sanitize_nonnegative(contribution);
+        self.score = strongest_with_capped_corroboration(self.lane_scores.iter().copied());
+    }
+
+    fn record_quality(&mut self, quality: f64) {
+        self.lexical_quality = self
+            .lexical_quality
+            .max(sanitize_nonnegative(quality).min(1.0));
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ScoreLane {
+    UserNote,
+    EventFts,
+    DerivedFts,
+    DerivedKnn,
+    Meeting,
+    WarmKnn,
+    ColdScan,
+    Imported,
+}
+
+impl ScoreLane {
+    const fn index(self) -> usize {
+        match self {
+            Self::UserNote => 7,
+            Self::EventFts => 0,
+            Self::DerivedFts => 1,
+            Self::DerivedKnn => 2,
+            Self::Meeting => 3,
+            Self::WarmKnn => 4,
+            Self::ColdScan => 5,
+            Self::Imported => 6,
+        }
+    }
+}
+
+/// Fuse event FTS, derived FTS, meeting search, Warm KNN, and explicitly requested Cold scan.
+///
+/// RRF uses fixed component names and one-based ranks. Final ties use typed source identity, so
+/// identical inputs return byte-for-byte identical hit order even when SQL/HashMap iteration does
+/// not. Meeting recap, meeting search, and raw meeting rows collapse on canonical `session_id`;
+/// all source and evidence identities survive in the returned cluster.
+pub fn search_federated(
+    conn: &Connection,
+    query: &str,
+    query_embedding: Option<&[f32]>,
+    now_ms: i64,
+    options: &FederatedSearchOptions,
+    limit: usize,
+) -> Result<FederatedSearchResult, SearchDocumentError> {
+    let started = Instant::now();
+    if query.trim().is_empty() || limit == 0 {
+        return Ok(FederatedSearchResult {
+            hits: Vec::new(),
+            raw_event_ranks: Vec::new(),
+            event_lexical_all_history: false,
+            cold: ColdScanStats::default(),
+            elapsed_micros: elapsed_micros(started),
+        });
+    }
+
+    let source_limit = options.per_source_limit.max(limit).min(100);
+    let raw_lanes_allowed = !matches!(options.source, SourceConstraint::Require(_));
+    let meeting_lane_allowed = !matches!(
+        options.source,
+        SourceConstraint::Require(family) if family != MemorySourceFamily::Meeting
+    );
+    let document_focus = required_document_focus(options.source).unwrap_or(options.focus);
+    let range = options.since_ts.map(|from_ms| SearchRange {
+        from_ms,
+        to_ms: options.to_ts.unwrap_or(now_ms).min(now_ms),
+    });
+    // Raw-event lexical lane (`lexical.rs`): bounded AND-first / relaxed-OR retrieval over the
+    // trigram and gram indexes, scored on one BM25 scale. Widening searches all history; an
+    // explicit range stays exact.
+    let (event_fts_hits, event_lexical_all_history) = if !raw_lanes_allowed {
+        (Vec::new(), false)
+    } else {
+        let scope = if options.widen_event_lexical { None } else { range };
+        let lexical = super::lexical::search_events(conn, query, scope, source_limit)?;
+        let all_history = scope.is_none() && options.widen_event_lexical && lexical.complete;
+        (lexical.hits, all_history)
+    };
+    let event_ids = event_fts_hits.iter().map(|hit| hit.id).collect::<Vec<_>>();
+    let warm_hits = if raw_lanes_allowed {
+        accepted_vector_hits(match query_embedding {
+            Some(embedding) => match range {
+                Some(range) => crate::vector::knn_range_scored(
+                    conn,
+                    embedding,
+                    range.from_ms,
+                    range.to_ms,
+                    source_limit,
+                )?,
+                None => crate::vector::knn_scored(conn, embedding, source_limit)?,
+            },
+            None => Vec::new(),
+        })
+    } else {
+        Vec::new()
+    };
+    let warm_ids = warm_hits.iter().map(|hit| hit.id).collect::<Vec<_>>();
+    let cold = if raw_lanes_allowed {
+        cold_candidates(conn, query_embedding, now_ms, options, source_limit)?
+    } else {
+        ColdScan::default()
+    };
+    let document_candidates = super::lexical::search_documents(
+        conn,
+        query,
+        options.since_ts,
+        options.to_ts.map(|to| to.min(now_ms)),
+        document_focus,
+        source_limit,
+    )?;
+    let document_vector_hits = accepted_vector_hits(match query_embedding {
+        Some(embedding) => crate::document_vector::knn_filtered_scored(
+            conn,
+            embedding,
+            options.since_ts,
+            options.to_ts.map(|to| to.min(now_ms)),
+            document_focus,
+            source_limit,
+        )?,
+        None => Vec::new(),
+    });
+    let document_vector_ids = document_vector_hits
+        .iter()
+        .map(|hit| hit.id)
+        .collect::<Vec<_>>();
+    let meetings = if meeting_lane_allowed {
+        search_meetings_in_range(conn, query, range, source_limit)?
+    } else {
+        Vec::new()
+    };
+    // Imported claims (#391) carry no period, like undated derived documents, so a time range does
+    // not exclude them; an explicit source family or a meeting/brief/period/thread focus does.
+    let imported = if imported_lane_allowed(options) {
+        search_imported(
+            conn,
+            &lexical_terms(query),
+            options.min_derived_confidence.max(MIN_FACT_CONFIDENCE),
+            source_limit,
+        )?
+    } else {
+        Vec::new()
+    };
+
+    let mut candidates: BTreeMap<CandidateKey, Candidate> = BTreeMap::new();
+    hydrate_events(
+        conn,
+        query,
+        options.excerpt_chars,
+        &event_ids,
+        &mut candidates,
+    )?;
+    hydrate_events(
+        conn,
+        query,
+        options.excerpt_chars,
+        &warm_ids,
+        &mut candidates,
+    )?;
+    hydrate_events(
+        conn,
+        query,
+        options.excerpt_chars,
+        &cold.ids,
+        &mut candidates,
+    )?;
+    let mut document_ids = document_candidates
+        .iter()
+        .map(|candidate| candidate.id)
+        .collect::<Vec<_>>();
+    document_ids.extend(document_vector_ids.iter().copied());
+    let accepted_documents =
+        hydrate_derived(conn, query, options, now_ms, &document_ids, &mut candidates)?;
+    let accepted_meetings =
+        hydrate_meetings(conn, query, options, now_ms, &meetings, &mut candidates)?;
+    hydrate_imported(query, options.excerpt_chars, &imported, &mut candidates);
+    if imported_lane_allowed(options) {
+        for (index, note) in crate::memory_notes::search(conn, query, source_limit)?.into_iter().enumerate() {
+            let key=CandidateKey::UserNote(note.id);
+            let matched=match_fields(&query_concepts(query),&[&note.text]);
+            let coverage=matched.lexical_coverage;
+            let mut candidate=Candidate {
+                key: key.clone(),
+                source: FederatedSource { kind: FederatedSourceKind::UserNote, id: FederatedSourceId::UserNote(note.id) },
+                evidence: BTreeSet::from([CanonicalEvidenceId::UserNote(note.id)]),
+                title: "User memory".into(), body: excerpt(&note.text,query,options.excerpt_chars),
+                confidence: 1.0, period_start_ms: None, period_end_ms: None,
+                ranks: ComponentRanks::default(), lane_scores: [0.0;SCORE_LANE_COUNT],
+                lexical_coverage: coverage, answerability_coverage: matched.answerability_coverage,
+                lexical_quality: coverage, anchor_coverage: 1.0, anchor_count: 0,
+                normalized_text: matched.normalized_text, concept_hits: matched.concept_hits,
+                source_weight: DISTILLED_SOURCE_WEIGHT, answer_eligible: true, score: 0.0,
+                tiers: TierMetadata { canonical:true, ..TierMetadata::default() },
+            };
+            candidate.record_score(ScoreLane::UserNote,quality_weighted_rrf(index+1,coverage));
+            candidates.insert(key,candidate);
+        }
+    }
+
+    apply_event_fts_ranks(&event_fts_hits, &mut candidates);
+    apply_vector_ranks(&warm_hits, RankLane::Warm, &mut candidates);
+    apply_ranks(&cold.ids, RankLane::Cold, &mut candidates);
+    apply_document_ranks(&document_candidates, &accepted_documents, &mut candidates);
+    apply_document_vector_ranks(&document_vector_hits, &accepted_documents, &mut candidates);
+    apply_meeting_ranks(&meetings, &accepted_meetings, &mut candidates);
+    apply_imported_ranks(&imported, &mut candidates);
+
+    let concepts = query_concepts(query);
+    let anchors = reliable_anchors(query, &options.anchors, &concepts, candidates.values());
+    apply_evidence_resolution(conn, &mut candidates)?;
+    for candidate in candidates.values_mut() {
+        candidate.anchor_coverage = anchor_coverage(&anchors, candidate);
+        candidate.anchor_count = anchors.len();
+        let multiplier = source_intent_multiplier(options.source, &candidate.source.kind)
+            * prior_multiplier(candidate, now_ms);
+        if multiplier != 1.0 {
+            candidate.score *= multiplier;
+            for score in &mut candidate.lane_scores {
+                *score *= multiplier;
+            }
+        }
+    }
+
+    let mut raw_event_ranks = candidates
+        .values()
+        .filter_map(|candidate| match candidate.source.id {
+            FederatedSourceId::Event(event_id) if candidate.score > 0.0 => {
+                Some((event_id, candidate.score))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    raw_event_ranks.sort_by(|left, right| {
+        right
+            .1
+            .total_cmp(&left.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    raw_event_ranks.truncate(limit);
+
+    let mut clusters: BTreeMap<ClusterKey, Vec<Candidate>> = BTreeMap::new();
+    for candidate in candidates.into_values().filter(|candidate| {
+        candidate.score > 0.0 && source_accepts(options.source, &candidate.source.kind)
+    }) {
+        clusters
+            .entry(candidate.cluster_key())
+            .or_default()
+            .push(candidate);
+    }
+    let mut hits = clusters
+        .into_values()
+        .map(|cluster| merge_cluster(query, options.excerpt_chars, cluster))
+        .filter(|hit| focus_accepts(options.focus, &hit.source_kind))
+        .collect::<Vec<_>>();
+    hits.sort_by(|left, right| {
+        right
+            .fused_score
+            .total_cmp(&left.fused_score)
+            .then_with(|| {
+                source_priority(&left.source_kind).cmp(&source_priority(&right.source_kind))
+            })
+            .then_with(|| left.source_id.cmp(&right.source_id))
+    });
+    hits.truncate(limit);
+
+    Ok(FederatedSearchResult {
+        hits,
+        raw_event_ranks,
+        event_lexical_all_history,
+        cold: cold.stats,
+        elapsed_micros: elapsed_micros(started),
+    })
+}
+
+fn elapsed_micros(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+/// Weight of distilled memory (meetings, derived facts, the user's own notes) against raw capture.
+const DISTILLED_SOURCE_WEIGHT: f64 = 1.10;
+/// Connector text (mail, calendar, chat, docs) — authored content, little chrome.
+const CONNECTOR_SOURCE_WEIGHT: f64 = 1.05;
+/// OCR of a window: the same words as the window plus its chrome, recognised imperfectly.
+const OCR_SOURCE_WEIGHT: f64 = 0.85;
+/// Upper bound of the recency prior: a hit from today scores at most this much more than an
+/// equally good hit from long ago. Small on purpose — relevance must dominate (see
+/// `ranking::apply_recency` for what an unbounded recency term did).
+const RECENCY_BOOST: f64 = 0.10;
+const RECENCY_HALF_LIFE_DAYS: f64 = 14.0;
+const DAY_MS: f64 = 86_400_000.0;
+
+fn event_source_weight(source: &str) -> f64 {
+    match source {
+        "screen_ocr" | "screen_text" | "user_screenshot" => OCR_SOURCE_WEIGHT,
+        "gmail" | "gcal" | "slack" | "notion" | "github" | "linear" | "granola" | "meeting" => {
+            CONNECTOR_SOURCE_WEIGHT
+        }
+        _ => 1.0,
+    }
+}
+
+fn derived_source_weight(kind: SearchDocumentKind) -> f64 {
+    match kind {
+        SearchDocumentKind::ThreadSummary | SearchDocumentKind::Lesson => CONNECTOR_SOURCE_WEIGHT,
+        _ => DISTILLED_SOURCE_WEIGHT,
+    }
+}
+
+/// Bounded priors applied to every lane score of a candidate: source quality times recency.
+///
+/// Measured on the golden eval (docs/search-eval.md): MRR 0.929 with neither prior, 0.941 with
+/// recency alone, 0.947 with both; recency 0.05–0.2 and half-lives 7–30 days all within 0.004.
+fn prior_multiplier(candidate: &Candidate, now_ms: i64) -> f64 {
+    let recency = candidate
+        .period_end_ms
+        .or(candidate.period_start_ms)
+        .map_or(1.0, |ts| {
+            let age_days = (now_ms.saturating_sub(ts)).max(0) as f64 / DAY_MS;
+            1.0 + RECENCY_BOOST * 0.5_f64.powf(age_days / RECENCY_HALF_LIFE_DAYS)
+        });
+    sanitize_nonnegative(candidate.source_weight * recency)
+}
+
+fn accepted_vector_hits(hits: Vec<crate::vector::VectorHit>) -> Vec<crate::vector::VectorHit> {
+    hits.into_iter()
+        .filter(|hit| hit.distance.is_finite() && hit.distance <= MAX_SEMANTIC_L2_DISTANCE)
+        .collect()
+}
+
+/// Concept-level match of one candidate's fields (title first, then body fields).
+struct FieldMatch {
+    /// Fraction of concepts matched, substring semantics (`art` is in `quarterly`).
+    lexical_coverage: f64,
+    /// Fraction matched as whole words for Latin terms; CJK and short tokens as matched.
+    answerability_coverage: f64,
+    normalized_text: String,
+    concept_hits: Vec<bool>,
+}
+
+fn match_fields(concepts: &[Concept], fields: &[&str]) -> FieldMatch {
+    let (title, body) = match fields {
+        [only] => ("", (*only).to_owned()),
+        [title, rest @ ..] => (*title, rest.join("\n")),
+        [] => ("", String::new()),
+    };
+    let mut text = MatchText::new(title, &body);
+    let concept_hits = concepts
+        .iter()
+        .map(|concept| text.matches(concept))
+        .collect::<Vec<_>>();
+    let tokens = fields
+        .iter()
+        .flat_map(|field| match_tokens(field))
+        .collect::<BTreeSet<_>>();
+    let answered = concepts
+        .iter()
+        .zip(&concept_hits)
+        .filter(|(concept, hit)| {
+            if concept.cjk || concept.short_word {
+                **hit
+            } else {
+                concept
+                    .surface
+                    .as_deref()
+                    .is_some_and(|surface| tokens.contains(surface))
+            }
+        })
+        .count();
+    let fraction = |count: usize| {
+        if concepts.is_empty() {
+            0.0
+        } else {
+            count as f64 / concepts.len() as f64
+        }
+    };
+    FieldMatch {
+        lexical_coverage: fraction(concept_hits.iter().filter(|hit| **hit).count()),
+        answerability_coverage: fraction(answered),
+        normalized_text: normalize_match_text(fields),
+        concept_hits,
+    }
+}
+
+#[cfg(test)]
+fn lexical_coverage(query: &str, fields: &[&str]) -> f64 {
+    match_fields(&query_concepts(query), fields).lexical_coverage
+}
+
+#[cfg(test)]
+fn answerability_coverage(query: &str, fields: &[&str]) -> f64 {
+    match_fields(&query_concepts(query), fields).answerability_coverage
+}
+
+/// Whole Latin words of a field, NFKC-lowercased.
+fn match_tokens(text: &str) -> Vec<String> {
+    normalize(text)
+        .split(|character: char| !character.is_alphanumeric() || super::terms::is_cjk(character))
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn bm25_strength(rank: f64) -> f64 {
+    if rank.is_finite() {
+        (-rank).max(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn normalized_lane_quality(strength: f64, strongest: f64, coverage: f64) -> f64 {
+    let strength = sanitize_nonnegative(strength);
+    let strongest = sanitize_nonnegative(strongest);
+    let coverage = sanitize_nonnegative(coverage).min(1.0);
+    let relative_strength = if strongest > 0.0 {
+        (strength / strongest).min(1.0)
+    } else {
+        1.0
+    };
+    sanitize_nonnegative(relative_strength * coverage).min(1.0)
+}
+
+fn vector_quality(distance: f32) -> Option<f64> {
+    if !distance.is_finite() || distance > MAX_SEMANTIC_L2_DISTANCE {
+        return None;
+    }
+    let distance = distance.max(0.0) as f64;
+    Some((1.0 - distance / f64::from(MAX_SEMANTIC_L2_DISTANCE)).clamp(0.0, 1.0))
+}
+
+fn quality_weighted_rrf(rank: usize, quality: f64) -> f64 {
+    if rank == 0 {
+        return 0.0;
+    }
+    let quality = sanitize_nonnegative(quality).min(1.0);
+    let weight = MIN_QUALITY_WEIGHT + (1.0 - MIN_QUALITY_WEIGHT) * quality;
+    sanitize_nonnegative(weight / (RRF_K + rank as f64))
+}
+
+fn sanitize_nonnegative(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn strongest_with_capped_corroboration(scores: impl IntoIterator<Item = f64>) -> f64 {
+    let (strongest, total) = scores
+        .into_iter()
+        .fold((0.0_f64, 0.0_f64), |(max, sum), score| {
+            let score = sanitize_nonnegative(score);
+            (max.max(score), sum + score)
+        });
+    if strongest == 0.0 {
+        return 0.0;
+    }
+    let corroboration =
+        ((total - strongest) * CORROBORATION_RATE).min(strongest * MAX_CORROBORATION_FRACTION);
+    sanitize_nonnegative(strongest + corroboration)
+}
+
+fn cluster_fused_score<'a>(
+    candidate_lane_scores: impl IntoIterator<Item = &'a [f64; SCORE_LANE_COUNT]>,
+) -> f64 {
+    strongest_with_capped_corroboration(
+        candidate_lane_scores
+            .into_iter()
+            .flat_map(|scores| scores.iter().copied()),
+    )
+}
+
+fn cold_candidates(
+    conn: &Connection,
+    query_embedding: Option<&[f32]>,
+    now_ms: i64,
+    options: &FederatedSearchOptions,
+    limit: usize,
+) -> Result<ColdScan, rusqlite::Error> {
+    let (SearchDepth::All, Some(embedding)) = (options.depth, query_embedding) else {
+        return Ok(ColdScan::default());
+    };
+    search_cold_partitions(
+        conn,
+        embedding,
+        (
+            options.since_ts.unwrap_or(i64::MIN),
+            options.to_ts.unwrap_or(now_ms).min(now_ms),
+        ),
+        options.max_cold_partitions,
+        limit,
+    )
+}
+
+fn hydrate_events(
+    conn: &Connection,
+    query: &str,
+    excerpt_chars: usize,
+    ids: &[i64],
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) -> Result<(), rusqlite::Error> {
+    let concepts = query_concepts(query);
+    let mut stmt = conn.prepare(
+        "SELECT ts, source, window_title, content, session_id FROM event_log WHERE id = ?1",
+    )?;
+    for &id in ids {
+        let key = CandidateKey::Event(id);
+        if candidates.contains_key(&key) {
+            continue;
+        }
+        let row = stmt
+            .query_row([id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                ))
+            })
+            .optional()?;
+        let Some((ts, source_label, title, content, session_id)) = row else {
+            continue;
+        };
+        let mut evidence = BTreeSet::from([CanonicalEvidenceId::Event(id)]);
+        if let Some(session_id) = session_id {
+            evidence.insert(CanonicalEvidenceId::Session(session_id));
+        }
+        let source_weight = event_source_weight(&source_label);
+        let title = title.unwrap_or(source_label);
+        let matched = match_fields(&concepts, &[&title, &content]);
+        candidates.insert(
+            key.clone(),
+            Candidate {
+                key,
+                source: FederatedSource {
+                    kind: FederatedSourceKind::Event,
+                    id: FederatedSourceId::Event(id),
+                },
+                evidence,
+                title,
+                body: excerpt(&content, query, excerpt_chars),
+                confidence: 1.0,
+                period_start_ms: Some(ts),
+                period_end_ms: Some(ts),
+                ranks: ComponentRanks::default(),
+                lane_scores: [0.0; SCORE_LANE_COUNT],
+                lexical_coverage: matched.lexical_coverage,
+                answerability_coverage: matched.answerability_coverage,
+                lexical_quality: 0.0,
+                anchor_coverage: 1.0,
+                anchor_count: 0,
+                normalized_text: matched.normalized_text,
+                concept_hits: matched.concept_hits,
+                source_weight,
+                answer_eligible: true,
+                score: 0.0,
+                tiers: TierMetadata::default(),
+            },
+        );
+    }
+    Ok(())
+}
+
+fn hydrate_derived(
+    conn: &Connection,
+    query: &str,
+    options: &FederatedSearchOptions,
+    now_ms: i64,
+    ids: &[i64],
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) -> Result<BTreeSet<i64>, SearchDocumentError> {
+    let concepts = query_concepts(query);
+    let documents = search_documents::hydrate_documents(conn, ids)?;
+    let mut accepted = BTreeSet::new();
+    let confidence_floor = options.min_derived_confidence.max(MIN_FACT_CONFIDENCE);
+    for document in documents {
+        if document.confidence < confidence_floor || !document_in_range(&document, options, now_ms)
+        {
+            continue;
+        }
+        let key = CandidateKey::Derived(document.id);
+        accepted.insert(document.id);
+        let mut evidence = document
+            .evidence
+            .iter()
+            .map(evidence_id)
+            .collect::<BTreeSet<_>>();
+        if let SourceRef::PeriodSummary(summary_id) = &document.source {
+            let mut stmt = conn.prepare(
+                "SELECT child_summary_id FROM period_summary_child_provenance
+                  WHERE summary_id = ?1 ORDER BY child_summary_id",
+            )?;
+            let children = stmt.query_map([summary_id], |row| row.get::<_, i64>(0))?;
+            for child in children {
+                evidence.insert(CanonicalEvidenceId::PeriodSummary(child?));
+            }
+        }
+        let matched = match_fields(&concepts, &[&document.title, &document.body]);
+        let source_weight = derived_source_weight(document.kind);
+        candidates.insert(
+            key.clone(),
+            Candidate {
+                key,
+                source: FederatedSource {
+                    kind: FederatedSourceKind::Derived(document.kind),
+                    id: FederatedSourceId::Derived(document.source),
+                },
+                evidence,
+                title: document.title,
+                body: excerpt(&document.body, query, options.excerpt_chars),
+                confidence: document.confidence,
+                period_start_ms: document.period_start_ms,
+                period_end_ms: document.period_end_ms,
+                ranks: ComponentRanks::default(),
+                lane_scores: [0.0; SCORE_LANE_COUNT],
+                lexical_coverage: matched.lexical_coverage,
+                answerability_coverage: matched.answerability_coverage,
+                lexical_quality: 0.0,
+                anchor_coverage: 1.0,
+                anchor_count: 0,
+                normalized_text: matched.normalized_text,
+                concept_hits: matched.concept_hits,
+                source_weight,
+                answer_eligible: true,
+                score: 0.0,
+                tiers: TierMetadata::default(),
+            },
+        );
+    }
+    Ok(accepted)
+}
+
+fn hydrate_imported(
+    query: &str,
+    excerpt_chars: usize,
+    matches: &[ImportedMatch],
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) {
+    let concepts = query_concepts(query);
+    for item in matches {
+        let key = CandidateKey::Imported(item.item_id);
+        let body = item.body();
+        let matched = match_fields(&concepts, &[&item.name, &body]);
+        let source_weight = 1.0;
+        candidates.insert(
+            key.clone(),
+            Candidate {
+                key,
+                source: FederatedSource {
+                    kind: FederatedSourceKind::Imported(item.platform),
+                    id: FederatedSourceId::Imported(item.item_id),
+                },
+                evidence: BTreeSet::from([CanonicalEvidenceId::MemoryImport(item.import_id)]),
+                title: item.name.clone(),
+                body: excerpt(&body, query, excerpt_chars),
+                // The V52 CHECK already caps storage; clamp again so no read path can lift it.
+                confidence: item.confidence.min(crate::memory_import::CONFIDENCE_MAX),
+                period_start_ms: None,
+                period_end_ms: None,
+                ranks: ComponentRanks::default(),
+                lane_scores: [0.0; SCORE_LANE_COUNT],
+                lexical_coverage: matched.lexical_coverage,
+                answerability_coverage: matched.answerability_coverage,
+                lexical_quality: 0.0,
+                anchor_coverage: 1.0,
+                anchor_count: 0,
+                normalized_text: matched.normalized_text,
+                concept_hits: matched.concept_hits,
+                source_weight,
+                answer_eligible: false,
+                score: 0.0,
+                tiers: TierMetadata::default(),
+            },
+        );
+    }
+}
+
+fn apply_imported_ranks(
+    matches: &[ImportedMatch],
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) {
+    for (index, item) in matches.iter().enumerate() {
+        let rank = index + 1;
+        let Some(candidate) = candidates.get_mut(&CandidateKey::Imported(item.item_id)) else {
+            continue;
+        };
+        let quality = candidate.lexical_coverage;
+        candidate.record_score(
+            ScoreLane::Imported,
+            quality_weighted_rrf(rank, quality) * IMPORTED_SCORE_WEIGHT,
+        );
+        candidate.record_quality(quality);
+        candidate.ranks.imported = Some(rank);
+        candidate.tiers.canonical = true;
+    }
+}
+
+fn imported_lane_allowed(options: &FederatedSearchOptions) -> bool {
+    !matches!(options.source, SourceConstraint::Require(_))
+        && imported_focus_accepts(options.focus)
+}
+
+/// Imported claims are preferences, goals, entities and open loops — never a meeting, brief,
+/// period rollup or thread — so only those focuses may surface them.
+const fn imported_focus_accepts(focus: MemoryQueryFocus) -> bool {
+    matches!(
+        focus,
+        MemoryQueryFocus::Any
+            | MemoryQueryFocus::Person
+            | MemoryQueryFocus::Project
+            | MemoryQueryFocus::State
+    )
+}
+
+fn document_in_range(
+    document: &SearchDocument,
+    options: &FederatedSearchOptions,
+    now_ms: i64,
+) -> bool {
+    let Some(since_ts) = options.since_ts else {
+        return true;
+    };
+    let to_ts = options.to_ts.unwrap_or(now_ms).min(now_ms);
+    match (document.period_start_ms, document.period_end_ms) {
+        (Some(start), Some(end)) => start < to_ts && end > since_ts,
+        _ => true,
+    }
+}
+
+fn hydrate_meetings(
+    conn: &Connection,
+    query: &str,
+    options: &FederatedSearchOptions,
+    now_ms: i64,
+    meetings: &[super::MeetingSearchHit],
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) -> Result<BTreeSet<i64>, rusqlite::Error> {
+    let concepts = query_concepts(query);
+    let mut accepted = BTreeSet::new();
+    let confidence_floor = options.min_derived_confidence.max(MIN_FACT_CONFIDENCE);
+    for meeting in meetings {
+        if options.since_ts.is_some_and(|since| meeting.ts < since)
+            || meeting.ts >= options.to_ts.unwrap_or(now_ms).min(now_ms)
+        {
+            continue;
+        }
+        let details = meeting_details(conn, meeting.session_id)?;
+        let Some(details) = details else {
+            continue;
+        };
+        if details.confidence < confidence_floor {
+            continue;
+        }
+        let key = CandidateKey::Meeting(meeting.session_id);
+        accepted.insert(meeting.session_id);
+        let title = meeting
+            .title
+            .clone()
+            .unwrap_or_else(|| "Meeting".to_owned());
+        let matched = match_fields(&concepts, &[&title, &meeting.content]);
+        let source_weight = DISTILLED_SOURCE_WEIGHT;
+        candidates.insert(
+            key.clone(),
+            Candidate {
+                key,
+                source: FederatedSource {
+                    kind: FederatedSourceKind::Meeting,
+                    id: FederatedSourceId::Meeting(meeting.session_id),
+                },
+                evidence: details.evidence,
+                title,
+                body: excerpt(&meeting.content, query, options.excerpt_chars),
+                confidence: details.confidence,
+                period_start_ms: Some(meeting.ts),
+                period_end_ms: details.ended_at.or(Some(meeting.ts)),
+                ranks: ComponentRanks::default(),
+                lane_scores: [0.0; SCORE_LANE_COUNT],
+                lexical_coverage: matched.lexical_coverage,
+                answerability_coverage: matched.answerability_coverage,
+                lexical_quality: 0.0,
+                anchor_coverage: 1.0,
+                anchor_count: 0,
+                normalized_text: matched.normalized_text,
+                concept_hits: matched.concept_hits,
+                source_weight,
+                answer_eligible: true,
+                score: 0.0,
+                tiers: TierMetadata::default(),
+            },
+        );
+    }
+    Ok(accepted)
+}
+
+fn meeting_details(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<Option<MeetingDetails>, rusqlite::Error> {
+    let session = conn
+        .query_row(
+            "SELECT ended_at, confidence FROM sessions WHERE id = ?1",
+            [session_id],
+            |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, f64>(1)?)),
+        )
+        .optional()?;
+    let Some((ended_at, confidence)) = session else {
+        return Ok(None);
+    };
+    let mut evidence = BTreeSet::from([CanonicalEvidenceId::Session(session_id)]);
+    collect_numeric_evidence(
+        conn,
+        "SELECT id FROM transcript_segments WHERE session_id = ?1 AND excluded = 0 ORDER BY id",
+        session_id,
+        CanonicalEvidenceId::TranscriptSegment,
+        &mut evidence,
+    )?;
+    collect_numeric_evidence(
+        conn,
+        "SELECT id FROM session_notes WHERE session_id = ?1 ORDER BY id",
+        session_id,
+        CanonicalEvidenceId::SessionNote,
+        &mut evidence,
+    )?;
+    collect_numeric_evidence(
+        conn,
+        "SELECT id FROM meeting_recaps WHERE session_id = ?1 ORDER BY id",
+        session_id,
+        CanonicalEvidenceId::MeetingRecap,
+        &mut evidence,
+    )?;
+    collect_numeric_evidence(
+        conn,
+        "SELECT id FROM event_log WHERE session_id = ?1 ORDER BY id",
+        session_id,
+        CanonicalEvidenceId::Event,
+        &mut evidence,
+    )?;
+    Ok(Some(MeetingDetails {
+        ended_at,
+        confidence,
+        evidence,
+    }))
+}
+
+fn collect_numeric_evidence(
+    conn: &Connection,
+    sql: &str,
+    session_id: i64,
+    wrap: fn(i64) -> CanonicalEvidenceId,
+    evidence: &mut BTreeSet<CanonicalEvidenceId>,
+) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map([session_id], |row| row.get::<_, i64>(0))?;
+    for row in rows {
+        evidence.insert(wrap(row?));
+    }
+    Ok(())
+}
+
+fn evidence_id(evidence: &EvidenceRef) -> CanonicalEvidenceId {
+    match evidence {
+        EvidenceRef::Event { id, .. } => CanonicalEvidenceId::Event(*id),
+        EvidenceRef::Session { id, .. } => CanonicalEvidenceId::Session(*id),
+        EvidenceRef::TranscriptSegment { id, .. } => CanonicalEvidenceId::TranscriptSegment(*id),
+        EvidenceRef::SessionNote { id, .. } => CanonicalEvidenceId::SessionNote(*id),
+        EvidenceRef::MeetingRecap { id, .. } => CanonicalEvidenceId::MeetingRecap(*id),
+        EvidenceRef::Brief { date, .. } => CanonicalEvidenceId::Brief(date.clone()),
+        EvidenceRef::FeedbackEvent { id, .. } => CanonicalEvidenceId::FeedbackEvent(*id),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum RankLane {
+    Warm,
+    Cold,
+}
+
+fn apply_event_fts_ranks(
+    hits: &[FtsSearchHit],
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) {
+    let strongest = hits
+        .iter()
+        .map(|hit| bm25_strength(hit.rank))
+        .fold(0.0_f64, f64::max);
+    for (index, hit) in hits.iter().enumerate() {
+        let rank = index + 1;
+        let Some(candidate) = candidates.get_mut(&CandidateKey::Event(hit.id)) else {
+            continue;
+        };
+        let quality = normalized_lane_quality(
+            bm25_strength(hit.rank),
+            strongest,
+            candidate.lexical_coverage,
+        );
+        candidate.record_score(ScoreLane::EventFts, quality_weighted_rrf(rank, quality));
+        candidate.record_quality(quality);
+        candidate.ranks.event_fts = Some(rank);
+        candidate.tiers.canonical = true;
+    }
+}
+
+fn apply_ranks(ids: &[i64], lane: RankLane, candidates: &mut BTreeMap<CandidateKey, Candidate>) {
+    for (index, id) in ids.iter().enumerate() {
+        let rank = index + 1;
+        let Some(candidate) = candidates.get_mut(&CandidateKey::Event(*id)) else {
+            continue;
+        };
+        match lane {
+            RankLane::Cold => {
+                candidate.record_score(ScoreLane::ColdScan, quality_weighted_rrf(rank, 1.0));
+                candidate.ranks.cold_scan = Some(rank);
+                candidate.tiers.cold = true;
+            }
+            RankLane::Warm => unreachable!("Warm vector ranks retain distance"),
+        }
+    }
+}
+
+fn apply_vector_ranks(
+    hits: &[crate::vector::VectorHit],
+    lane: RankLane,
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) {
+    for (index, hit) in hits.iter().enumerate() {
+        let rank = index + 1;
+        let Some(candidate) = candidates.get_mut(&CandidateKey::Event(hit.id)) else {
+            continue;
+        };
+        let Some(quality) = vector_quality(hit.distance) else {
+            continue;
+        };
+        match lane {
+            RankLane::Warm => {
+                candidate.record_score(ScoreLane::WarmKnn, quality_weighted_rrf(rank, quality));
+                candidate.ranks.warm_knn = Some(rank);
+                candidate.tiers.warm = true;
+            }
+            RankLane::Cold => unreachable!("Cold ranks do not expose L2 distance"),
+        }
+    }
+}
+
+fn apply_document_ranks(
+    ranked: &[search_documents::DocumentCandidate],
+    accepted: &BTreeSet<i64>,
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) {
+    let strongest = ranked
+        .iter()
+        .filter(|document| accepted.contains(&document.id))
+        .map(|document| bm25_strength(document.rank))
+        .fold(0.0_f64, f64::max);
+    for (index, document) in ranked
+        .iter()
+        .filter(|document| accepted.contains(&document.id))
+        .enumerate()
+    {
+        let rank = index + 1;
+        let Some(candidate) = candidates.get_mut(&CandidateKey::Derived(document.id)) else {
+            continue;
+        };
+        let quality = normalized_lane_quality(
+            bm25_strength(document.rank),
+            strongest,
+            candidate.lexical_coverage,
+        );
+        candidate.record_score(ScoreLane::DerivedFts, quality_weighted_rrf(rank, quality));
+        candidate.record_quality(quality);
+        candidate.ranks.derived_fts = Some(rank);
+        candidate.tiers.canonical = true;
+    }
+}
+
+fn apply_document_vector_ranks(
+    hits: &[crate::vector::VectorHit],
+    accepted: &BTreeSet<i64>,
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) {
+    for (index, hit) in hits
+        .iter()
+        .filter(|hit| accepted.contains(&hit.id))
+        .enumerate()
+    {
+        let rank = index + 1;
+        let Some(candidate) = candidates.get_mut(&CandidateKey::Derived(hit.id)) else {
+            continue;
+        };
+        let Some(quality) = vector_quality(hit.distance) else {
+            continue;
+        };
+        candidate.record_score(ScoreLane::DerivedKnn, quality_weighted_rrf(rank, quality));
+        candidate.ranks.derived_knn = Some(rank);
+        candidate.tiers.warm = true;
+    }
+}
+
+fn apply_meeting_ranks(
+    meetings: &[super::MeetingSearchHit],
+    accepted: &BTreeSet<i64>,
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) {
+    let strongest = meetings
+        .iter()
+        .filter(|meeting| accepted.contains(&meeting.session_id))
+        .map(|meeting| sanitize_nonnegative(meeting.score))
+        .fold(0.0_f64, f64::max);
+    for (index, meeting) in meetings
+        .iter()
+        .filter(|meeting| accepted.contains(&meeting.session_id))
+        .enumerate()
+    {
+        let rank = index + 1;
+        let Some(candidate) = candidates.get_mut(&CandidateKey::Meeting(meeting.session_id)) else {
+            continue;
+        };
+        let quality = normalized_lane_quality(meeting.score, strongest, candidate.lexical_coverage);
+        candidate.record_score(ScoreLane::Meeting, quality_weighted_rrf(rank, quality));
+        candidate.record_quality(quality);
+        candidate.ranks.meeting = Some(rank);
+        candidate.tiers.canonical = true;
+    }
+}
+
+fn merge_cluster(query: &str, excerpt_chars: usize, mut cluster: Vec<Candidate>) -> FederatedHit {
+    cluster.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| {
+                source_priority(&left.source.kind).cmp(&source_priority(&right.source.kind))
+            })
+            .then_with(|| left.source.cmp(&right.source))
+    });
+    let primary = &cluster[0];
+    let mut sources = BTreeSet::new();
+    let mut evidence = BTreeSet::new();
+    let mut ranks = ComponentRanks::default();
+    let mut tiers = TierMetadata::default();
+    let confidence = primary.confidence;
+    // A cluster may corroborate a fresh primary with a stale/deleted member. Keep
+    // that cluster searchable, but never let unresolved evidence satisfy an answer.
+    let answer_eligible = cluster.iter().all(|candidate| candidate.answer_eligible);
+    let match_quality = MatchQualitySummary {
+        lexical_quality: primary.lexical_quality,
+        term_coverage: primary.answerability_coverage,
+        anchor_coverage: primary.anchor_coverage,
+        anchor_count: primary.anchor_count,
+    };
+    let mut period_start_ms = None;
+    let mut period_end_ms = None;
+    for candidate in &cluster {
+        sources.insert(candidate.source.clone());
+        evidence.extend(candidate.evidence.iter().cloned());
+        ranks.merge(candidate.ranks);
+        tiers.merge(candidate.tiers);
+        period_start_ms = min_option(period_start_ms, candidate.period_start_ms);
+        period_end_ms = max_option(period_end_ms, candidate.period_end_ms);
+    }
+    let fused_score = cluster_fused_score(cluster.iter().map(|candidate| &candidate.lane_scores));
+    FederatedHit {
+        source_kind: primary.source.kind.clone(),
+        source_id: primary.source.id.clone(),
+        sources: sources.into_iter().collect(),
+        evidence_ids: evidence.into_iter().collect(),
+        title: primary.title.clone(),
+        excerpt: excerpt(&primary.body, query, excerpt_chars),
+        confidence,
+        period_start_ms,
+        period_end_ms,
+        component_ranks: ranks,
+        fused_score,
+        tiers,
+        answer_eligible,
+        match_quality,
+    }
+}
+
+fn candidate_family(kind: &FederatedSourceKind) -> Option<MemorySourceFamily> {
+    match kind {
+        FederatedSourceKind::UserNote | FederatedSourceKind::Event | FederatedSourceKind::Imported(_) => None,
+        FederatedSourceKind::Meeting => Some(MemorySourceFamily::Meeting),
+        FederatedSourceKind::Derived(kind) => match kind {
+            SearchDocumentKind::Person => Some(MemorySourceFamily::Person),
+            SearchDocumentKind::Project => Some(MemorySourceFamily::Project),
+            SearchDocumentKind::Commitment | SearchDocumentKind::OpenLoop => {
+                Some(MemorySourceFamily::State)
+            }
+            SearchDocumentKind::ThreadSummary => Some(MemorySourceFamily::Thread),
+            SearchDocumentKind::SessionSummary
+            | SearchDocumentKind::MeetingRecap
+            | SearchDocumentKind::MeetingNote => Some(MemorySourceFamily::Meeting),
+            SearchDocumentKind::Brief => Some(MemorySourceFamily::Brief),
+            SearchDocumentKind::PeriodSummary => Some(MemorySourceFamily::Period),
+            SearchDocumentKind::Lesson => None,
+        },
+    }
+}
+
+fn required_document_focus(source: SourceConstraint) -> Option<MemoryQueryFocus> {
+    let SourceConstraint::Require(family) = source else {
+        return None;
+    };
+    Some(match family {
+        MemorySourceFamily::Meeting => MemoryQueryFocus::Meeting,
+        MemorySourceFamily::State => MemoryQueryFocus::State,
+        MemorySourceFamily::Brief => MemoryQueryFocus::Brief,
+        MemorySourceFamily::Person => MemoryQueryFocus::Person,
+        MemorySourceFamily::Project => MemoryQueryFocus::Project,
+        MemorySourceFamily::Thread => MemoryQueryFocus::Thread,
+        MemorySourceFamily::Period => MemoryQueryFocus::Period,
+    })
+}
+
+fn source_accepts(source: SourceConstraint, kind: &FederatedSourceKind) -> bool {
+    match source {
+        SourceConstraint::Any | SourceConstraint::Prefer(_) => true,
+        SourceConstraint::Require(family) => candidate_family(kind) == Some(family),
+    }
+}
+
+fn source_intent_multiplier(source: SourceConstraint, kind: &FederatedSourceKind) -> f64 {
+    if matches!(source, SourceConstraint::Prefer(family) if candidate_family(kind) == Some(family))
+    {
+        1.0 + SOURCE_PREFERENCE_BOOST
+    } else {
+        1.0
+    }
+}
+
+fn normalize_match_text(fields: &[&str]) -> String {
+    let joined = fields.join(" ");
+    let words = joined
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+    format!(
+        " {} ",
+        words.split_whitespace().collect::<Vec<_>>().join(" ")
+    )
+}
+
+/// One answerability anchor: an explicit/rare word checked on token boundaries, or a CJK concept
+/// checked with the concept matcher (no spaces to delimit it, and okurigana may differ).
+enum AnchorCheck {
+    Text(String),
+    Concept(usize),
+}
+
+fn reliable_anchors<'a>(
+    query: &str,
+    explicit: &[QueryAnchor],
+    concepts: &[Concept],
+    candidates: impl Iterator<Item = &'a Candidate>,
+) -> Vec<AnchorCheck> {
+    let candidates = candidates.collect::<Vec<_>>();
+    let mut anchors = explicit
+        .iter()
+        .filter(|anchor| {
+            anchor
+                .normalized
+                .chars()
+                .take(super::query::MAX_ANSWER_ANCHOR_CHARS + 1)
+                .count()
+                <= super::query::MAX_ANSWER_ANCHOR_CHARS
+        })
+        .take(MAX_ANSWER_ANCHORS)
+        .map(|anchor| AnchorCheck::Text(anchor.normalized.clone()))
+        .collect::<Vec<_>>();
+    // A Japanese compound is the CJK counterpart of a named English word: the thing asked about.
+    // Without this every Japanese question had zero anchors and was never answerable.
+    for (index, concept) in concepts.iter().enumerate() {
+        if anchors.len() >= MAX_ANSWER_ANCHORS {
+            break;
+        }
+        let bounded = concept
+            .display
+            .chars()
+            .take(super::query::MAX_ANSWER_ANCHOR_CHARS + 1)
+            .count()
+            <= super::query::MAX_ANSWER_ANCHOR_CHARS;
+        if bounded && (concept.cjk || is_identifier(concept)) {
+            anchors.push(AnchorCheck::Concept(index));
+        }
+    }
+    for term in lexical_terms(query) {
+        if anchors.len() >= MAX_ANSWER_ANCHORS {
+            break;
+        }
+        let normalized = term.to_lowercase();
+        let character_count = normalized.chars().count();
+        if !(MIN_RARE_ANCHOR_CHARS..=super::query::MAX_ANSWER_ANCHOR_CHARS)
+            .contains(&character_count)
+            || normalized.chars().any(super::terms::is_cjk)
+            || super::query::is_stopword(&normalized)
+            || super::query::is_source_cue(&normalized)
+            || anchors
+                .iter()
+                .any(|anchor| matches!(anchor, AnchorCheck::Text(text) if *text == normalized))
+        {
+            continue;
+        }
+        let needle = format!(" {normalized} ");
+        let document_frequency = candidates
+            .iter()
+            .filter(|candidate| candidate.normalized_text.contains(&needle))
+            .take(2)
+            .count();
+        if document_frequency == 1 {
+            anchors.push(AnchorCheck::Text(normalized));
+        }
+    }
+    anchors
+}
+
+/// A Latin code the question names exactly: an acronym (NDA, INV), a short token (Q3, PR, UX) or
+/// letters mixed with digits (v2, ops1182). Like a proper noun, the answer has to contain it.
+fn is_identifier(concept: &Concept) -> bool {
+    if concept.cjk {
+        return false;
+    }
+    let letters = concept.display.chars().filter(|c| c.is_alphabetic()).count();
+    let digits = concept.display.chars().filter(char::is_ascii_digit).count();
+    concept.short_word
+        || (letters > 0 && digits > 0)
+        || (letters >= 2
+            && concept
+                .display
+                .chars()
+                .filter(|c| c.is_alphabetic())
+                .all(char::is_uppercase))
+}
+
+fn anchor_coverage(anchors: &[AnchorCheck], candidate: &Candidate) -> f64 {
+    if anchors.is_empty() {
+        return 1.0;
+    }
+    let matched = anchors
+        .iter()
+        .filter(|anchor| match anchor {
+            AnchorCheck::Text(text) if text.chars().any(super::terms::is_cjk) => {
+                candidate.normalized_text.contains(text.as_str())
+            }
+            AnchorCheck::Text(text) => candidate.normalized_text.contains(&format!(" {text} ")),
+            AnchorCheck::Concept(index) => {
+                candidate.concept_hits.get(*index).copied().unwrap_or(false)
+            }
+        })
+        .count();
+    matched as f64 / anchors.len() as f64
+}
+
+/// Resolve the distinct evidence identities once, then fail every candidate containing a missing
+/// row. Grouping by canonical table removes the candidate × evidence query pattern without
+/// relaxing the fail-closed answerability rule.
+fn apply_evidence_resolution(
+    conn: &Connection,
+    candidates: &mut BTreeMap<CandidateKey, Candidate>,
+) -> Result<(), rusqlite::Error> {
+    let expected = candidates
+        .values()
+        .flat_map(|candidate| candidate.evidence.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let resolved = resolved_evidence(conn, &expected)?;
+
+    for candidate in candidates.values_mut() {
+        // An imported claim can corroborate but never support an assertive answer, even when its
+        // import record resolves.
+        candidate.answer_eligible =
+            !candidate.source.kind.is_imported() && candidate.evidence.is_subset(&resolved);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn evidence_resolves(
+    conn: &Connection,
+    evidence: &BTreeSet<CanonicalEvidenceId>,
+) -> Result<bool, rusqlite::Error> {
+    Ok(evidence.is_subset(&resolved_evidence(conn, evidence)?))
+}
+
+fn resolved_evidence(
+    conn: &Connection,
+    evidence: &BTreeSet<CanonicalEvidenceId>,
+) -> Result<BTreeSet<CanonicalEvidenceId>, rusqlite::Error> {
+    let mut event_ids = BTreeSet::new();
+    let mut session_ids = BTreeSet::new();
+    let mut transcript_segment_ids = BTreeSet::new();
+    let mut session_note_ids = BTreeSet::new();
+    let mut meeting_recap_ids = BTreeSet::new();
+    let mut brief_dates = BTreeSet::new();
+    let mut feedback_event_ids = BTreeSet::new();
+    let mut period_summary_ids = BTreeSet::new();
+    let mut memory_import_ids = BTreeSet::new();
+    let mut user_note_ids = BTreeSet::new();
+
+    for id in evidence {
+        match id {
+            CanonicalEvidenceId::UserNote(id) => { user_note_ids.insert(*id); },
+            CanonicalEvidenceId::Event(id) => {
+                event_ids.insert(*id);
+            }
+            CanonicalEvidenceId::Session(id) => {
+                session_ids.insert(*id);
+            }
+            CanonicalEvidenceId::TranscriptSegment(id) => {
+                transcript_segment_ids.insert(*id);
+            }
+            CanonicalEvidenceId::SessionNote(id) => {
+                session_note_ids.insert(*id);
+            }
+            CanonicalEvidenceId::MeetingRecap(id) => {
+                meeting_recap_ids.insert(*id);
+            }
+            CanonicalEvidenceId::Brief(date) => {
+                brief_dates.insert(date.as_str());
+            }
+            CanonicalEvidenceId::FeedbackEvent(id) => {
+                feedback_event_ids.insert(*id);
+            }
+            CanonicalEvidenceId::PeriodSummary(id) => {
+                period_summary_ids.insert(*id);
+            }
+            CanonicalEvidenceId::MemoryImport(id) => {
+                memory_import_ids.insert(*id);
+            }
+        }
+    }
+
+    let mut resolved = BTreeSet::new();
+    resolve_numeric_evidence(
+        conn,
+        "event_log",
+        &event_ids,
+        CanonicalEvidenceId::Event,
+        &mut resolved,
+    )?;
+    resolve_numeric_evidence(
+        conn,
+        "sessions",
+        &session_ids,
+        CanonicalEvidenceId::Session,
+        &mut resolved,
+    )?;
+    resolve_numeric_evidence(
+        conn,
+        "transcript_segments",
+        &transcript_segment_ids,
+        CanonicalEvidenceId::TranscriptSegment,
+        &mut resolved,
+    )?;
+    resolve_numeric_evidence(
+        conn,
+        "session_notes",
+        &session_note_ids,
+        CanonicalEvidenceId::SessionNote,
+        &mut resolved,
+    )?;
+    resolve_numeric_evidence(
+        conn,
+        "meeting_recaps",
+        &meeting_recap_ids,
+        CanonicalEvidenceId::MeetingRecap,
+        &mut resolved,
+    )?;
+    resolve_text_evidence(
+        conn,
+        "briefs",
+        "date",
+        &brief_dates,
+        CanonicalEvidenceId::Brief,
+        &mut resolved,
+    )?;
+    resolve_numeric_evidence(
+        conn,
+        "feedback_events",
+        &feedback_event_ids,
+        CanonicalEvidenceId::FeedbackEvent,
+        &mut resolved,
+    )?;
+    resolve_numeric_evidence(
+        conn,
+        "period_summaries",
+        &period_summary_ids,
+        CanonicalEvidenceId::PeriodSummary,
+        &mut resolved,
+    )?;
+    resolve_numeric_evidence(
+        conn,
+        "memory_imports",
+        &memory_import_ids,
+        CanonicalEvidenceId::MemoryImport,
+        &mut resolved,
+    )?;
+    resolve_numeric_evidence(conn,"user_memory_notes",&user_note_ids,CanonicalEvidenceId::UserNote,&mut resolved)?;
+    Ok(resolved)
+}
+
+fn resolve_numeric_evidence(
+    conn: &Connection,
+    table: &str,
+    ids: &BTreeSet<i64>,
+    wrap: fn(i64) -> CanonicalEvidenceId,
+    resolved: &mut BTreeSet<CanonicalEvidenceId>,
+) -> Result<(), rusqlite::Error> {
+    // A long thread or meeting cites thousands of events. Each `event_log` row fills about a
+    // page (content is large), so probing them by id reads and decrypts one page per id — 13.5k
+    // ids took ~100 ms CPU and seconds of I/O on a 1 GB store. `+id` stops SQLite seeking by
+    // rowid, so it walks the smallest covering index (a few hundred pages) instead.
+    // ponytail: the walk grows with total events (~50 ms at 1M); switch on ids.len() vs the
+    // event count if that ever outweighs the probes.
+    if table == "event_log" && ids.len() > EVIDENCE_BIND_CHUNK_SIZE {
+        let (Some(&low), Some(&high)) = (ids.first(), ids.last()) else {
+            return Ok(());
+        };
+        let mut stmt = conn.prepare("SELECT id FROM event_log WHERE +id BETWEEN ?1 AND ?2")?;
+        for id in stmt.query_map([low, high], |row| row.get::<_, i64>(0))? {
+            let id = id?;
+            if ids.contains(&id) {
+                resolved.insert(wrap(id));
+            }
+        }
+        return Ok(());
+    }
+    for ids in ids
+        .iter()
+        .copied()
+        .collect::<Vec<_>>()
+        .chunks(EVIDENCE_BIND_CHUNK_SIZE)
+    {
+        let placeholders = std::iter::repeat("?")
+            .take(ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT id FROM {table} WHERE id IN ({placeholders})");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(ids.iter().copied()), |row| {
+            row.get::<_, i64>(0)
+        })?;
+        for id in rows {
+            resolved.insert(wrap(id?));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_text_evidence(
+    conn: &Connection,
+    table: &str,
+    key: &str,
+    values: &BTreeSet<&str>,
+    wrap: fn(String) -> CanonicalEvidenceId,
+    resolved: &mut BTreeSet<CanonicalEvidenceId>,
+) -> Result<(), rusqlite::Error> {
+    for values in values
+        .iter()
+        .copied()
+        .collect::<Vec<_>>()
+        .chunks(EVIDENCE_BIND_CHUNK_SIZE)
+    {
+        let placeholders = std::iter::repeat("?")
+            .take(values.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("SELECT {key} FROM {table} WHERE {key} IN ({placeholders})");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(values.iter().copied()), |row| {
+            row.get::<_, String>(0)
+        })?;
+        for value in rows {
+            resolved.insert(wrap(value?));
+        }
+    }
+    Ok(())
+}
+
+fn source_priority(kind: &FederatedSourceKind) -> u8 {
+    match kind {
+        FederatedSourceKind::UserNote | FederatedSourceKind::Derived(_) => 0,
+        FederatedSourceKind::Meeting => 1,
+        FederatedSourceKind::Event => 2,
+        FederatedSourceKind::Imported(_) => 3,
+    }
+}
+
+fn focus_accepts(focus: MemoryQueryFocus, kind: &FederatedSourceKind) -> bool {
+    if matches!(kind, FederatedSourceKind::UserNote) { return imported_focus_accepts(focus); }
+    if kind.is_imported() {
+        return imported_focus_accepts(focus);
+    }
+    match focus {
+        MemoryQueryFocus::Any => true,
+        MemoryQueryFocus::Meeting => matches!(
+            kind,
+            FederatedSourceKind::Meeting
+                | FederatedSourceKind::Derived(
+                    SearchDocumentKind::SessionSummary
+                        | SearchDocumentKind::MeetingRecap
+                        | SearchDocumentKind::MeetingNote
+                )
+        ),
+        MemoryQueryFocus::State => matches!(
+            kind,
+            FederatedSourceKind::Derived(
+                SearchDocumentKind::Commitment | SearchDocumentKind::OpenLoop
+            )
+        ),
+        MemoryQueryFocus::Brief => {
+            matches!(
+                kind,
+                FederatedSourceKind::Derived(SearchDocumentKind::Brief)
+            )
+        }
+        MemoryQueryFocus::Period => matches!(
+            kind,
+            FederatedSourceKind::Derived(SearchDocumentKind::PeriodSummary)
+        ),
+        MemoryQueryFocus::Person => {
+            matches!(kind, FederatedSourceKind::Derived(SearchDocumentKind::Person))
+        }
+        MemoryQueryFocus::Project => {
+            matches!(kind, FederatedSourceKind::Derived(SearchDocumentKind::Project))
+        }
+        MemoryQueryFocus::Thread => matches!(
+            kind,
+            FederatedSourceKind::Derived(SearchDocumentKind::ThreadSummary)
+        ),
+    }
+}
+
+fn min_option(left: Option<i64>, right: Option<i64>) -> Option<i64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+fn max_option(left: Option<i64>, right: Option<i64>) -> Option<i64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod score_tests {
+    use std::cell::Cell;
+
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+    use super::*;
+
+    thread_local! {
+        static EVIDENCE_SELECTS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn count_evidence_selects(context: AuthContext<'_>) -> Authorization {
+        if matches!(context.action, AuthAction::Select) {
+            EVIDENCE_SELECTS.with(|selects| selects.set(selects.get() + 1));
+        }
+        Authorization::Allow
+    }
+
+    #[test]
+    fn materially_stronger_lexical_score_wins_at_same_ordinal() {
+        let strong_quality = normalized_lane_quality(12.0, 12.0, 1.0);
+        let weak_quality = normalized_lane_quality(1.0, 12.0, 1.0);
+
+        assert!(quality_weighted_rrf(1, strong_quality) > quality_weighted_rrf(1, weak_quality));
+    }
+
+    #[test]
+    fn four_equal_representations_receive_only_capped_corroboration() {
+        let strongest = quality_weighted_rrf(1, 1.0);
+        let fused = strongest_with_capped_corroboration([strongest; 4]);
+
+        assert_eq!(fused, strongest * 1.1);
+    }
+
+    #[test]
+    fn candidate_and_session_corroboration_share_one_global_cap() {
+        let strongest = quality_weighted_rrf(1, 1.0);
+        let mut first_candidate = [0.0; SCORE_LANE_COUNT];
+        first_candidate[ScoreLane::EventFts.index()] = strongest;
+        first_candidate[ScoreLane::WarmKnn.index()] = strongest;
+        let mut second_candidate = [0.0; SCORE_LANE_COUNT];
+        second_candidate[ScoreLane::DerivedFts.index()] = strongest;
+        second_candidate[ScoreLane::Meeting.index()] = strongest;
+        let fused_cluster = cluster_fused_score([&first_candidate, &second_candidate]);
+
+        assert!(fused_cluster <= strongest * 1.1);
+    }
+
+    #[test]
+    fn non_finite_and_invalid_scores_cannot_escape_fusion() {
+        assert_eq!(bm25_strength(f64::NAN), 0.0);
+        assert_eq!(bm25_strength(f64::NEG_INFINITY), 0.0);
+        assert_eq!(normalized_lane_quality(f64::INFINITY, 1.0, 1.0), 0.0);
+        assert_eq!(vector_quality(f32::NAN), None);
+        assert_eq!(vector_quality(f32::INFINITY), None);
+        assert_eq!(vector_quality(-1.0), Some(1.0));
+
+        let fused =
+            strongest_with_capped_corroboration([f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.5]);
+        assert!(fused.is_finite());
+        assert_eq!(fused, 0.5);
+    }
+
+    #[test]
+    fn brief_period_and_thread_preferences_boost_without_filtering_other_families() {
+        for (family, kind) in [
+            (MemorySourceFamily::Brief, SearchDocumentKind::Brief),
+            (
+                MemorySourceFamily::Period,
+                SearchDocumentKind::PeriodSummary,
+            ),
+            (
+                MemorySourceFamily::Thread,
+                SearchDocumentKind::ThreadSummary,
+            ),
+        ] {
+            let preferred = FederatedSourceKind::Derived(kind);
+            let meeting = FederatedSourceKind::Meeting;
+            assert!(
+                source_intent_multiplier(SourceConstraint::Prefer(family), &preferred)
+                    > source_intent_multiplier(SourceConstraint::Prefer(family), &meeting)
+            );
+            assert!(source_accepts(SourceConstraint::Prefer(family), &meeting));
+        }
+    }
+
+    #[test]
+    fn deleted_evidence_is_not_answer_eligible() {
+        let conn = crate::open_in_memory().unwrap();
+        let event_id = crate::event_log::insert(
+            &conn,
+            &crate::event_log::NewEvent {
+                ts: 1,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: None,
+                window_title: None,
+                content: "temporary evidence",
+                content_hash: "temporary-evidence",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+        conn.execute("DELETE FROM event_log WHERE id = ?1", [event_id])
+            .unwrap();
+
+        assert!(!evidence_resolves(
+            &conn,
+            &BTreeSet::from([CanonicalEvidenceId::Event(event_id)])
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn evidence_resolution_batches_past_sqlite_bind_limit_and_stays_fail_closed() {
+        let conn = crate::open_in_memory().unwrap();
+        let evidence_count = EVIDENCE_BIND_CHUNK_SIZE * 2 + 37;
+        let mut evidence = BTreeSet::new();
+        for id in 1..=i64::try_from(evidence_count).unwrap() {
+            conn.execute(
+                "INSERT INTO event_log
+                   (id, ts, source, kind, content, content_hash, last_seen_at, dwell_ms)
+                 VALUES (?1, 1, 'capture', 'text', 'batch evidence', ?2, 1, 0)",
+                rusqlite::params![id, format!("batch-evidence-{id}")],
+            )
+            .unwrap();
+            evidence.insert(CanonicalEvidenceId::Event(id));
+        }
+
+        EVIDENCE_SELECTS.with(|selects| selects.set(0));
+        conn.authorizer(Some(count_evidence_selects));
+        let answerable = evidence_resolves(&conn, &evidence).unwrap();
+        conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+
+        assert!(answerable, "all persisted evidence must resolve");
+        assert_eq!(
+            EVIDENCE_SELECTS.with(Cell::get),
+            1,
+            "a large event set is checked by one index walk, not one query per id or chunk"
+        );
+
+        conn.execute("DELETE FROM event_log WHERE id = ?1", [1_i64])
+            .unwrap();
+        assert!(
+            !evidence_resolves(&conn, &evidence).unwrap(),
+            "one deleted row invalidates the entire evidence set"
+        );
+    }
+
+    #[test]
+    fn p0_lexical_coverage_remains_substring_based() {
+        assert_eq!(
+            lexical_coverage("Phoenix art", &["Phoenix quarterly"]),
+            1.0
+        );
+    }
+
+    #[test]
+    fn answerability_coverage_requires_unicode_token_boundaries() {
+        assert_eq!(
+            answerability_coverage("Phoenix art", &["Phoenix quarterly"]),
+            0.5
+        );
+        assert_eq!(
+            answerability_coverage("Élodie résumé", &["Élodie, résumé!"]),
+            1.0
+        );
+    }
+
+    #[test]
+    fn zero_frequency_query_term_is_not_inferred_as_an_anchor() {
+        let conn = crate::open_in_memory().unwrap();
+        crate::event_log::insert(
+            &conn,
+            &crate::event_log::NewEvent {
+                ts: 10,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: None,
+                window_title: None,
+                content: "OrchidProtocol rollouttimeline happens Tuesday",
+                content_hash: "zero-frequency-anchor",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+
+        let result = search_federated(
+            &conn,
+            "OrchidProtocol rollouttimeline schedulewindow",
+            None,
+            20,
+            &FederatedSearchOptions::default(),
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(result.hits[0].match_quality.anchor_count, 2);
+        assert_eq!(result.hits[0].match_quality.anchor_coverage, 1.0);
+    }
+}

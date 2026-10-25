@@ -1,0 +1,459 @@
+[
+  {
+    "id": "en-gmail-reply-thread",
+    "lang": "en",
+    "about": "A Gmail thread from a known contact who is waiting on a reply (US-01).",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "mail.google.com",
+      "title": "Re: Q3 renewal terms - me@example.com - Example Mail",
+      "excerpt": "Dana Reyes <dana.reyes@client.example> to me. Hi, can you confirm the Q3 renewal terms by Friday? Thanks, Dana"
+    },
+    "people": [
+      { "id": "p-dana", "name": "Dana Reyes", "emails": ["dana.reyes@client.example"], "confidence": 0.9 },
+      { "id": "p-marcus", "name": "Marcus Lee", "emails": ["marcus@example.com"], "confidence": 0.9 }
+    ],
+    "projects": [{ "id": "pr-atlas", "name": "Atlas migration", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-checklist", "description": "Send the onboarding checklist to Priya", "due_in_hours": 72, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-dana", "kind": "reply_needed", "description": "Reply to Dana about the Q3 renewal terms", "counterparty": "p-dana", "confidence": 0.9 },
+      { "id": "l-vendor", "kind": "waiting_on_them", "description": "Waiting on the vendor for the security questionnaire", "confidence": 0.85 }
+    ],
+    "expect": { "first": "l-dana", "relevant": ["l-dana", "p-dana"] }
+  },
+  {
+    "id": "en-slack-dm",
+    "lang": "en",
+    "about": "A Slack DM from a teammate about a loop I am waiting on.",
+    "screen": {
+      "bundle_id": "com.tinyspeck.slackmacgap",
+      "title": "Marcus Lee (DM) - Example Co - Slack",
+      "excerpt": "Marcus Lee 10:42 did you get a chance to look at the cutover window? I can share the DNS plan after lunch"
+    },
+    "people": [
+      { "id": "p-marcus", "name": "Marcus Lee", "emails": ["marcus@example.com"], "confidence": 0.9 },
+      { "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 }
+    ],
+    "projects": [{ "id": "pr-atlas", "name": "Atlas migration", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-invoice", "description": "Pay the design agency invoice", "due_in_hours": 96, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-marcus", "kind": "waiting_on_them", "description": "Waiting on Marcus for the DNS cutover plan", "counterparty": "p-marcus", "confidence": 0.9 }
+    ],
+    "expect": { "first": "l-marcus", "relevant": ["l-marcus", "p-marcus"], "acceptable": ["pr-atlas"] }
+  },
+  {
+    "id": "en-xcode-unrelated",
+    "lang": "en",
+    "about": "Coding in Xcode; nothing in memory is about this file.",
+    "screen": {
+      "bundle_id": "com.apple.dt.Xcode",
+      "title": "NotchKit — ContextCache.swift",
+      "excerpt": "final class ContextCache { private var entries: [String: Entry] = [:] func invalidate() { entries.removeAll() } }"
+    },
+    "people": [{ "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 }],
+    "projects": [{ "id": "pr-orion", "name": "Orion", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-deck", "description": "Send the board deck to Dana", "due_in_hours": 120, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-legal", "kind": "waiting_on_them", "description": "Waiting on legal for the contract redlines", "confidence": 0.9 }
+    ],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "en-vscode-generic-words",
+    "lang": "en",
+    "about": "VS Code on a file whose title shares only generic words with memory.",
+    "screen": {
+      "bundle_id": "com.microsoft.VSCode",
+      "title": "README.md — release-notes — Visual Studio Code",
+      "excerpt": "## Release notes\n- Update the installer\n- Fix the settings window"
+    },
+    "people": [{ "id": "p-priya", "name": "Priya Nair", "confidence": 0.9 }],
+    "projects": [{ "id": "pr-handbook", "name": "Team handbook", "confidence": 0.85 }],
+    "commitments": [
+      { "id": "c-visual", "description": "Share the visual refresh mockups with Priya", "due_in_hours": 80, "confidence": 0.9 },
+      { "id": "c-studio", "description": "Book the studio for the product video", "due_in_hours": 200, "confidence": 0.85 }
+    ],
+    "open_loops": [],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "en-calendar-event",
+    "lang": "en",
+    "about": "A calendar event page for a project sync with two known people.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "calendar.google.com",
+      "title": "Orion weekly sync - Example Calendar",
+      "excerpt": "Orion weekly sync. Tomorrow 10:00 – 10:30. Guests: Dana Reyes, Marcus Lee. Agenda: launch checklist"
+    },
+    "people": [
+      { "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 },
+      { "id": "p-marcus", "name": "Marcus Lee", "confidence": 0.9 },
+      { "id": "p-priya", "name": "Priya Nair", "confidence": 0.9 }
+    ],
+    "projects": [
+      { "id": "pr-orion", "name": "Orion", "confidence": 0.9 },
+      { "id": "pr-handbook", "name": "Team handbook", "confidence": 0.9 }
+    ],
+    "commitments": [
+      { "id": "c-orion-checklist", "description": "Finish the Orion launch checklist", "due_in_hours": 20, "confidence": 0.9 },
+      { "id": "c-expenses", "description": "Submit the travel expenses", "due_in_hours": 150, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-orion-checklist", "relevant": ["c-orion-checklist", "pr-orion", "p-dana", "p-marcus"] }
+  },
+  {
+    "id": "en-github-pr",
+    "lang": "en",
+    "about": "A GitHub pull request I was asked to review.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "github.com",
+      "title": "Fix cache invalidation on focus change by kwatanabe · Pull Request #412 · example/notch",
+      "excerpt": "kwatanabe requested your review on this pull request. Fix cache invalidation on focus change #412"
+    },
+    "people": [
+      { "id": "p-kenji", "name": "Kenji Watanabe", "aliases": ["kwatanabe"], "confidence": 0.9 },
+      { "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 }
+    ],
+    "projects": [{ "id": "pr-orion", "name": "Orion", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-roadmap", "description": "Draft the Q4 roadmap narrative", "due_in_hours": 100, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-review", "kind": "review_pending", "description": "Review Kenji's pull request #412 on cache invalidation", "counterparty": "p-kenji", "confidence": 0.9 }
+    ],
+    "expect": { "first": "l-review", "relevant": ["l-review", "p-kenji"] }
+  },
+  {
+    "id": "en-linear-issue",
+    "lang": "en",
+    "about": "A Linear issue that a commitment of mine names by its key.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "linear.app",
+      "title": "ENG-231 Notch flickers on external displays",
+      "excerpt": "ENG-231 Notch flickers on external displays. Assignee: me. Priority: High. Cycle 14"
+    },
+    "people": [{ "id": "p-priya", "name": "Priya Nair", "confidence": 0.9 }],
+    "projects": [{ "id": "pr-polish", "name": "Notch polish", "confidence": 0.85 }],
+    "commitments": [
+      { "id": "c-eng231", "description": "Fix ENG-231 before the release cut", "due_in_hours": 30, "confidence": 0.9 },
+      { "id": "c-hiring", "description": "Write the hiring loop feedback for the designer candidate", "due_in_hours": 10, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-eng231", "relevant": ["c-eng231"], "acceptable": ["pr-polish", "c-hiring"] }
+  },
+  {
+    "id": "en-foreign-language-email",
+    "lang": "en",
+    "about": "A Spanish email with the cursor in the reply box (FR-TL-10 (1)).",
+    "screen": {
+      "bundle_id": "com.apple.mail",
+      "title": "Solicitud de propuesta — Lucía Gómez",
+      "excerpt": "Hola, ¿podrías enviarme la propuesta actualizada antes del jueves? Saludos, Lucía Gómez",
+      "reply_language": "es"
+    },
+    "people": [
+      { "id": "p-lucia", "name": "Lucía Gómez", "emails": ["lucia@example.es"], "confidence": 0.9 },
+      { "id": "p-marcus", "name": "Marcus Lee", "confidence": 0.9 }
+    ],
+    "projects": [],
+    "commitments": [
+      { "id": "c-offsite", "description": "Book the offsite venue", "due_in_hours": 90, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-lucia", "kind": "reply_needed", "description": "Reply to Lucía about the updated proposal", "counterparty": "p-lucia", "confidence": 0.9 }
+    ],
+    "expect": { "first": "reply_draft", "relevant": ["reply_draft", "l-lucia", "p-lucia"] }
+  },
+  {
+    "id": "en-overdue-elsewhere",
+    "lang": "en",
+    "about": "An overdue commitment while the screen is about something else.",
+    "screen": {
+      "bundle_id": "com.apple.finder",
+      "title": "Downloads"
+    },
+    "people": [{ "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 }],
+    "projects": [{ "id": "pr-orion", "name": "Orion", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-expense", "description": "Submit the September expense report", "due_in_hours": -48, "status": "overdue", "confidence": 0.9 },
+      { "id": "c-slides", "description": "Polish the all-hands slides", "due_in_hours": 140, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-legal", "kind": "waiting_on_them", "description": "Waiting on legal for the contract redlines", "confidence": 0.9 }
+    ],
+    "expect": { "first": "c-expense", "relevant": ["c-expense"] }
+  },
+  {
+    "id": "en-snoozed-loop",
+    "lang": "en",
+    "about": "The thread matches a loop the user snoozed until tomorrow; only the person shows.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "mail.google.com",
+      "title": "Contract redlines - me@example.com - Example Mail",
+      "excerpt": "Priya Nair <priya@example.com> Here are the contract redlines from legal."
+    },
+    "people": [{ "id": "p-priya", "name": "Priya Nair", "emails": ["priya@example.com"], "confidence": 0.9 }],
+    "projects": [],
+    "commitments": [],
+    "open_loops": [
+      { "id": "l-redlines", "kind": "reply_needed", "description": "Reply to Priya about the contract redlines", "counterparty": "p-priya", "confidence": 0.9, "snoozed_hours": 20 }
+    ],
+    "expect": { "first": "p-priya", "relevant": ["p-priya"] }
+  },
+  {
+    "id": "en-unreviewed-mail-guess",
+    "lang": "en",
+    "about": "A local mail-triage guess (#926) matches the thread; it must not offer an L3 reply.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "mail.google.com",
+      "title": "Partnership intro - me@example.com - Example Mail",
+      "excerpt": "Omar Haddad <omar@partner.example> Great to meet you, would love to set up a partnership intro call"
+    },
+    "people": [{ "id": "p-omar", "name": "Omar Haddad", "emails": ["omar@partner.example"], "confidence": 0.85 }],
+    "projects": [],
+    "commitments": [],
+    "open_loops": [
+      { "id": "l-omar", "kind": "reply_needed", "description": "Reply to Omar about the partnership intro call", "counterparty": "p-omar", "confidence": 0.7, "inferred": true }
+    ],
+    "expect": { "relevant": ["p-omar"], "acceptable": ["l-omar"] }
+  },
+  {
+    "id": "en-low-confidence-candidate",
+    "lang": "en",
+    "about": "An unreviewed local candidate (<0.5) that matches the screen never drives a button.",
+    "screen": {
+      "bundle_id": "com.apple.mail",
+      "title": "Quarterly tax filing reminder",
+      "excerpt": "Reminder: the quarterly tax filing is due next week."
+    },
+    "people": [],
+    "projects": [],
+    "commitments": [
+      { "id": "c-tax", "description": "File the quarterly tax return", "due_in_hours": 30, "confidence": 0.4 }
+    ],
+    "open_loops": [],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "en-many-overdue-unrelated",
+    "lang": "en",
+    "about": "Four overdue items and an unrelated screen: at most the most urgent one takes a slot.",
+    "screen": {
+      "bundle_id": "com.apple.Terminal",
+      "title": "zsh — 120×40"
+    },
+    "people": [],
+    "projects": [],
+    "commitments": [
+      { "id": "c-od1", "description": "Renew the team password manager seats", "due_in_hours": -120, "status": "overdue", "confidence": 0.9 },
+      { "id": "c-od2", "description": "Send Marcus the offsite photos", "due_in_hours": -30, "status": "overdue", "confidence": 0.9 },
+      { "id": "c-od3", "description": "Approve the September payroll", "due_in_hours": -10, "status": "overdue", "confidence": 0.9 },
+      { "id": "c-od4", "description": "Update the investor contact list", "due_in_hours": -60, "status": "overdue", "confidence": 0.85 }
+    ],
+    "open_loops": [],
+    "expect": { "relevant": ["c-od1"], "acceptable": ["c-od2", "c-od3", "c-od4"] }
+  },
+  {
+    "id": "en-news-page",
+    "lang": "en",
+    "about": "Reading a news site: no state match, generic row only.",
+    "screen": {
+      "bundle_id": "com.apple.Safari",
+      "host": "news.example.com",
+      "title": "Markets rally as rates hold steady - Example News",
+      "excerpt": "Markets rallied on Tuesday after the central bank held rates steady for a third meeting."
+    },
+    "people": [{ "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 }],
+    "projects": [{ "id": "pr-research", "name": "Market research", "confidence": 0.8 }],
+    "commitments": [
+      { "id": "c-steady", "description": "Write the steady-state runbook", "due_in_hours": 100, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-meeting", "kind": "decision_pending", "description": "Decide on the next meeting cadence", "confidence": 0.85 }
+    ],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "en-new-tab-generic",
+    "lang": "en",
+    "about": "A browser new tab: the window title's app words match nothing on purpose.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "title": "New Tab - Google Chrome"
+    },
+    "people": [],
+    "projects": [],
+    "commitments": [
+      { "id": "c-workspace", "description": "Renew the Google Workspace billing", "due_in_hours": 200, "confidence": 0.9 },
+      { "id": "c-chrome", "description": "Register for the Chrome developer summit", "due_in_hours": 300, "confidence": 0.85 }
+    ],
+    "open_loops": [],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "en-slack-channel-chatter",
+    "lang": "en",
+    "about": "A busy general channel about lunch: nothing actionable.",
+    "screen": {
+      "bundle_id": "com.tinyspeck.slackmacgap",
+      "title": "#general - Example Co - Slack",
+      "excerpt": "Anyone up for tacos at noon? The new place on 5th street has a lunch special"
+    },
+    "people": [{ "id": "p-marcus", "name": "Marcus Lee", "confidence": 0.9 }],
+    "projects": [{ "id": "pr-atlas", "name": "Atlas migration", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-general", "description": "Post the general availability announcement", "due_in_hours": 70, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-slack-admin", "kind": "waiting_on_them", "description": "Waiting on the Slack admin to approve the connector", "confidence": 0.85 }
+    ],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "en-email-address-match",
+    "lang": "en",
+    "about": "The sender is only visible as an address; it maps to a known person.",
+    "screen": {
+      "bundle_id": "com.apple.mail",
+      "title": "NDA follow-up",
+      "excerpt": "From: p.okafor@vendor.example To: me@example.com Subject: NDA follow-up. Attached is the countersigned version."
+    },
+    "people": [
+      { "id": "p-precious", "name": "Precious Okafor", "emails": ["p.okafor@vendor.example"], "confidence": 0.85 },
+      { "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 }
+    ],
+    "projects": [],
+    "commitments": [
+      { "id": "c-nda", "description": "Precious owes us the signed NDA", "direction": "theirs", "counterparty": "p-precious", "due_in_hours": 48, "confidence": 0.85 },
+      { "id": "c-board", "description": "Send the board deck to Dana", "due_in_hours": 120, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-nda", "relevant": ["c-nda", "p-precious"] }
+  },
+  {
+    "id": "en-notion-project-doc",
+    "lang": "en",
+    "about": "A Notion page for a project with an open commitment and a waiting loop.",
+    "screen": {
+      "bundle_id": "notion.id",
+      "title": "Atlas migration plan",
+      "excerpt": "Atlas migration plan. Phase 2: DNS cutover window with Marcus. Rollback section TBD."
+    },
+    "people": [{ "id": "p-marcus", "name": "Marcus Lee", "confidence": 0.9 }],
+    "projects": [
+      { "id": "pr-atlas", "name": "Atlas migration", "confidence": 0.9 },
+      { "id": "pr-orion", "name": "Orion", "confidence": 0.9 }
+    ],
+    "commitments": [
+      { "id": "c-rollback", "description": "Draft the Atlas rollback section", "due_in_hours": 72, "confidence": 0.9 },
+      { "id": "c-hiring", "description": "Schedule the hiring sync", "due_in_hours": 300, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-dns", "kind": "waiting_on_them", "description": "Waiting on Marcus for the DNS cutover window", "counterparty": "p-marcus", "confidence": 0.9 }
+    ],
+    "expect": { "relevant": ["pr-atlas", "c-rollback", "l-dns", "p-marcus"] }
+  },
+  {
+    "id": "en-common-first-name",
+    "lang": "en",
+    "about": "UI text 'Mark as read' must not match a contact called Mark.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "mail.google.com",
+      "title": "Inbox (12) - me@example.com - Example Mail",
+      "excerpt": "Mark as read  Archive  Report spam  Primary  Promotions  Social"
+    },
+    "people": [{ "id": "p-mark", "name": "Mark Chen", "confidence": 0.9 }],
+    "projects": [],
+    "commitments": [
+      { "id": "c-inbox", "description": "Clean up the shared inbox filters", "due_in_hours": 200, "confidence": 0.85 }
+    ],
+    "open_loops": [],
+    "expect": { "generic": true, "relevant": [], "acceptable": ["c-inbox"] }
+  },
+  {
+    "id": "en-word-boundary",
+    "lang": "en",
+    "about": "A short name inside a longer word ('Ann' in 'annual') is not a match.",
+    "screen": {
+      "bundle_id": "com.apple.iWork.Pages",
+      "title": "Annual planning draft",
+      "excerpt": "Annual planning: headcount, budget, and the annual offsite."
+    },
+    "people": [{ "id": "p-ann", "name": "Ann Lee", "confidence": 0.9 }],
+    "projects": [],
+    "commitments": [],
+    "open_loops": [],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "en-docs-project",
+    "lang": "en",
+    "about": "Reading a project's API docs in Safari.",
+    "screen": {
+      "bundle_id": "com.apple.Safari",
+      "host": "docs.example.com",
+      "title": "Orion API reference - Example Docs",
+      "excerpt": "Orion API reference. Authentication, rate limits, changelog."
+    },
+    "people": [{ "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 }],
+    "projects": [{ "id": "pr-orion", "name": "Orion", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-changelog", "description": "Publish the Orion API changelog", "due_in_hours": 40, "confidence": 0.9 },
+      { "id": "c-board", "description": "Send the board deck to Dana", "due_in_hours": 120, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-changelog", "relevant": ["c-changelog", "pr-orion"] }
+  },
+  {
+    "id": "en-messages-app",
+    "lang": "en",
+    "about": "An iMessage conversation with a known person.",
+    "screen": {
+      "bundle_id": "com.apple.MobileSMS",
+      "title": "Jamie Fox",
+      "excerpt": "Jamie Fox: did you get those offsite photos?"
+    },
+    "people": [
+      { "id": "p-jamie", "name": "Jamie Fox", "confidence": 0.85 },
+      { "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 }
+    ],
+    "projects": [],
+    "commitments": [
+      { "id": "c-photos", "description": "Send Jamie the offsite photos", "counterparty": "p-jamie", "due_in_hours": 60, "confidence": 0.85 },
+      { "id": "c-board", "description": "Send the board deck to Dana", "due_in_hours": 120, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-photos", "relevant": ["c-photos", "p-jamie"] }
+  },
+  {
+    "id": "en-due-soon-elsewhere",
+    "lang": "en",
+    "about": "A matched thread plus an unrelated commitment due in three hours.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "mail.google.com",
+      "title": "Venue options for the offsite - me@example.com - Example Mail",
+      "excerpt": "Priya Nair <priya@example.com> Here are three venue options for the offsite."
+    },
+    "people": [{ "id": "p-priya", "name": "Priya Nair", "emails": ["priya@example.com"], "confidence": 0.9 }],
+    "projects": [],
+    "commitments": [
+      { "id": "c-venue", "description": "Pick the offsite venue with Priya", "counterparty": "p-priya", "due_in_hours": 50, "confidence": 0.9 },
+      { "id": "c-payroll", "description": "Approve the October payroll", "due_in_hours": 3, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-venue", "relevant": ["c-venue", "p-priya"], "acceptable": ["c-payroll"] }
+  }
+]

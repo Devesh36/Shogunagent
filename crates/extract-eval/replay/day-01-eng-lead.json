@@ -1,0 +1,392 @@
+{
+  "day": "day-01-eng-lead",
+  "format": "batch-replay/v2",
+  "note": "Synthetic, hand-shaped Batch consolidation results in the JSON contract the consolidation instruction asks for: one result per session (app, window, hour), items anchored into the session's numbered lines. NOT model output. The deliberate mistakes in it are listed in docs/extract-eval.md (Batch replay) so the replay exercises every scorer and parse path. Every item also carries `line` (the [n] number of its supporting line); the first commitment of the Oren Vale mail deliberately names the wrong line (2 instead of 3) so the anchor check rejects the number and the unique anchor still attributes it (AnchorStats::line_mismatch = 1).",
+  "results": [
+    {
+      "custom_id": "s6c356aff93b335d6",
+      "events": [
+        1001
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "Tamsin Ekberg: I'll get the rollout plan",
+            "anchor_len": 60,
+            "description": "Tamsin Ekberg will get the rollout plan to the user by Thursday",
+            "direction": "theirs",
+            "line": 1
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "Tamsin Ekberg: I'll get the rollout plan",
+            "anchor_len": 60,
+            "context": "Tamsin Ekberg: I'll get the rollout plan to you by Thursday.",
+            "kind": "person",
+            "line": 1,
+            "name": "Tamsin Ekberg"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "sd23b7fb3632e1110",
+      "events": [
+        1002
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "Thanks for the notes on Heron Rollout. I",
+            "anchor_len": 78,
+            "description": "Send the rollout plan by Thursday",
+            "direction": "mine",
+            "line": 2
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "To: Oren Vale <oren.vale@larkspur.exampl",
+            "anchor_len": 42,
+            "confidence": 0.9,
+            "context": "To: Oren Vale <oren.vale@larkspur.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "Oren Vale"
+          },
+          {
+            "anchor": "Thanks for the notes on Heron Rollout. I",
+            "anchor_len": 20,
+            "context": "Thanks for the notes on Heron Rollout. I'll send the rollout plan by Thursday.",
+            "kind": "project",
+            "line": 3,
+            "name": "Heron Rollout"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "sd5c03d97f09b9759",
+      "events": [
+        1003
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "Juno Farrant: I'll get the test report t",
+            "anchor_len": 57,
+            "description": "Juno Farrant will get the test report to the user by Tuesday",
+            "direction": "theirs",
+            "line": 1
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "Juno Farrant: I'll get the test report t",
+            "anchor_len": 57,
+            "context": "Juno Farrant: I'll get the test report to you by Tuesday.",
+            "kind": "person",
+            "line": 1,
+            "name": "Juno Farrant"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s5a60e297c0e83dfa",
+      "events": [
+        1004
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [
+          {
+            "anchor": "Kasimir Lode requested your review on th",
+            "anchor_len": 56,
+            "context": "Kasimir Lode requested your review on this pull request.",
+            "kind": "person",
+            "line": 1,
+            "name": "Kasimir Lode"
+          },
+          {
+            "anchor": "Please review the cost estimate changes ",
+            "anchor_len": 73,
+            "context": "before the release branch is cut",
+            "kind": "topic",
+            "line": 2,
+            "name": "release branch"
+          }
+        ],
+        "open_loops": [
+          {
+            "anchor": "Please review the cost estimate changes ",
+            "anchor_len": 73,
+            "description": "Please review the cost estimate changes before the release branch is cut",
+            "kind": "review_pending",
+            "line": 2
+          }
+        ]
+      }
+    },
+    {
+      "custom_id": "s7e63adac08429eaf",
+      "events": [
+        1005
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [
+          {
+            "anchor": "To: Kasimir Lode <kasimir.lode@larkspur.",
+            "anchor_len": 48,
+            "context": "To: Kasimir Lode <kasimir.lode@larkspur.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "Kasimir Lode"
+          },
+          {
+            "anchor": "Attached is the migration checklist for ",
+            "anchor_len": 53,
+            "context": "Attached is the migration checklist for Atlas Ledger.",
+            "kind": "project",
+            "line": 2,
+            "name": "Atlas Ledger"
+          }
+        ],
+        "open_loops": [
+          {
+            "anchor": "Attached is the migration checklist for ",
+            "anchor_len": 53,
+            "description": "Waiting for a review of the migration checklist",
+            "kind": "waiting_on_them",
+            "line": 2
+          }
+        ]
+      }
+    },
+    {
+      "custom_id": "s337845c7384ffdab",
+      "events": [
+        1006
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "Thanks for the notes on Kestrel Onboardi",
+            "anchor_len": 82,
+            "description": "Send the cost estimate by Friday",
+            "direction": "mine",
+            "line": 3
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "To: Idris Solano <idris.solano@larkspur.",
+            "anchor_len": 48,
+            "context": "To: Idris Solano <idris.solano@larkspur.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "Idris Solano"
+          },
+          {
+            "anchor": "Thanks for the notes on Kestrel Onboardi",
+            "anchor_len": 82,
+            "context": "Thanks for the notes on Kestrel Onboarding. I'll send the cost estimate by Friday.",
+            "kind": "project",
+            "line": 3,
+            "name": "Kestrel Onboarding"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s7d2757e196b4562a",
+      "events": [
+        1007
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s9d42e3d8ea53b366",
+      "events": [
+        1009
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "We will send you the signed migration ch",
+            "anchor_len": 57,
+            "description": "We will send you the signed migration checklist tomorrow",
+            "direction": "theirs",
+            "line": 3
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "From: Juno Farrant <juno.farrant@larkspu",
+            "anchor_len": 50,
+            "context": "From: Juno Farrant <juno.farrant@larkspur.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "Juno Farrant"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s615e2e61ee8d3ea2",
+      "events": [
+        1010
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "I'll share the test report with the team",
+            "anchor_len": 50,
+            "description": "Share the test report with the team tomorrow",
+            "direction": "mine",
+            "line": 2
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "To: Juno Farrant <juno.farrant@larkspur.",
+            "anchor_len": 48,
+            "context": "To: Juno Farrant <juno.farrant@larkspur.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "Juno Farrant"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s0659e8ba9729966b",
+      "events": [
+        1011,
+        1012,
+        1013
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "Mara: Heads up, I'll share the test repo",
+            "anchor_len": 66,
+            "description": "Share the test report with the team tomorrow",
+            "direction": "mine",
+            "line": 1
+          },
+          {
+            "anchor": "Mara: Maybe I could look at the cost est",
+            "anchor_len": 73,
+            "description": "Look at the cost estimate next week",
+            "direction": "mine",
+            "line": 2
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "Mara: Still waiting on Kasimir for the d",
+            "anchor_len": 58,
+            "context": "Mara: Still waiting on Kasimir for the design doc numbers.",
+            "kind": "person",
+            "line": 3,
+            "name": "Kasimir"
+          }
+        ],
+        "open_loops": [
+          {
+            "anchor": "Mara: Still waiting on Kasimir for the d",
+            "anchor_len": 58,
+            "description": "Still waiting on Kasimir for the design doc numbers",
+            "kind": "follow_up",
+            "line": 3
+          }
+        ]
+      }
+    },
+    {
+      "custom_id": "s38e050c84da76dc3",
+      "events": [
+        1015
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "We will send you the signed test report ",
+            "anchor_len": 49,
+            "description": "We will send you the signed test report tomorrow",
+            "direction": "theirs",
+            "line": 3
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "From: Juno Farrant <juno.farrant@larkspu",
+            "anchor_len": 50,
+            "context": "From: Juno Farrant <juno.farrant@larkspur.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "Juno Farrant"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "s7ff4d56607ba8c2d",
+      "events": [
+        1016
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "Attendees: Idris Solano, Oren Vale",
+            "anchor_len": 34,
+            "description": "Prepare the quarterly slides and budget memo for the board",
+            "direction": "mine",
+            "line": 2
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "Friday 10:00-10:30 · Heron Rollout revie",
+            "anchor_len": 41,
+            "context": "Friday 10:00-10:30 · Heron Rollout review",
+            "kind": "project",
+            "line": 1,
+            "name": "Heron Rollout"
+          },
+          {
+            "anchor": "Attendees: Idris Solano, Oren Vale",
+            "anchor_len": 34,
+            "context": "Attendees: Idris Solano, Oren Vale",
+            "kind": "person",
+            "line": 2,
+            "name": "Oren Vale"
+          },
+          {
+            "anchor": "Attendees: Idris Solano, Oren Vale",
+            "anchor_len": 34,
+            "context": "Attendees: Idris Solano, Oren Vale",
+            "kind": "person",
+            "line": 2,
+            "name": "Idris Solano"
+          }
+        ],
+        "open_loops": []
+      }
+    }
+  ]
+}

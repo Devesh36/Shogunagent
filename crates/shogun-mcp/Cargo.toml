@@ -1,0 +1,65 @@
+[package]
+name = "shogun-mcp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN first-layer MCP integration: the per-service permission scope table (§6.9.2), source of truth for what each service may do and at which level."
+
+# Platform-independent so the permission scope table — the acceptance-critical guarantee that an
+# operation not in the table is denied, and every external send is L3 — is unit-testable on Linux.
+# The MCP client transport / OAuth (Keychain) lives in the desktop adapter; the scope policy lives
+# here. One-way dependency: mcp → agents (for the shared L1/L2/L3 Level vocabulary).
+
+[features]
+default = []
+# `server` pulls in the axum listener for the REST face. OFF by default so the pure routing layer
+# (rest::route / rest::respond) tests without a runtime; the daemon enables it. axum is a server
+# framework (inbound), not an HTTP client — it does not violate the FR-TR-03 egress rule.
+server = ["dep:axum", "dep:tokio"]
+
+[dependencies]
+shogun-agents = { path = "../shogun-agents" }
+# Prompt fence for untrusted tool_result bodies (same contract as Agent drafts / Batch chunks).
+# shogun-core cannot be a dep here (core --features db/net--> mcp).
+shogun-redact = { path = "../shogun-redact" }
+# The Memory API applies the same confidence rule as UI reads (FR-API-06); reuse the single
+# implementation in shogun-fusion rather than re-deriving the bands. One-way: mcp → fusion.
+shogun-fusion = { path = "../shogun-fusion" }
+shogun-memory = { path = "../shogun-memory" }
+# Licence-token verification for the billing half of plan resolution (issue #8). One-way: mcp →
+# license → agents.
+shogun-license = { path = "../shogun-license" }
+# Live exact-name validation shared with desktop capture. CPAL is target-specific inside this
+# crate, so Linux policy/REST tests keep their dependency-light graph.
+shogun-microphone = { path = "../shogun-microphone" }
+# Parse the actions.execute request body (a small JSON action spec).
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+# Parse-only: the one-click "Add to …" (issue #400) refuses a Codex config.toml that does not parse
+# and checks, after its text-level edit, that nothing but SHOGUN's entry changed. The edit itself
+# is a splice of SHOGUN's own tables, so the rest of the file keeps its bytes and comments.
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+subtle = "2.6"
+libc = "0.2"
+# The chat bridge's per-run nonce and socket name (issue #484): the OS RNG, the same crate the
+# connector OAuth flow already uses (no new dependency in the workspace).
+getrandom = "0.3"
+# Pending L3 bodies at rest (audit 2026-10-10 M2): `l3_approvals.json` seals each row's recipient
+# and body with ChaCha20-Poly1305 under a key HKDF-derived from the memory DB key, so the queue
+# file never holds a draft in the clear. `base64` carries the ciphertext inside the JSON string.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+hkdf = "0.12"
+base64 = "0.22"
+# REST server (feature `server`): localhost-bound axum listener over the pure routing layer.
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "macros", "io-util"] }
+
+[dev-dependencies]
+# Mint a licence token in-test to prove that billing overrides an expired trial end-to-end.
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
+
+[lints]
+workspace = true

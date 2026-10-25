@@ -1,0 +1,174 @@
+---
+title: "CLI"
+description: "The shogun command — every read and write from a shell."
+---
+
+The app ships `shogun`. In an installed copy it is at
+`/Applications/ShogunAI.app/Contents/MacOS/shogun`, signed and notarized with
+the app. Link it onto your `PATH` once:
+
+```bash
+sudo mkdir -p /usr/local/bin
+sudo ln -sf /Applications/ShogunAI.app/Contents/MacOS/shogun /usr/local/bin/shogun
+```
+
+The link keeps working when the app updates. The CLI talks to the local REST
+server, so [start `shogun-api`](/memory-api/rest#start-the-server) first.
+
+```bash
+shogun [--token <t>] <command>
+```
+
+Output is the server's JSON, exactly as received. The token comes from
+`--token` or the `SHOGUN_API_TOKEN` environment variable. With a read-only
+token, every write exits non-zero with `scope_insufficient` (HTTP 403).
+
+## Reads
+
+| Command | |
+|---|---|
+| `search <query>` | Local text search |
+| `context` | Current context cache |
+| `pack <query>` | Grounded context pack — facts plus evidence with provenance |
+| `people list \| get <id>` | People state |
+| `projects list \| get <id>` | Projects state |
+| `commitments list \| get <id>` | Commitments state |
+| `open-loops list \| get <id>` | Open loops state |
+| `wrap` | Today's evening wrap: outcome, still open, tomorrow |
+| `whoami` | Profile and a compact work summary |
+| `onboarding` | This device's first-run state |
+| `metrics` | In-product SLO snapshot and lesson counters |
+| `api status` | The port the local REST server is on |
+| `api tokens` | Issued tokens with their scope (`read` or `full`), your token's own scope, what each scope can call, and the setup per app. Never a token |
+| `agent-source [show]` | What chat and drafts run on: the selected source, your subscription opt-in, whether OpenAI may store responses, which assistant CLIs are installed, which providers have a key (never the key), and the models each provider offers |
+| `dream [status]` | The nightly review: whether last night's run finished, and the reason code when it did not |
+| `connections [list]` | Each connection's state, access and third party, a pending disconnect, and Mail's consent and draft-only mode (never an account) |
+
+Each state result carries its `table` and `id`, the values `state edit`, `state delete` and `state split` take. A `get` for an id that names no record fails with `not_found`.
+
+Reads drop results below 0.5 confidence. Pass `--include-low` to keep them.
+
+Call-audio status is available with `shogun meeting audio status`. It reports whether a recording offer is waiting for the first-use audio choice.
+
+## Writes
+
+| Command | Level | |
+|---|---|---|
+| `meeting audio retry` | L2 | Ask the human to retry call audio in the current online meeting; expires after 10 seconds without confirmation |
+| `note <text>` | L1 | Append a user note |
+| `profile set <json>` | L1 | Update profile preferences |
+| `lessons enable \| disable <id>` | L1 | Switch a learned lesson |
+| `run <action-json>` | per action | Execute one action, e.g. `'{"kind":"local_search","query":"x"}'`. `local_search` answers at once (L1). `open_app`, `reveal_file`, `show_notification` and `copy_to_clipboard` run only in the app and are refused here. Sends are L3: pending until you approve them in the app |
+| `writing-style enable` | L3 | Ask to share your writing style; pending until you approve it in the app |
+| `writing-style disable \| clear` | L1 | Stop sharing, or delete what was learned |
+| `visual-recall enable` | L3 / L1 | Turn Visual recall on. While it is off, this is pending until you approve it in the app |
+| `visual-recall disable` | L1 | Turn Visual recall off. Deletes the automatically captured frames and their OCR text at once; `capture pause` stops capture without deleting anything |
+| `visual-recall retention <days>` | L1 / L3 | Keep saved screens 1–3650 days. Shorter or the same applies at once; longer is pending until you approve it in the app |
+| `capture-exclusions set <json>` | L1 / L3 | Replace the exclusion lists. Adding exclusions applies at once; any removal is pending until you approve it in the app |
+| `agent-source use <source> [--model <id>]` | L1 / L3 | Choose what chat and drafts run on. An API-key provider (`anthropic`, `openrouter`, `openai`, `gemini`) applies at once, with one of the models `agent-source` lists for it (leave `--model` out for the recommended one; `openrouter` also takes a model ID you type); your subscription (`claude-code`, `codex`, `gemini-cli`) is pending until you approve it in the app |
+| `agent-source revoke` | L1 | Stop running on your subscription |
+| `agent-source openai-store off` | L1 | Stop OpenAI storing responses. Turning it on (`openai-store on`) is refused: do it in Settings, where its retention note is |
+| `connections disconnect <service>` | L1 | Disconnect `gmail`, `gcal`, `gdrive`, `slack`, `notion`, `github` or `linear`. The app deletes the stored sign-in, now or at its next launch. Connecting is only in the app |
+| `connections composio revoke` | L1 | Revoke Mail's third-party consent. Draft-only mode turns back on and Mail disconnects |
+| `connections composio draft-only on \| off` | L1 | `on` keeps confirmed emails as drafts. `off` is refused: turn it off in **Settings → Connections** |
+| `actions poll <id>` | — | Poll an L3 approval |
+| `actions questions [id]` | read | Questions an agent run is waiting on, or one with its status |
+| `actions answer <id> <answer>` | L1 | Answer one question. The run carries on; nothing is approved or sent |
+| `actions steer <chat\|notch> <id> <text>` | L1 | Add one more instruction to a run that is still going. It reads it at its next step; nothing is approved or sent |
+
+## Memory import
+
+```bash
+shogun import preview <package.json>
+shogun import preview --computer-history <file-or-folder>…
+shogun import commit <package.json> --select <id>… | --defaults [--people-to-state]
+shogun import list
+shogun import show <id>
+shogun import delete <id>        # undo one whole import
+```
+
+Only the paths you name are read; a folder contributes the Markdown files directly inside
+it. The CLI sends their contents, never a path. `preview` writes nothing. `commit` is L1 and
+saves only the items you select, or the preview's defaults. `--people-to-state` also
+creates People records (confidence 0.8, kept until you edit or delete them) for new person
+entities; without it every imported item stays a tentative claim. See
+[REST › Memory import](/memory-api/rest#memory-import) for what is checked.
+
+## Lessons
+
+```bash
+shogun lessons list [--for-generation] [--app ID] [--person ID] [--project ID]
+```
+
+`--for-generation` returns the lookup form used when producing output.
+
+## Capture pause
+
+```bash
+shogun capture status
+shogun capture pause        # until explicitly resumed
+shogun capture pause 15m
+shogun capture pause 1h
+shogun capture resume
+```
+
+These use the same pause setting as Settings and the default **Control–Option–Shift–P**
+shortcut. Settings also offers a pause until the end of the local day. Integration sync continues.
+
+Pausing applies at once. `capture resume` while capture is paused returns `pending`: capture stays
+paused until you approve it in **Settings → Approvals** (poll with `actions poll <id>`).
+
+## Visual recall
+
+```bash
+shogun visual-recall status
+shogun visual-recall enable           # while off: pending until you approve it in the app
+shogun visual-recall disable          # off, and delete auto-captured frames now
+shogun visual-recall retention <days> # 1–3650; longer than now: pending until you approve it
+shogun visual-recall search <q> [--from-ms N] [--to-ms N]
+shogun visual-recall frame get <id>       # metadata + OCR text
+shogun visual-recall frame rescan <id>    # re-OCR a stored frame
+shogun visual-recall frame delete <id>
+```
+
+## Backups
+
+```bash
+shogun backup status                  # retention days, snapshot count and ages
+shogun backup retention <days>        # 1–30, default 7
+```
+
+Encrypted database snapshots older than the retention are deleted, except the newest verified
+one while no newer one exists. **Delete everything** in Settings removes them all.
+
+## Search index
+
+```bash
+shogun search-index status            # job state, steps done and left, space before and after
+shogun search-index compact           # start or continue (the app runs it in small steps)
+shogun search-index stop              # stop between two steps; compact continues later
+shogun storage preview                # bounded duplicate-text preview of event history (counts only)
+```
+
+The same job as **Settings › Memory › Search index**. It only runs while the app is open, never
+on its own, and does not start when the disk is nearly full. Search results do not change.
+
+## Voice dictionary
+
+```bash
+shogun voice-dictionary list
+shogun voice-dictionary create '{"canonical":"SHOGUN","aliases":["shogun ai"]}'
+shogun voice-dictionary update <id> '<term-json>'
+shogun voice-dictionary delete <id>
+```
+
+A term needs `canonical`. `aliases`, `locale`, `scope` (`global`, `bundle` or `surface`),
+`scope_ref`, `priority` and `enabled` are optional. `update` replaces the whole term.
+
+## Config
+
+```bash
+shogun config path       # where Shougun.md is
+shogun config show       # the parsed config, as JSON
+shogun config validate
+```

@@ -1,0 +1,411 @@
+{
+  "format": "synthday/v1",
+  "id": "day-02-ops-traps",
+  "generator": {
+    "seed": 317002,
+    "template_set": "v1",
+    "required_templates": [
+      "zwsp_commit",
+      "trap_job_ad",
+      "trap_chrome",
+      "trap_let_me_know",
+      "trap_hedge",
+      "commit_mine_meeting",
+      "loop_followup_note"
+    ]
+  },
+  "persona": {
+    "id": "p-ops-manager",
+    "name": "Tobias Wren",
+    "role": "Customer operations manager",
+    "org": "Halcyon Tiles",
+    "lang": "en",
+    "utc_offset_secs": -18000
+  },
+  "date": "2026-03-03",
+  "events": [
+    {
+      "id": 2001,
+      "ts_ms": 1772547420000,
+      "local_time": "09:17",
+      "source": "capture",
+      "app": "Browser",
+      "window": "Pull request #873 · Bluebird Renewal",
+      "text": "Ysolde Marr requested your review on this pull request.\nPlease review the renewal quote changes before the release branch is cut.",
+      "template": "loop_review_pr"
+    },
+    {
+      "id": 2002,
+      "ts_ms": 1772548320000,
+      "local_time": "09:32",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Re: Quarry Dashboard",
+      "text": "To: Caspian Holt <caspian.holt@halcyon.example>\nHi Caspian,\nThanks for the notes on Quarry Dashboard. I'll send the renewal quote by Friday.\nBest, Tobias",
+      "template": "commit_mine_email"
+    },
+    {
+      "id": 2003,
+      "ts_ms": 1772549880000,
+      "local_time": "09:58",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#ops-sync",
+      "text": "Tobias: Still waiting on Beatrix for the usage report numbers.",
+      "template": "loop_waiting_chat"
+    },
+    {
+      "id": 2004,
+      "ts_ms": 1772551320000,
+      "local_time": "10:22",
+      "source": "meeting",
+      "app": "Meeting notes",
+      "window": "Mosaic Pricing planning",
+      "text": "Beatrix Onwu: We still need to decide between the two vendors for Mosaic Pricing.\nTobias: Agreed.",
+      "template": "loop_decision_meeting"
+    },
+    {
+      "id": 2005,
+      "ts_ms": 1772552400000,
+      "local_time": "10:40",
+      "source": "capture",
+      "app": "Notes",
+      "window": "Notes",
+      "text": "Follow up with Caspian about the usage report after the demo.",
+      "template": "loop_followup_note"
+    },
+    {
+      "id": 2006,
+      "ts_ms": 1772553720000,
+      "local_time": "11:02",
+      "source": "capture",
+      "app": "Browser",
+      "window": "Careers · Open roles",
+      "text": "Senior Analyst\nYou will partner with the data team every day.\nWill you be our next hire?\nApply today.",
+      "template": "trap_job_ad"
+    },
+    {
+      "id": 2007,
+      "ts_ms": 1772554440000,
+      "local_time": "11:14",
+      "source": "capture",
+      "app": "Browser",
+      "window": "Pull request #496 · Quarry Dashboard",
+      "text": "Lucan Pryce requested your review on this pull request.\nPlease review the support rota changes before the release branch is cut.",
+      "template": "loop_review_pr"
+    },
+    {
+      "id": 2008,
+      "ts_ms": 1772556480000,
+      "local_time": "11:48",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Quarry Dashboard: support rota",
+      "text": "To: Caspian Holt <caspian.holt@halcyon.example>\nAttached is the support rota for Quarry Dashboard.\nLet me know if anything looks off.\nTobias",
+      "template": "trap_let_me_know"
+    },
+    {
+      "id": 2009,
+      "ts_ms": 1772557020000,
+      "local_time": "11:57",
+      "source": "capture",
+      "app": "Mail",
+      "window": "Inbox",
+      "text": "Inbox 12\nCompose\nFollow up\nSnoozed\nSent\nDrafts",
+      "template": "trap_chrome"
+    },
+    {
+      "id": 2010,
+      "ts_ms": 1772559300000,
+      "local_time": "12:35",
+      "source": "capture",
+      "app": "Mail",
+      "window": "Inbox",
+      "text": "Inbox 12\nCompose\nFollow up\nSnoozed\nSent\nDrafts",
+      "template": "trap_chrome"
+    },
+    {
+      "id": 2011,
+      "ts_ms": 1772560260000,
+      "local_time": "12:51",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Bluebird Renewal: vendor shortlist",
+      "text": "From: Beatrix Onwu <beatrix.onwu@halcyon.example>\nHi Tobias,\nWe will send you the signed vendor shortlist tomorrow.\nBeatrix",
+      "template": "commit_theirs_email"
+    },
+    {
+      "id": 2012,
+      "ts_ms": 1772561520000,
+      "local_time": "13:12",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Bluebird Renewal: onboarding guide",
+      "text": "To: Lucan Pryce <lucan.pryce@halcyon.example>\nAttached is the onboarding guide for Bluebird Renewal.\nLet me know if anything looks off.\nTobias",
+      "template": "trap_let_me_know"
+    },
+    {
+      "id": 2013,
+      "ts_ms": 1772562180000,
+      "local_time": "13:23",
+      "source": "capture",
+      "app": "Notes",
+      "window": "Notes",
+      "text": "I​'ll send the onboarding guide to Nadia by Thursday.",
+      "template": "zwsp_commit"
+    },
+    {
+      "id": 2014,
+      "ts_ms": 1772563260000,
+      "local_time": "13:41",
+      "source": "meeting",
+      "app": "Meeting notes",
+      "window": "Mosaic Pricing sync",
+      "text": "Beatrix Onwu: Can we get the support rota before the review?\nTobias: Yes, I'll draft the support rota by Friday.",
+      "template": "commit_mine_meeting"
+    },
+    {
+      "id": 2015,
+      "ts_ms": 1772564880000,
+      "local_time": "14:08",
+      "source": "gmail",
+      "app": "Mail",
+      "window": "Quarry Dashboard budget",
+      "text": "From: Nadia Ferro <nadia.ferro@halcyon.example>\nHi Tobias,\nCould you confirm who owns the budget for Quarry Dashboard?\nThanks, Nadia",
+      "template": "loop_reply_email"
+    },
+    {
+      "id": 2016,
+      "ts_ms": 1772566740000,
+      "local_time": "14:39",
+      "source": "slack",
+      "app": "Slack",
+      "window": "#renewals",
+      "text": "Tobias: Maybe I could look at the onboarding guide next week if there is time.",
+      "template": "trap_hedge"
+    }
+  ],
+  "gold": [
+    {
+      "id": "g01",
+      "table": "open_loops",
+      "fields": {
+        "description": "Please review the renewal quote changes before the release branch is cut",
+        "kind": "review_pending"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2001
+      ]
+    },
+    {
+      "id": "g02",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll send the renewal quote by Friday",
+        "direction": "mine",
+        "due": "2026-03-06"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2002
+      ]
+    },
+    {
+      "id": "g03",
+      "table": "open_loops",
+      "fields": {
+        "description": "Still waiting on Beatrix for the usage report numbers",
+        "kind": "waiting_on_them"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2003
+      ]
+    },
+    {
+      "id": "g04",
+      "table": "open_loops",
+      "fields": {
+        "description": "We still need to decide between the two vendors for Mosaic Pricing",
+        "kind": "decision_pending"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2004
+      ]
+    },
+    {
+      "id": "g05",
+      "table": "open_loops",
+      "fields": {
+        "description": "Follow up with Caspian about the usage report after the demo",
+        "kind": "follow_up"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2005
+      ]
+    },
+    {
+      "id": "g06",
+      "table": "open_loops",
+      "fields": {
+        "description": "Please review the support rota changes before the release branch is cut",
+        "kind": "review_pending"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2007
+      ]
+    },
+    {
+      "id": "g07",
+      "table": "commitments",
+      "fields": {
+        "description": "We will send you the signed vendor shortlist tomorrow",
+        "direction": "theirs",
+        "due": "2026-03-04"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2011
+      ]
+    },
+    {
+      "id": "g08",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll send the onboarding guide to Nadia by Thursday",
+        "direction": "mine",
+        "due": "2026-03-05"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2013
+      ]
+    },
+    {
+      "id": "g09",
+      "table": "commitments",
+      "fields": {
+        "description": "I'll draft the support rota by Friday",
+        "direction": "mine",
+        "due": "2026-03-06"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2014
+      ]
+    },
+    {
+      "id": "g10",
+      "table": "open_loops",
+      "fields": {
+        "description": "Could you confirm who owns the budget for Quarry Dashboard",
+        "kind": "reply_needed"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2015
+      ]
+    },
+    {
+      "id": "g11",
+      "table": "people",
+      "fields": {
+        "name": "Beatrix Onwu"
+      },
+      "expected_band": "high",
+      "evidence": [
+        2003,
+        2004,
+        2011,
+        2014
+      ]
+    },
+    {
+      "id": "g12",
+      "table": "people",
+      "fields": {
+        "name": "Caspian Holt"
+      },
+      "expected_band": "high",
+      "evidence": [
+        2002,
+        2005,
+        2008
+      ]
+    },
+    {
+      "id": "g13",
+      "table": "people",
+      "fields": {
+        "name": "Nadia Ferro"
+      },
+      "expected_band": "high",
+      "evidence": [
+        2013,
+        2015
+      ]
+    },
+    {
+      "id": "g14",
+      "table": "people",
+      "fields": {
+        "name": "Lucan Pryce"
+      },
+      "expected_band": "high",
+      "evidence": [
+        2007,
+        2012
+      ]
+    },
+    {
+      "id": "g15",
+      "table": "people",
+      "fields": {
+        "name": "Ysolde Marr"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2001
+      ]
+    },
+    {
+      "id": "g16",
+      "table": "projects",
+      "fields": {
+        "name": "Quarry Dashboard"
+      },
+      "expected_band": "high",
+      "evidence": [
+        2002,
+        2008,
+        2015
+      ]
+    },
+    {
+      "id": "g17",
+      "table": "projects",
+      "fields": {
+        "name": "Bluebird Renewal"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2012
+      ]
+    },
+    {
+      "id": "g18",
+      "table": "projects",
+      "fields": {
+        "name": "Mosaic Pricing"
+      },
+      "expected_band": "medium",
+      "evidence": [
+        2004
+      ]
+    }
+  ]
+}

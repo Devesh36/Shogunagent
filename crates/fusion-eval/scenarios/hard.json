@@ -1,0 +1,133 @@
+[
+  {
+    "id": "hard-en-same-first-name",
+    "lang": "en",
+    "hard": true,
+    "about": "A different person with the same first name is on screen.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "mail.google.com",
+      "title": "Intro: design contractor - me@example.com - Example Mail",
+      "excerpt": "Dana Kim <dana.kim@studio.example> Hi! Happy to help with the illustration work."
+    },
+    "people": [{ "id": "p-dana", "name": "Dana Reyes", "emails": ["dana.reyes@client.example"], "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-deck", "description": "Send the board deck to Dana", "counterparty": "p-dana", "due_in_hours": 120, "confidence": 0.9 }
+    ],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "hard-en-place-name",
+    "lang": "en",
+    "hard": true,
+    "about": "A first name that is also a place name in a newsletter.",
+    "screen": {
+      "bundle_id": "com.apple.Safari",
+      "host": "travel.example.com",
+      "title": "Weekend in Dana Point - Example Travel",
+      "excerpt": "Dana Point harbor, whale watching, and the best tacos on the coast."
+    },
+    "people": [{ "id": "p-dana", "name": "Dana Reyes", "confidence": 0.9 }],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "hard-en-other-persons-loop-same-topic",
+    "lang": "en",
+    "hard": true,
+    "about": "Two loops share a topic; only the one with the person on screen belongs.",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "mail.google.com",
+      "title": "Re: renewal terms - me@example.com - Example Mail",
+      "excerpt": "Dana Reyes <dana.reyes@client.example> Following up on the renewal terms for next year."
+    },
+    "people": [
+      { "id": "p-dana", "name": "Dana Reyes", "emails": ["dana.reyes@client.example"], "confidence": 0.9 },
+      { "id": "p-marcus", "name": "Marcus Lee", "emails": ["marcus@example.com"], "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-marcus", "kind": "reply_needed", "description": "Reply to Marcus about the renewal terms", "counterparty": "p-marcus", "confidence": 0.9 },
+      { "id": "l-dana", "kind": "reply_needed", "description": "Reply to Dana about the renewal terms", "counterparty": "p-dana", "confidence": 0.9 }
+    ],
+    "expect": { "first": "l-dana", "relevant": ["l-dana", "p-dana"] }
+  },
+  {
+    "id": "hard-ja-compound-split",
+    "lang": "ja",
+    "hard": true,
+    "about": "画面は「経費の精算」、約束は「経費精算書」：複合語が分かれている。",
+    "screen": {
+      "bundle_id": "com.apple.mail",
+      "title": "経費の精算について",
+      "excerpt": "経理部より：今月分の経費の精算は25日締めです。"
+    },
+    "commitments": [
+      { "id": "c-keihi", "description": "経費精算書を提出する", "due_in_hours": 60, "confidence": 0.9 }
+    ],
+    "expect": { "first": "c-keihi", "relevant": ["c-keihi"] }
+  },
+  {
+    "id": "hard-ja-surname-in-company",
+    "lang": "ja",
+    "hard": true,
+    "about": "姓と同じ文字列が社名に含まれる。",
+    "screen": {
+      "bundle_id": "com.apple.Safari",
+      "host": "news.example.jp",
+      "title": "佐藤製薬が新製品を発表 - Example ニュース",
+      "excerpt": "佐藤製薬は本日、新しい風邪薬を発表した。"
+    },
+    "people": [{ "id": "p-sato", "name": "佐藤 花子", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-minutes", "description": "佐藤さんに議事録を共有する", "counterparty": "p-sato", "due_in_hours": 80, "confidence": 0.9 }
+    ],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "hard-en-slack-handle",
+    "lang": "en",
+    "hard": true,
+    "about": "Slack shows only the handle of a known person.",
+    "screen": {
+      "bundle_id": "com.tinyspeck.slackmacgap",
+      "title": "#eng-notch - Example Co - Slack",
+      "excerpt": "@kwatanabe: pushed the fix for the focus flicker, can someone take a look?"
+    },
+    "people": [{ "id": "p-kenji", "name": "Kenji Watanabe", "aliases": ["kwatanabe"], "confidence": 0.9 }],
+    "open_loops": [
+      { "id": "l-review", "kind": "review_pending", "description": "Review Kenji's focus flicker fix", "counterparty": "p-kenji", "confidence": 0.85 }
+    ],
+    "expect": { "first": "l-review", "relevant": ["l-review", "p-kenji"] }
+  },
+  {
+    "id": "hard-en-paraphrased-topic",
+    "lang": "en",
+    "hard": true,
+    "about": "The screen paraphrases the commitment ('quote' vs 'estimate').",
+    "screen": {
+      "bundle_id": "com.apple.mail",
+      "title": "Where is the estimate?",
+      "excerpt": "Hi, we still haven't received the estimate for the kitchen remodel."
+    },
+    "commitments": [
+      { "id": "c-quote", "description": "Send the kitchen remodel quote", "due_in_hours": 50, "confidence": 0.9 }
+    ],
+    "expect": { "first": "c-quote", "relevant": ["c-quote"] }
+  },
+  {
+    "id": "hard-en-generic-two-words",
+    "lang": "en",
+    "hard": true,
+    "about": "Two ordinary words in common with an unrelated commitment.",
+    "screen": {
+      "bundle_id": "com.apple.Safari",
+      "host": "blog.example.com",
+      "title": "Why your pricing page copy matters - Example Blog",
+      "excerpt": "Great pricing page copy explains value in one sentence."
+    },
+    "commitments": [
+      { "id": "c-pricing", "description": "Rewrite the pricing page copy for the launch", "due_in_hours": 100, "confidence": 0.9 }
+    ],
+    "expect": { "generic": true, "relevant": [], "acceptable": ["c-pricing"] }
+  }
+]

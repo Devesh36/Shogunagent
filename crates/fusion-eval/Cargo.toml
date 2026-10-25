@@ -1,0 +1,27 @@
+[package]
+name = "fusion-eval"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN Context Fusion eval: synthetic screen + state scenarios scored on the proactive action row (precision@3, MRR, irrelevant and no-op buttons)."
+
+# Model-free and platform-independent, like extract-eval: it runs inside `cargo test --workspace`
+# on Linux CI (CLAUDE.md CI budget rules — never a macOS job). It depends on shogun-fusion only,
+# so what is scored here is the ranking the Notch serves, minus the SQLite read.
+#
+# No HTTP client, no model, no network: every input is a checked-in synthetic scenario
+# (FR-TR-03 / invariant 3; `scripts/check-http-egress.py`).
+
+[dependencies]
+shogun-fusion = { path = "../shogun-fusion" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "fusion-eval"
+path = "src/bin/fusion_eval.rs"
+
+[lints]
+workspace = true

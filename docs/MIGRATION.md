@@ -23,7 +23,9 @@ Source: `Torutesu/ShogunAI-` at the commit recorded in `docs/shogunai-origin/SOU
 | `scripts/check-*.py`, `check-feature-matrix.sh`, `cargo-audit.py`, `check-cargo-audit.py`, `ci-postgres*.sh` | migrated, desktop references removed | The invariant guards and the feature-matrix runner. |
 | `docs/migrations/` | migrated | Rollback procedure per migration (required by `check-migrations.py`). |
 | `docs/mcp/` | migrated | Memory API architecture and implementation notes. |
-| `docs/shogunai-origin/` | migrated as reference | Requirements v1.0, Memory API spec, relay and gateway design, context architecture, continual learning, unit economics, memory quality verification, embedding setup, connector plan, search eval, positioning, and the ShogunAI `CLAUDE.md`. Read-only reference; ShogunAgent decisions live in `README.md` and `docs/implementation-plan.md`. |
+| `docs/memory-api-mcp.md`, `docs/examples/` | migrated at the same paths | The Memory API spec and the generated client-config examples. `shogun-mcp` doc-sync tests read them (`client_config.rs`), so the paths are kept. |
+| `apps/docs/memory-api/*.mdx` | migrated, pages only | The four public Memory API pages (overview, mcp, rest, cli). `shogun-mcp/tests/docs_tool_counts.rs` and `client_config.rs` check them against the tool table. The rest of the Mintlify site is not carried over. |
+| `docs/shogunai-origin/` | migrated as reference | Requirements v1.0, relay and gateway design, context architecture, continual learning, unit economics, memory quality verification, embedding setup, connector plan, search eval, positioning, and the ShogunAI `CLAUDE.md`. Read-only reference; ShogunAgent decisions live in `README.md` and `docs/implementation-plan.md`. |
 
 ## What was not migrated
 
@@ -41,6 +43,7 @@ Source: `Torutesu/ShogunAI-` at the commit recorded in `docs/shogunai-origin/SOU
 - `Cargo.lock`: pruned of the desktop-only dependency tree (307 packages removed, none added).
 - `crates/shogun-core/src/audio/cue_cancel.rs`: the test fixture `voice-start.wav` is copied to `src/audio/fixtures/` instead of being included from `apps/desktop`.
 - `scripts/check-feature-matrix.sh`: the `--exclude shogun-desktop-spike` flags and the desktop shared-enum grep are removed.
+- `crates/pii-bench/src/corpus.rs`: the synthetic Stripe-shaped fixture is assembled with `concat!` so GitHub push protection does not read it as a live key. The bench input is unchanged.
 - `package.json`, `pnpm-workspace.yaml`, `turbo.json`: reduced to `apps/*` and `packages/*`.
 
 ## Verification at migration time (Linux)

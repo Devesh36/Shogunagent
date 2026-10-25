@@ -1,0 +1,25 @@
+[package]
+name = "pii-bench"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN PII/secret redaction benchmark: measures what survives each storage boundary."
+
+# Platform-independent, like the crates it measures: shogun-memory bundles SQLite so the whole
+# benchmark runs on Linux CI at $0.006/min (CLAUDE.md CI budget rules — never add a macOS job).
+#
+# The audit (research/pii-benchmark) established WHAT exists by reading code. This measures what
+# actually survives, end to end, through the real write path — which is the coverage the audit
+# found missing (PII-004) and the reason PII-001 went unnoticed.
+
+[dependencies]
+shogun-memory = { path = "../shogun-memory" }
+shogun-redact = { path = "../shogun-redact" }
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

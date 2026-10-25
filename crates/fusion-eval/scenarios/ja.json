@@ -1,0 +1,217 @@
+[
+  {
+    "id": "ja-mail-tanaka",
+    "lang": "ja",
+    "about": "田中さんからの見積書メール（敬称付き、件名に名前なし）。",
+    "screen": {
+      "bundle_id": "com.apple.mail",
+      "title": "Re: 見積書の件",
+      "excerpt": "田中さんからのメール：お世話になっております。見積書を今週中にご送付いただけますでしょうか。田中"
+    },
+    "people": [
+      { "id": "p-tanaka", "name": "田中 太郎", "emails": ["tanaka@example.co.jp"], "confidence": 0.9 },
+      { "id": "p-sato", "name": "佐藤 花子", "emails": ["sato@example.co.jp"], "confidence": 0.9 }
+    ],
+    "projects": [{ "id": "pr-aoba", "name": "青葉", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-minutes", "description": "佐藤さんに議事録を共有する", "counterparty": "p-sato", "due_in_hours": 80, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-tanaka", "kind": "reply_needed", "description": "田中さんに見積書の件で返信する", "counterparty": "p-tanaka", "confidence": 0.9 }
+    ],
+    "expect": { "first": "l-tanaka", "relevant": ["l-tanaka", "p-tanaka"] }
+  },
+  {
+    "id": "ja-gmail-name-no-space",
+    "lang": "ja",
+    "about": "Gmail の件名に「田中様」、DB 側は「田中」だけ。",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "mail.google.com",
+      "title": "請求書送付のお願い（田中様） - me@example.com - Example Mail",
+      "excerpt": "田中様 いつもお世話になっております。請求書の送付をお願いいたします。"
+    },
+    "people": [{ "id": "p-tanaka", "name": "田中", "emails": ["tanaka@example.co.jp"], "confidence": 0.85 }],
+    "projects": [],
+    "commitments": [
+      { "id": "c-invoice", "description": "田中様に請求書を送付する", "counterparty": "p-tanaka", "due_in_hours": 30, "confidence": 0.85 },
+      { "id": "c-report", "description": "月次レポートを作成する", "due_in_hours": 100, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-invoice", "relevant": ["c-invoice", "p-tanaka"] }
+  },
+  {
+    "id": "ja-slack-dm",
+    "lang": "ja",
+    "about": "Slack の DM で鈴木さんから資料の確認依頼（待ち状態のループ）。",
+    "screen": {
+      "bundle_id": "com.tinyspeck.slackmacgap",
+      "title": "鈴木 一郎 (DM) - Example - Slack",
+      "excerpt": "鈴木 一郎 10:15 明日の打ち合わせ資料、フィードバックまだですか？"
+    },
+    "people": [
+      { "id": "p-suzuki", "name": "鈴木 一郎", "confidence": 0.9 },
+      { "id": "p-yamamoto", "name": "山本 健", "confidence": 0.9 }
+    ],
+    "projects": [],
+    "commitments": [
+      { "id": "c-yamamoto", "description": "山本さんに請求書を送る", "counterparty": "p-yamamoto", "due_in_hours": 90, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-suzuki", "kind": "follow_up", "description": "鈴木さんに打ち合わせ資料のフィードバックを返す", "counterparty": "p-suzuki", "confidence": 0.85 }
+    ],
+    "expect": { "first": "l-suzuki", "relevant": ["l-suzuki", "p-suzuki"] }
+  },
+  {
+    "id": "ja-calendar-event",
+    "lang": "ja",
+    "about": "カレンダーの予定ページ（プロジェクト定例、参加者2名）。",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "calendar.google.com",
+      "title": "青葉 定例 - Example カレンダー",
+      "excerpt": "青葉 定例 明日 10:00〜10:30 参加者: 田中 太郎、佐藤 花子 議題: 進捗レポート"
+    },
+    "people": [
+      { "id": "p-tanaka", "name": "田中 太郎", "confidence": 0.9 },
+      { "id": "p-sato", "name": "佐藤 花子", "confidence": 0.9 },
+      { "id": "p-kato", "name": "加藤 誠", "confidence": 0.9 }
+    ],
+    "projects": [
+      { "id": "pr-aoba", "name": "青葉", "confidence": 0.9 },
+      { "id": "pr-midori", "name": "みどりの窓口刷新", "confidence": 0.9 }
+    ],
+    "commitments": [
+      { "id": "c-aoba-report", "description": "青葉の進捗レポートを作成する", "due_in_hours": 10, "confidence": 0.9 },
+      { "id": "c-kato", "description": "加藤さんに採用面接の評価を送る", "counterparty": "p-kato", "due_in_hours": 100, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-aoba-report", "relevant": ["c-aoba-report", "pr-aoba", "p-tanaka", "p-sato"] }
+  },
+  {
+    "id": "ja-overdue-elsewhere",
+    "lang": "ja",
+    "about": "期限切れの約束がひとつ。画面は無関係。",
+    "screen": {
+      "bundle_id": "com.apple.finder",
+      "title": "ダウンロード"
+    },
+    "people": [{ "id": "p-sato", "name": "佐藤 花子", "confidence": 0.9 }],
+    "projects": [],
+    "commitments": [
+      { "id": "c-keihi", "description": "経費精算を提出する", "due_in_hours": -30, "status": "overdue", "confidence": 0.9 },
+      { "id": "c-minutes", "description": "佐藤さんに議事録を共有する", "due_in_hours": 80, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-keihi", "relevant": ["c-keihi"] }
+  },
+  {
+    "id": "ja-xcode-unrelated",
+    "lang": "ja",
+    "about": "コーディング中。メモリに関連なし。",
+    "screen": {
+      "bundle_id": "com.apple.dt.Xcode",
+      "title": "NotchKit — PanelView.swift",
+      "excerpt": "struct PanelView: View { var body: some View { Text(\"こんにちは\") } }"
+    },
+    "people": [{ "id": "p-tanaka", "name": "田中 太郎", "confidence": 0.9 }],
+    "projects": [{ "id": "pr-aoba", "name": "青葉", "confidence": 0.9 }],
+    "commitments": [
+      { "id": "c-minutes", "description": "佐藤さんに議事録を共有する", "due_in_hours": 80, "confidence": 0.9 }
+    ],
+    "open_loops": [
+      { "id": "l-tanaka", "kind": "reply_needed", "description": "田中さんに見積書の件で返信する", "counterparty": "p-tanaka", "confidence": 0.9 }
+    ],
+    "expect": { "generic": true, "relevant": [] }
+  },
+  {
+    "id": "ja-honorific-in-memory",
+    "lang": "ja",
+    "about": "DB に「高橋様」と敬称付きで保存されている相手からのメール。",
+    "screen": {
+      "bundle_id": "com.apple.mail",
+      "title": "契約書のご確認",
+      "excerpt": "高橋 健 様 契約書の最新版をお送りします。ご確認のほどよろしくお願いいたします。"
+    },
+    "people": [{ "id": "p-takahashi", "name": "高橋様", "emails": ["takahashi@example.co.jp"], "confidence": 0.85 }],
+    "projects": [],
+    "commitments": [],
+    "open_loops": [
+      { "id": "l-takahashi", "kind": "reply_needed", "description": "高橋様へ契約書の件を返信する", "counterparty": "p-takahashi", "confidence": 0.85 },
+      { "id": "l-other", "kind": "waiting_on_them", "description": "経理部からの承認待ち", "confidence": 0.85 }
+    ],
+    "expect": { "first": "l-takahashi", "relevant": ["l-takahashi", "p-takahashi"] }
+  },
+  {
+    "id": "ja-unreviewed-mail-guess",
+    "lang": "ja",
+    "about": "ローカルのメール推定（#926）だけのループ。L3 の返信ボタンは出さない。",
+    "screen": {
+      "bundle_id": "com.google.Chrome",
+      "host": "mail.google.com",
+      "title": "セミナーのご案内 - me@example.com - Example Mail",
+      "excerpt": "中村 優 <nakamura@seminar.example> 来月のセミナーのご案内です。ご参加をご検討ください。"
+    },
+    "people": [{ "id": "p-nakamura", "name": "中村 優", "emails": ["nakamura@seminar.example"], "confidence": 0.8 }],
+    "projects": [],
+    "commitments": [],
+    "open_loops": [
+      { "id": "l-nakamura", "kind": "reply_needed", "description": "中村さんにセミナー参加可否を返信する", "counterparty": "p-nakamura", "confidence": 0.75, "inferred": true }
+    ],
+    "expect": { "relevant": ["p-nakamura"], "acceptable": ["l-nakamura"] }
+  },
+  {
+    "id": "ja-katakana-name",
+    "lang": "ja",
+    "about": "カタカナ表記の相手（中黒区切り）。",
+    "screen": {
+      "bundle_id": "com.tinyspeck.slackmacgap",
+      "title": "マイケル・ブラウン (DM) - Example - Slack",
+      "excerpt": "マイケル・ブラウン 英語版の資料、いつ頃いただけそうですか？"
+    },
+    "people": [{ "id": "p-michael", "name": "マイケル・ブラウン", "confidence": 0.85 }],
+    "projects": [],
+    "commitments": [
+      { "id": "c-english", "description": "マイケルさんに英語版の資料を送る", "counterparty": "p-michael", "due_in_hours": 40, "confidence": 0.85 },
+      { "id": "c-keihi", "description": "経費精算を提出する", "due_in_hours": 200, "confidence": 0.9 }
+    ],
+    "open_loops": [],
+    "expect": { "first": "c-english", "relevant": ["c-english", "p-michael"] }
+  },
+  {
+    "id": "ja-snoozed",
+    "lang": "ja",
+    "about": "一致するループはスヌーズ中。人物だけ出す。",
+    "screen": {
+      "bundle_id": "com.apple.mail",
+      "title": "打ち合わせ日程の件",
+      "excerpt": "佐藤 花子 来週の打ち合わせ日程について、候補日をいただけますか。"
+    },
+    "people": [{ "id": "p-sato", "name": "佐藤 花子", "emails": ["sato@example.co.jp"], "confidence": 0.9 }],
+    "projects": [],
+    "commitments": [],
+    "open_loops": [
+      { "id": "l-sato", "kind": "reply_needed", "description": "佐藤さんに打ち合わせの候補日を返信する", "counterparty": "p-sato", "confidence": 0.9, "snoozed_hours": 30 }
+    ],
+    "expect": { "first": "p-sato", "relevant": ["p-sato"] }
+  },
+  {
+    "id": "ja-generic-words",
+    "lang": "ja",
+    "about": "「確認」「対応」など一般語だけが重なる画面。",
+    "screen": {
+      "bundle_id": "com.apple.Safari",
+      "host": "help.example.jp",
+      "title": "よくある質問 - 確認方法と対応状況",
+      "excerpt": "ご注文の確認方法と対応状況についてのよくある質問です。"
+    },
+    "people": [],
+    "projects": [],
+    "commitments": [
+      { "id": "c-kakunin", "description": "契約内容を確認して対応する", "due_in_hours": 150, "confidence": 0.85 },
+      { "id": "c-shiryou", "description": "会議の資料を確認する", "due_in_hours": 120, "confidence": 0.85 }
+    ],
+    "open_loops": [],
+    "expect": { "generic": true, "relevant": [] }
+  }
+]

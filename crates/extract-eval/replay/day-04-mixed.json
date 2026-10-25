@@ -1,0 +1,102 @@
+{
+  "day": "day-04-mixed",
+  "format": "batch-replay/v2",
+  "note": "Synthetic, hand-shaped Batch consolidation results in the JSON contract the consolidation instruction asks for: one result per session (app, window, hour), items anchored into the session's numbered lines. NOT model output. The deliberate mistakes in it are listed in docs/extract-eval.md (Batch replay) so the replay exercises every scorer and parse path.",
+  "results": [
+    {
+      "custom_id": "s42da5266f12cb662",
+      "events": [
+        4001
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "Mara: Idris, I'll send the 資料 for Atlas ",
+            "anchor_len": 57,
+            "description": "I'll send the 資料 for Atlas Ledger by Friday",
+            "direction": "mine",
+            "line": 1
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "Mara: Idris, I'll send the 資料 for Atlas ",
+            "anchor_len": 57,
+            "context": "I'll send the 資料 for Atlas Ledger by Friday.",
+            "kind": "project",
+            "line": 1,
+            "name": "Atlas Ledger"
+          }
+        ],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "scd4ad51ecb730b5c",
+      "events": [
+        4002
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [],
+        "open_loops": []
+      }
+    },
+    {
+      "custom_id": "sdba21db13ba8df36",
+      "events": [
+        4003
+      ],
+      "response": {
+        "commitments": [],
+        "entities": [
+          {
+            "anchor": "Mara: Still waiting on Idris for the 承認 ",
+            "anchor_len": 56,
+            "context": "Still waiting on Idris for the 承認 on Atlas Ledger.",
+            "kind": "project",
+            "line": 1,
+            "name": "Atlas Ledger"
+          }
+        ],
+        "open_loops": [
+          {
+            "anchor": "Mara: Still waiting on Idris for the 承認 ",
+            "anchor_len": 56,
+            "description": "Still waiting on Idris for the 承認 on Atlas Ledger",
+            "kind": "waiting_on_them",
+            "line": 1
+          }
+        ]
+      }
+    },
+    {
+      "custom_id": "s8de1afd7338083f2",
+      "events": [
+        4004
+      ],
+      "response": {
+        "commitments": [
+          {
+            "anchor": "We will send you the 議事録 tomorrow.",
+            "anchor_len": 34,
+            "description": "We will send you the 議事録 tomorrow",
+            "direction": "theirs",
+            "line": 3
+          }
+        ],
+        "entities": [
+          {
+            "anchor": "From: Oren Vale <oren.vale@larkspur.exam",
+            "anchor_len": 44,
+            "context": "From: Oren Vale <oren.vale@larkspur.example>",
+            "kind": "person",
+            "line": 1,
+            "name": "Oren Vale"
+          }
+        ],
+        "open_loops": []
+      }
+    }
+  ]
+}
