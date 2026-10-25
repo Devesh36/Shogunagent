@@ -5,7 +5,8 @@
  * (CLAUDE.md invariant 12).
  *
  * Units (amounts are integer micro-USD, 1 USD = 1,000,000):
- * - `ingest`   — $0.50 per 1,000 events (500 µ$ per event): `memory.ingest`, `memory.append_note`.
+ * - `ingest`   — $0.50 per 1,000 events (500 µ$ per event): `memory.ingest`, `memory.append_note`,
+ *                `handoff.accept`.
  * - `model_op` — $0.10 per 1,000 model-invoking operations (100 µ$ each): the default for any
  *                `tools/call` the table does not list as free, ingest or run.
  * - `run`      — a router tool run: the provider's price plus `RUN_MARKUP_BPS` (5%), rounded up, once
@@ -56,10 +57,14 @@ export const FREE_TOOLS: ReadonlySet<string> = new Set([
   "calendar.upcoming", "profile.whoami", "wiki.evidence", "actions.status",
   "approvals.list", "approvals.get", "approvals.decide",
   "router.discover", "router.inspect",
+  // E35: the A2A handoff object is one recall, reshaped by the core.
+  "handoff.create",
 ]);
 const FREE_PREFIXES = ["state.", "approvals."] as const;
 
-export const INGEST_TOOLS: ReadonlySet<string> = new Set(["memory.ingest", "memory.append_note"]);
+/** E35: `handoff.accept` stores the handoff in the receiver's scratch through the ingest path,
+ * settled per event the core stored (its `Mcp-Quantity`). */
+export const INGEST_TOOLS: ReadonlySet<string> = new Set(["memory.ingest", "memory.append_note", "handoff.accept"]);
 
 export const RUN_TOOLS: ReadonlySet<string> = new Set(["router.run", "actions.execute"]);
 

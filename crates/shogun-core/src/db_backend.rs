@@ -2786,6 +2786,9 @@ impl MemoryBackend for DbBackend {
             | Tool::MemoryRecall
             // Served by `memory_fs` (E6-T2).
             | Tool::MemoryFs
+            // Served by `handoff_api` over `recall` / `ingest` (E35).
+            | Tool::HandoffCreate
+            | Tool::HandoffAccept
             // Served by the approval queue (E15) and by `audit_list` / `acl` (E18).
             | Tool::ApprovalsList
             | Tool::ApprovalsGet

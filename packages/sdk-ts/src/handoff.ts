@@ -1,7 +1,7 @@
 /**
  * The A2A state-of-work handoff (docs/api/handoff.md, docs/api/handoff.schema.json): a strict
- * subset of export v1 that one agent hands to another with a task. `acceptHandoff` lands it in the
- * receiver's own scratch namespace, never in the principal's world: what another agent claims is
+ * subset of export v1 that one agent hands to another with a task. `acceptHandoff` sends it to
+ * `handoff.accept`, which lands it in the receiver's own scratch namespace, never in the principal's world: what another agent claims is
  * working context for the receiver, not state the user's store has observed.
  */
 import { HandoffError } from "./errors.js";
@@ -129,8 +129,10 @@ function provenanceLine(p: HandoffProvenance[]): string {
 }
 
 /**
- * The events `acceptHandoff` ingests: one for the task, one per entity and fact. Medium items keep
+ * The events `handoff.accept` stores (the core builds the same list, crates/shogun-mcp/src/
+ * handoff_api.rs `accept_items`): one for the task, one per entity and fact. Medium items keep
  * their `possibly:` prefix; Low items are never in a handoff and are skipped if one slips in.
+ * `acceptHandoff` uses its length as the call's `Mcp-Quantity`.
  */
 export function handoffEvents(h: Handoff): IngestEvent[] {
   const events: IngestEvent[] = [

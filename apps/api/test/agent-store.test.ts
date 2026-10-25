@@ -51,6 +51,16 @@ describe.each(backends)("AgentStore on %s", (_name, open) => {
     expect(reset?.capDayMicros).toBeUndefined();
   });
 
+  it("inserts a key once per id: the second insert of the same id keeps the first (E39)", async () => {
+    const store = open();
+    if (store instanceof SqlAgentStore) await store.checkSchema();
+    await store.createPrincipal({ principalId: "prn_o", tenantId: "prn_o", createdAt: TS });
+    const k = { keyId: "ak_once", prefix: "onceonceon", hash: "h-first", mode: "live" as const, principalId: "prn_o", tenantId: "prn_o", scopes: ["read" as const], createdAt: TS };
+    expect(await store.insertKeyOnce(k)).toBe(true);
+    expect(await store.insertKeyOnce({ ...k, hash: "h-second" })).toBe(false);
+    expect((await store.keyById("ak_once"))?.hash).toBe("h-first");
+  });
+
   it("credits once per topup id and creates the wallet on first credit", async () => {
     const store = open();
     expect(await store.wallet("prn_a")).toEqual({ principalId: "prn_a", balanceMicros: 0, reservedMicros: 0 });

@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { SqlAgentStore } from "../src/agent-pg-store.js";
 import { InMemoryAgentStore, type AgentStore } from "../src/agent-store.js";
 import { BootError, enterpriseConfigFromEnv } from "../src/boot.js";
-import { SESSION_COOKIE, auditExportStream } from "../src/enterprise/app.js";
+import { SESSION_COOKIE, auditExportStream, memberKeyId } from "../src/enterprise/app.js";
 import { derive, signClaims } from "../src/enterprise/crypto.js";
 import { parseRegionEndpoints } from "../src/enterprise/region.js";
 import { InMemoryEnterpriseStore, SqlEnterpriseStore, type EnterpriseStore, type ScimUser } from "../src/enterprise/store.js";
@@ -193,6 +193,54 @@ describe("tenant admin routes", () => {
     await rig.enterprise.insertUser(user);
     expect((await issue({})).status).toBe(409);
     expect((await rig.app.request("/v1/tenant/members", { headers: { cookie: "x=y" } })).status).toBe(401);
+  });
+
+  it("issues a member key once per Idempotency-Key: a retry answers the same key reference, never the secret (E39)", async () => {
+    const rig = await makeEnterpriseRig();
+    const { tenantId } = await createTenant(rig, { name: "Acme", plan: "enterprise" });
+    const cookie = await adminSession(rig, tenantId);
+    const member = `prn_${randomUUID()}`;
+    await rig.store.createPrincipal({ principalId: member, tenantId: member, createdAt: 0 });
+    await adminCall(rig, `/v1/admin/tenants/${tenantId}/principals`, { method: "POST", body: { principal_id: member } });
+    const list = (await (await rig.app.request("/v1/tenant/members", { headers: { cookie } })).json()) as { members: Array<{ principal_id: string }> };
+    expect(list.members.map((m) => m.principal_id)).toEqual([member]);
+    const issue = (body: unknown, idem?: string, id = member) => rig.app.request(`/v1/tenant/members/${id}/keys`, {
+      method: "POST", headers: { cookie, "content-type": "application/json", origin: BASE, ...(idem !== undefined ? { "idempotency-key": idem } : {}) }, body: JSON.stringify(body),
+    });
+    const first = await issue({ scopes: ["read", "write"] }, "onboard-1");
+    expect(first.status).toBe(201);
+    const a = (await first.json()) as { key: string; key_id: string; created: boolean };
+    expect(a.created).toBe(true);
+    // The same request again: the same key id, no secret, no second key.
+    const again = await issue({ scopes: ["write", "read"] }, "onboard-1");
+    expect(again.status).toBe(200);
+    const b = (await again.json()) as { key: string | null; key_id: string; created: boolean; revoked: boolean };
+    expect(b).toMatchObject({ key: null, key_id: a.key_id, created: false, revoked: false });
+    expect(await rig.store.keyById(a.key_id)).toBeDefined();
+    // The first secret still works: the replay did not replace the stored hash.
+    expect((await rig.app.request("/v1/agents/me", { headers: { authorization: `Bearer ${a.key}` } })).status).toBe(200);
+    // Same key, other scopes: a conflict, not a silent second key.
+    const conflict = await issue({ scopes: ["read"] }, "onboard-1");
+    expect(conflict.status).toBe(409);
+    expect(((await conflict.json()) as { error: { code: string } }).error.code).toBe("idempotency_key_reused");
+    // A new Idempotency-Key (or none) issues a new key.
+    const other = (await (await issue({ scopes: ["read"] }, "onboard-2")).json()) as { key_id: string; created: boolean };
+    expect(other.created).toBe(true);
+    expect(other.key_id).not.toBe(a.key_id);
+    const plain = await issue({ scopes: ["read"] });
+    expect(plain.status).toBe(201);
+    // Concurrent retries: exactly one secret is minted, the others answer its reference.
+    const racers = await Promise.all([0, 1, 2, 3].map(() => issue({ scopes: ["read"] }, "race-1")));
+    const bodies = (await Promise.all(racers.map((r) => r.json()))) as Array<{ key: string | null; key_id: string }>;
+    expect(bodies.filter((x) => x.key !== null)).toHaveLength(1);
+    expect(new Set(bodies.map((x) => x.key_id)).size).toBe(1);
+    const winner = bodies.find((x) => x.key !== null)!;
+    expect((await rig.app.request("/v1/agents/me", { headers: { authorization: `Bearer ${winner.key}` } })).status).toBe(200);
+    // The key id is scoped to the member: the same Idempotency-Key for another member is another key.
+    expect(memberKeyId(tenantId, member, "onboard-1")).toBe(a.key_id);
+    expect(memberKeyId(tenantId, "prn_other", "onboard-1")).not.toBe(a.key_id);
+    expect((await issue({}, "")).status).toBe(400);
+    expect(rig.logLines.join("\n")).not.toContain(a.key);
   });
 
   it("streams every member's sidecar audit export, framed per principal, bodies untouched", async () => {

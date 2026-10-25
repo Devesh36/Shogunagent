@@ -143,6 +143,8 @@ pub fn tool_handling(tool: Tool) -> ToolHandling {
         | Tool::MemoryGetContextPack
         // The budgeted recall is the context-pack assembly (E4-T3): same rows, same filter.
         | Tool::MemoryRecall
+        // The handoff object is built from that same recall (E35): same rows, same filter.
+        | Tool::HandoffCreate
         | Tool::MemoryGetEvents
         | Tool::MemoryReadSession
         | Tool::WikiEvidence => Filtered,
@@ -185,6 +187,8 @@ pub fn tool_handling(tool: Tool) -> ToolHandling {
         | Tool::MemoryIngest
         // The `/memories` tree is state rows and the caller's scratch: no meeting or screen text.
         | Tool::MemoryFs
+        // Accepting a handoff appends to the caller's scratch; it reads nothing (E35).
+        | Tool::HandoffAccept
         // Governance reads (E15 / E18): redacted approval summaries, audit labels and grants —
         // no meeting or screen text.
         | Tool::ApprovalsList
@@ -410,6 +414,7 @@ mod tests {
                 "memory.get_events",
                 "memory.read_session",
                 "memory.recall",
+                "handoff.create",
                 "wiki.evidence",
             ]
         );

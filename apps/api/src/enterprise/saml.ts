@@ -25,6 +25,17 @@
  *   id; a bearer `SubjectConfirmation` whose `Recipient` is the ACS URL, `InResponseTo` the request
  *   id and `NotOnOrAfter` in the future.
  * - The assertion id is spent in the replay cache until it expires (`app.ts`).
+ * - Strictness added in E39: `Version="2.0"` on the Response and the assertion; the Response's own
+ *   `Issuer`, when present, equals the IdP entity id; the assertion's `IssueInstant` (signed) and
+ *   the Response's are neither in the future nor older than `MAX_ASSERTION_AGE_MS` (the
+ *   ten-minute sign-in flow), each with the clock skew; exactly one `Issuer`, `Subject` and
+ *   `Conditions` in the signed assertion; a bearer `SubjectConfirmationData` whose `NotBefore` is
+ *   still ahead does not confirm; an `EncryptedID` or `EncryptedAttribute` anywhere is refused
+ *   like an `EncryptedAssertion`.
+ * - XML Encryption is not supported: no XML-Enc library has been vetted to run here on Workers,
+ *   so an encrypted assertion, NameID or attribute is refused with
+ *   `saml_encrypted_assertion_unsupported` rather than half-handled. The IdP signs the assertion
+ *   and does not encrypt it; the POST travels over TLS.
  *
  * No DOCTYPE is accepted (no entity expansion of any kind). Nothing here logs an assertion, a
  * NameID or an attribute.
@@ -41,6 +52,10 @@ export const NS = {
 } as const;
 
 export const MAX_SAML_RESPONSE_BYTES = 256 * 1024;
+/** The oldest Response / assertion `IssueInstant` accepted (before the skew): the sign-in flow's
+ * own lifetime, so an assertion minted before the AuthnRequest it answers could not exist. */
+export const MAX_ASSERTION_AGE_MS = 10 * 60_000;
+const SAML_VERSION = "2.0";
 const SUCCESS = "urn:oasis:names:tc:SAML:2.0:status:Success";
 const BEARER = "urn:oasis:names:tc:SAML:2.0:cm:bearer";
 const ACCEPTED_SIGNATURE_ALGS = ["http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512"] as const;
@@ -196,6 +211,15 @@ function verifiedAssertionXml(xml: string, assertion: Element, certificates: rea
   throw new SamlError("saml_signature_invalid");
 }
 
+/** An `IssueInstant` that is present, not ahead of now and not older than the sign-in flow, each
+ * within the skew. */
+function checkIssueInstant(raw: string | null, nowMs: number, skewMs: number): void {
+  const at = instant(raw);
+  if (at === undefined) throw new SamlError("saml_malformed");
+  if (at - skewMs > nowMs) throw new SamlError("saml_not_yet_valid");
+  if (at + MAX_ASSERTION_AGE_MS + skewMs <= nowMs) throw new SamlError("saml_expired");
+}
+
 /** Validate a posted `SAMLResponse` (base64). Throws `SamlError` with a fixed code. */
 export function validateSamlResponse(samlResponseB64: string, p: SamlValidationParams): SamlAssertion {
   if (samlResponseB64.length > (MAX_SAML_RESPONSE_BYTES * 4) / 3 + 4) throw new SamlError("saml_too_large");
@@ -204,13 +228,21 @@ export function validateSamlResponse(samlResponseB64: string, p: SamlValidationP
   const doc = parseXml(xml);
   const root = doc.documentElement;
   if (root.namespaceURI !== NS.samlp || root.localName !== "Response") throw new SamlError("saml_malformed");
+  if (root.getAttribute("Version") !== SAML_VERSION) throw new SamlError("saml_malformed");
+  const skewMs = p.skewSecs * 1000;
+  // The issue instant of the Response (unsigned here, so it can only refuse, never admit).
+  checkIssueInstant(root.getAttribute("IssueInstant"), p.nowMs, skewMs);
+  const responseIssuers = children(root, NS.saml, "Issuer");
+  if (responseIssuers.length > 1 || (responseIssuers[0] && text(responseIssuers[0]) !== p.idpEntityId)) throw new SamlError("saml_issuer_mismatch");
   const status = child(child(root, NS.samlp, "Status"), NS.samlp, "StatusCode")?.getAttribute("Value");
   if (status !== SUCCESS) throw new SamlError("saml_status_not_success");
   const destination = root.getAttribute("Destination");
   if (destination && destination !== p.acsUrl) throw new SamlError("saml_destination_mismatch");
   const responseTo = root.getAttribute("InResponseTo");
   if (responseTo !== p.requestId) throw new SamlError("saml_in_response_to_mismatch");
-  if (doc.getElementsByTagNameNS(NS.saml, "EncryptedAssertion").length > 0) throw new SamlError("saml_encrypted_assertion_unsupported");
+  for (const encrypted of ["EncryptedAssertion", "EncryptedID", "EncryptedAttribute"]) {
+    if (doc.getElementsByTagNameNS(NS.saml, encrypted).length > 0) throw new SamlError("saml_encrypted_assertion_unsupported");
+  }
   const all = doc.getElementsByTagNameNS(NS.saml, "Assertion");
   const direct = children(root, NS.saml, "Assertion");
   if (all.length !== 1 || direct.length !== 1 || !direct[0]) throw new SamlError("saml_assertion_count");
@@ -219,7 +251,11 @@ export function validateSamlResponse(samlResponseB64: string, p: SamlValidationP
   // From here on, only the signed bytes are read.
   const a = parseXml(signedXml).documentElement;
   if (a.namespaceURI !== NS.saml || a.localName !== "Assertion" || a.getAttribute("ID") !== direct[0].getAttribute("ID")) throw new SamlError("saml_reference_mismatch");
-  const skewMs = p.skewSecs * 1000;
+  if (a.getAttribute("Version") !== SAML_VERSION) throw new SamlError("saml_malformed");
+  checkIssueInstant(a.getAttribute("IssueInstant"), p.nowMs, skewMs);
+  for (const name of ["Issuer", "Subject", "Conditions"]) {
+    if (children(a, NS.saml, name).length > 1) throw new SamlError("saml_malformed");
+  }
   const issuer = text(child(a, NS.saml, "Issuer"));
   if (issuer !== p.idpEntityId) throw new SamlError("saml_issuer_mismatch");
   const conditions = child(a, NS.saml, "Conditions");
@@ -238,17 +274,23 @@ export function validateSamlResponse(samlResponseB64: string, p: SamlValidationP
   if (confirmations.length === 0) throw new SamlError("saml_bearer_missing");
   let confirmedUntil: number | undefined;
   let recipientSeen = false;
+  let startsLater = false;
   for (const sc of confirmations) {
     const data = child(sc, NS.saml, "SubjectConfirmationData");
     if (!data || data.getAttribute("Recipient") !== p.acsUrl) continue;
     recipientSeen = true;
     if (data.getAttribute("InResponseTo") !== p.requestId) continue;
+    const from = instant(data.getAttribute("NotBefore"));
+    if (from !== undefined && from - skewMs > p.nowMs) {
+      startsLater = true;
+      continue;
+    }
     const until = instant(data.getAttribute("NotOnOrAfter"));
     if (until === undefined || until + skewMs <= p.nowMs) continue;
     confirmedUntil = until;
     break;
   }
-  if (confirmedUntil === undefined) throw new SamlError(recipientSeen ? "saml_expired" : "saml_recipient_mismatch");
+  if (confirmedUntil === undefined) throw new SamlError(startsLater ? "saml_not_yet_valid" : recipientSeen ? "saml_expired" : "saml_recipient_mismatch");
   const format = nameIdEl?.getAttribute("Format") ?? undefined;
   let email: string | undefined = format === "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress" && nameId.includes("@") ? nameId : undefined;
   if (!email) {

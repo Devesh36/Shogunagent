@@ -280,23 +280,21 @@ class _Core:
             body["thread_key"] = thread_key
         return body
 
-    def _accept_plan(self, value: Any, as_agent: str | None, check_addressee: bool) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def _accept_plan(self, value: Any, as_agent: str | None, check_addressee: bool) -> tuple[dict[str, Any], dict[str, Any], int]:
+        """Check a received handoff here first (no call for a bad one); the ``handoff.accept``
+        arguments and its ``Mcp-Quantity`` (the events the core will store)."""
         h = extract_handoff(value)
         receiver = as_agent or self.actor
         check_handoff(h, receiver if check_addressee else None, self.now_ms())
-        events = handoff_events(h)
-        calls = []
-        for part, i in enumerate(range(0, len(events), MAX_INGEST_ITEMS)):
-            calls.append({
-                "events": events[i:i + MAX_INGEST_ITEMS],
-                "actor": receiver,
-                "source": "handoff",
-                "namespace": "agent_scratch",
-                "thread_key": f"handoff:{h['handoff_id']}",
-                "idempotency_key": f"handoff:{h['handoff_id']}:{part}"[:128],
-                "metadata": {"handoff_id": h["handoff_id"], "from_agent": h.get("from_agent"), "to_agent": h.get("to_agent"), "expires_at": h.get("expires_at")},
-            })
-        return h, calls
+        args: dict[str, Any] = {"handoff": h, "actor": receiver}
+        if not check_addressee:
+            args["check_addressee"] = False
+        return h, args, len(handoff_events(h))
+
+    @staticmethod
+    def _accepted(h: dict[str, Any], payload: Any) -> dict[str, Any]:
+        result = payload.get("result") if isinstance(payload, dict) else None
+        return {"handoff": h, "accepted": result if isinstance(result, dict) else {}, "envelope": payload}
 
     @staticmethod
     def _action_from_payload(payload: Any) -> tuple[str, Any]:
@@ -438,9 +436,10 @@ class ShogunAgent(_Core):
         return {**(env.result if isinstance(env.result, dict) else {}), "envelope": env}
 
     def accept_handoff(self, value: Any, *, as_agent: str | None = None, check_addressee: bool = True) -> dict[str, Any]:
-        """Validate a received handoff and ingest it into YOUR ``agent_scratch`` namespace (never the world). Idempotent."""
-        h, calls = self._accept_plan(value, as_agent, check_addressee)
-        return {"handoff": h, "ingested": [self.ingest(**c) for c in calls]}
+        """``handoff.accept``: the core validates a received handoff and stores it in YOUR
+        ``agent_scratch`` namespace (never the world). Idempotent; metered per event stored."""
+        h, args, quantity = self._accept_plan(value, as_agent, check_addressee)
+        return self._accepted(h, self.call_tool("handoff.accept", args, quantity=quantity))
 
 
 class AsyncShogunAgent(_Core):
@@ -556,6 +555,6 @@ class AsyncShogunAgent(_Core):
         return {**(env.result if isinstance(env.result, dict) else {}), "envelope": env}
 
     async def accept_handoff(self, value: Any, *, as_agent: str | None = None, check_addressee: bool = True) -> dict[str, Any]:
-        h, calls = self._accept_plan(value, as_agent, check_addressee)
-        return {"handoff": h, "ingested": [await self.ingest(**c) for c in calls]}
+        h, args, quantity = self._accept_plan(value, as_agent, check_addressee)
+        return self._accepted(h, await self.call_tool("handoff.accept", args, quantity=quantity))
 

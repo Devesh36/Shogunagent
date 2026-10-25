@@ -95,7 +95,7 @@ export function agentCard(ctx: WellknownContext, skills: GeneratedSkills = AGENT
       handoff: {
         url: `${origin(ctx)}${HANDOFF_PATH}`, method: "POST", scope: "read", format: HANDOFF_FORMAT, schema: HANDOFF_SCHEMA_URL,
         a2a_part: { kind: "data", metadata: { schema: HANDOFF_SCHEMA_URL } },
-        accept: "Ingest a received handoff into your own agent_scratch namespace (SDK acceptHandoff / accept_handoff), never the principal's world.",
+        accept: "Accept a received handoff with the handoff.accept tool (SDK acceptHandoff / accept_handoff): the core stores it in your own agent_scratch namespace, never the principal's world.",
       },
     },
   };

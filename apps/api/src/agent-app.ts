@@ -15,12 +15,12 @@
  *   POST /v1/quote                       the exact cost of a call, nothing reserved [read]
  *   GET  /v1/receipts?since=             per-call receipts                         [read]
  *   POST /v1/receipts/:id/dispute        open a dispute                            [write]
- *   POST /v1/handoff                     an A2A state-of-work handoff (handoff.ts)  [read]
+ *   POST /v1/handoff                     an A2A state-of-work handoff, relayed to the core (handoff.ts) [read]
  *   ALL  /mcp                            the metered MCP proxy (metering.ts)       [by unit]
  *
  * Bodies are read only where the route's contract is JSON the gateway itself defines
- * (registration, caps, top-up, quote, dispute, the Stripe event); `/mcp` bodies are relayed
- * untouched and never parsed.
+ * (registration, caps, top-up, quote, dispute, the Stripe event); `/mcp` and `/v1/handoff` bodies
+ * are relayed untouched and never parsed.
  */
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -528,15 +528,9 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     }
   });
 
-  // --- A2A handoff (E16): the state of work for a task, built from one recall through the core ---
-  app.post(HANDOFF_PATH, requireKey(["read"]), bodyLimit({ maxSize: MAX_SMALL_BODY_BYTES, onError: bodyTooLarge }), async (c) => {
-    const p = principalOf(c);
-    return handleHandoff(c, p, await readJson(c), {
-      publicBaseUrl: deps.publicBaseUrl,
-      ...(deps.mcpUpstream ? { mcpUpstream: deps.mcpUpstream } : {}),
-      now,
-    });
-  });
+  // --- A2A handoff (E16, E35): the core assembles it; this route relays the body to the sidecar ---
+  app.post(HANDOFF_PATH, requireKey(["read"]), bodyLimit({ maxSize: MAX_SMALL_BODY_BYTES, onError: bodyTooLarge }), (c) =>
+    handleHandoff(c, principalOf(c), deps.mcpUpstream ? { mcpUpstream: deps.mcpUpstream } : {}));
 
   // --- E19 billing: statements, commits, adjustments, disputes, the Pro bundle link ---
   registerBillingRoutes(app, {

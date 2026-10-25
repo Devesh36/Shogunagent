@@ -126,6 +126,17 @@ pub(super) fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
                 level: Level::L1,
             },
         ),
+        // E35: the A2A handoff. `create` is a read that takes a body (a POST, like the recall);
+        // `accept` is an L1 write to the caller's own scratch.
+        ["v1", "handoff"] => method_is(method, Method::Post, Routed::Read { tool: Tool::HandoffCreate, id: None }),
+        ["v1", "handoff", "accept"] => method_is(
+            method,
+            Method::Post,
+            Routed::Write {
+                tool: Tool::HandoffAccept,
+                level: Level::L1,
+            },
+        ),
         ["v1", "memory", "recall"] => method_is(
             method,
             Method::Post,

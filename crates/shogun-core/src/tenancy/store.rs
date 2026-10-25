@@ -18,6 +18,24 @@ use super::{KeyProvider, PrincipalId, TenancyError};
 /// The file name inside a principal's directory, the same the desktop app uses.
 pub const STORE_FILE: &str = "memory.db";
 
+/// What a purge removed (E39). Both `false`: there was nothing to remove (an earlier purge, or a
+/// principal that never had a store) — a purge is idempotent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PurgeReport {
+    /// The principal's directory (its store, write-ahead log and any other file in it) existed.
+    pub store_removed: bool,
+    /// A key file the key provider owns (a KMS-wrapped data key) existed and was removed.
+    pub key_removed: bool,
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<bool, TenancyError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(TenancyError::Io(e)),
+    }
+}
+
 /// Whether the store may create and migrate a missing file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenPolicy {
@@ -219,6 +237,46 @@ impl PrincipalStore {
         lru.open.remove(principal).is_some()
     }
 
+    /// Remove `principal`'s store for good (E39, after a SCIM delete's grace period): close its
+    /// handle, then — holding the store's lock so no request can reopen it meanwhile — remove the
+    /// key file first (a KMS-wrapped data key: the store is unreadable from here on, even if
+    /// removing the rest fails), then the database and its write-ahead files, then the directory.
+    /// A request still holding the store refuses the purge with [`TenancyError::Busy`] (retry);
+    /// a principal with nothing on disk answers an empty report (idempotent). Never reads a row.
+    pub fn purge(&self, principal: &PrincipalId) -> Result<PurgeReport, TenancyError> {
+        let mut lru = self.lru.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(handle) = lru.open.get(principal) {
+            // One reference is the LRU's own; one `DbBackend` reference is the handle's own.
+            if Arc::strong_count(handle) > 1 || Arc::strong_count(&handle.backend) > 1 {
+                return Err(TenancyError::Busy);
+            }
+        }
+        lru.order.retain(|p| p != principal);
+        drop(lru.open.remove(principal));
+        self.keys.forget(principal);
+        let dir = self.root.join(principal.as_str());
+        let key_removed = match self.keys.key_file(principal) {
+            Some(path) => remove_file_if_exists(&path)?,
+            None => false,
+        };
+        let mut store_removed = false;
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            store_removed |= remove_file_if_exists(&dir.join(format!("{STORE_FILE}{suffix}")))?;
+        }
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => store_removed = true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(TenancyError::Io(e)),
+        }
+        // Make the removal durable before answering (best effort: not every filesystem syncs a
+        // directory).
+        if let Ok(root) = std::fs::File::open(&self.root) {
+            let _ = root.sync_all();
+        }
+        drop(lru);
+        Ok(PurgeReport { store_removed, key_removed })
+    }
+
     /// Drop every handle the store holds.
     pub fn close_all(&self) {
         let mut lru = self.lru.lock().unwrap_or_else(PoisonError::into_inner);
@@ -376,6 +434,32 @@ mod tests {
         creator.open(&real).unwrap();
         creator.close_all();
         assert!(store.open(&real).is_ok());
+    }
+
+    #[test]
+    fn a_purge_closes_the_handle_removes_the_files_and_is_idempotent() {
+        let root = TempRoot::new("purge");
+        let store = store(&root.0, 4);
+        let alice = PrincipalId::parse("alice").unwrap();
+        let bob = PrincipalId::parse("bob").unwrap();
+        store.open(&bob).unwrap();
+        let held = store.open(&alice).unwrap();
+        assert_eq!(held.db().people().len(), 0);
+        // A request in flight holds the backend: the purge waits for it.
+        let in_flight = held.memory_backend();
+        drop(held);
+        assert!(matches!(store.purge(&alice), Err(TenancyError::Busy)));
+        assert!(store.exists(&alice), "nothing was removed while busy");
+        drop(in_flight);
+        let report = store.purge(&alice).unwrap();
+        assert_eq!(report, PurgeReport { store_removed: true, key_removed: false });
+        assert!(!store.exists(&alice));
+        assert!(!root.0.join("alice").exists(), "the whole directory is gone");
+        assert_eq!(store.open_principals(), vec![bob.clone()], "only alice's handle was closed");
+        assert_eq!(store.live_handles(), 1);
+        // Again: nothing left, still a success.
+        assert_eq!(store.purge(&alice).unwrap(), PurgeReport { store_removed: false, key_removed: false });
+        assert!(store.exists(&bob), "another principal's store is untouched");
     }
 
     #[test]

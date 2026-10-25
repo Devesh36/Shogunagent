@@ -122,6 +122,10 @@ export interface AgentStore {
   createPrincipal(p: PrincipalRecord): Promise<void>;
   principal(principalId: string): Promise<PrincipalRecord | undefined>;
   insertKey(k: AgentKeyRecord): Promise<void>;
+  /** E39: insert unless a key with this id exists, atomically. True when this call inserted it; a
+   * key id derived from an idempotency key makes a retried issuance find the first key instead of
+   * minting a second. */
+  insertKeyOnce(k: AgentKeyRecord): Promise<boolean>;
   /** The candidate rows for a lookup prefix (the middleware verifies the hash of each). */
   keysByPrefix(prefix: string): Promise<AgentKeyRecord[]>;
   keyById(keyId: string): Promise<AgentKeyRecord | undefined>;
@@ -284,6 +288,14 @@ export class InMemoryAgentStore implements AgentStore {
 
   insertKey(k: AgentKeyRecord): Promise<void> {
     return this.enqueue(() => { this.keys.set(k.keyId, { ...k, scopes: [...k.scopes] }); });
+  }
+
+  insertKeyOnce(k: AgentKeyRecord): Promise<boolean> {
+    return this.enqueue(() => {
+      if (this.keys.has(k.keyId)) return false;
+      this.keys.set(k.keyId, { ...k, scopes: [...k.scopes] });
+      return true;
+    });
   }
 
   keysByPrefix(prefix: string): Promise<AgentKeyRecord[]> {

@@ -121,6 +121,14 @@ pub enum Tool {
     /// projection and the caller's scratch files. Writes to the caller's scratch edit it; writes
     /// elsewhere become `memory.ingest` events. Local, L1.
     MemoryFs,
+    /// The A2A state-of-work handoff for a task (E35): one budgeted recall mapped onto the typed
+    /// `shogunagent-handoff/v1` object (people, projects, commitments, open loops with band and
+    /// provenance). A read; free (invariant 10).
+    HandoffCreate,
+    /// Accept a received handoff into the caller's own `agent_scratch` namespace through the
+    /// `memory.ingest` path, under an idempotency key derived from the handoff id (E35). Local,
+    /// never the principal's world: L1 like `memory.ingest`.
+    HandoffAccept,
     /// Remote approvals (E15): the approvals this principal's agents queued, each as its redacted
     /// summary (kind, tier, recipient class, a masked preview, times, status). A read. Deciding is
     /// never a tool: a human decides on the approval page, in Slack, or with the operator's CLI.
@@ -473,6 +481,8 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryIngest,
     Tool::MemoryRecall,
     Tool::MemoryFs,
+    Tool::HandoffCreate,
+    Tool::HandoffAccept,
     Tool::ApprovalsList,
     Tool::ApprovalsGet,
     Tool::AuditList,
@@ -638,6 +648,8 @@ impl Tool {
             Tool::MemoryIngest => "memory.ingest",
             Tool::MemoryRecall => "memory.recall",
             Tool::MemoryFs => "memory.fs",
+            Tool::HandoffCreate => "handoff.create",
+            Tool::HandoffAccept => "handoff.accept",
             Tool::ApprovalsList => "approvals.list",
             Tool::ApprovalsGet => "approvals.get",
             Tool::AuditList => "audit.list",
@@ -887,6 +899,11 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         // `/memories` file operations (E6-T2): a view reads, a write edits the caller's own
         // scratch or records an ingest event — local and reversible, L1 like `memory.ingest`.
         Tool::MemoryFs => ApiLevel::Write(Level::L1),
+        // E35: the handoff object is one budgeted recall, reshaped: a read, free.
+        Tool::HandoffCreate => ApiLevel::Read,
+        // E35: accepting writes only the caller's own scratch, through the ingest path — L1 like
+        // `memory.ingest` and a scratch edit through `memory.fs`.
+        Tool::HandoffAccept => ApiLevel::Write(Level::L1),
         // Governance reads (E15 / E18): summaries, the audit trail, the grant list. Free reads.
         Tool::ApprovalsList | Tool::ApprovalsGet | Tool::AuditList | Tool::AclList => ApiLevel::Read,
         // Pausing narrows what SHOGUN reads and runs directly (L1). Ending the user's pause
@@ -1034,6 +1051,9 @@ pub enum ToolGroup {
     /// The `/memories` virtual filesystem (`memory.fs`, E6): the world model as files plus the
     /// caller's scratch files. Served by every build and listed by default (`all`).
     Files,
+    /// The A2A state-of-work handoff between agents (E35): `handoff.create` / `handoff.accept`.
+    /// Served by every build and listed by default (`all`).
+    Handoff,
     /// Governance (E15 / E18): remote approvals, the audit log and the access grants. Reads
     /// only; served by every build and listed by default (`all`).
     Governance,
@@ -1057,6 +1077,7 @@ pub const ALL_GROUPS: &[ToolGroup] = EVERY_GROUP;
 pub const ALL_GROUPS: &[ToolGroup] = &[
     ToolGroup::Core,
     ToolGroup::Files,
+    ToolGroup::Handoff,
     ToolGroup::Governance,
     ToolGroup::Import,
     ToolGroup::State,
@@ -1069,6 +1090,7 @@ pub const ALL_GROUPS: &[ToolGroup] = &[
 pub const EVERY_GROUP: &[ToolGroup] = &[
     ToolGroup::Core,
     ToolGroup::Files,
+    ToolGroup::Handoff,
     ToolGroup::Governance,
     ToolGroup::Import,
     ToolGroup::State,
@@ -1130,6 +1152,7 @@ impl ToolGroup {
             ToolGroup::Export => "export",
             ToolGroup::Translate => "translate",
             ToolGroup::Files => "files",
+            ToolGroup::Handoff => "handoff",
             ToolGroup::Governance => "governance",
             ToolGroup::Settings => "settings",
         }
@@ -1174,6 +1197,7 @@ pub fn tool_group(tool: Tool) -> ToolGroup {
         | Tool::ActionsExecute
         | Tool::ActionsStatus => ToolGroup::Core,
         Tool::MemoryFs => ToolGroup::Files,
+        Tool::HandoffCreate | Tool::HandoffAccept => ToolGroup::Handoff,
         Tool::ApprovalsList | Tool::ApprovalsGet | Tool::AuditList | Tool::AclList => ToolGroup::Governance,
         // Imports are user-reviewed flows (preview, then commit what the user chose) that write
         // to memory and carry the largest input schema; not an everyday mid-task tool.
@@ -2654,6 +2678,7 @@ mod tests {
                         | Tool::MemoryGetEvents
                         | Tool::MemoryReadSession
                         | Tool::MemoryRecall
+                        | Tool::HandoffCreate
                         | Tool::MemoryGetWrap
                         | Tool::CalendarUpcoming
                         | Tool::MemoryGetPeriods
@@ -2749,6 +2774,7 @@ mod tests {
                             | Tool::MemoryAppendNote
                             | Tool::MemoryIngest
                             | Tool::MemoryFs
+                            | Tool::HandoffAccept
                             | Tool::CaptureSetPaused
                             | Tool::LessonsSetActive
                             | Tool::StateDisputesResolve

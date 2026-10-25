@@ -953,6 +953,16 @@ impl<B: MemoryBackend> McpServer<B> {
             };
         }
 
+        // handoff.create / handoff.accept (E35): one parser, one backend path and one envelope
+        // for every face (`handoff_api`).
+        if crate::handoff_api::is_handoff_tool(tool) {
+            return match crate::handoff_api::serve(tool, &args, &self.backend, (self.clock)()) {
+                Ok(text) => result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": false })),
+                Err(crate::ingest_api::Refusal::BadArguments(message)) => error(id, -32602, &message),
+                Err(crate::ingest_api::Refusal::Unavailable(code)) => error(id, -32000, code),
+            };
+        }
+
         // state.export in export format v1 / v2 (E7, E27): an additive `format` argument; without it the
         // tool answers the Markdown export below, as before.
         if tool == Tool::StateExport && crate::export_api::wants_jsonl(&args) {
@@ -2223,6 +2233,8 @@ fn tool_title(tool: Tool) -> &'static str {
         Tool::MemoryIngest => "Ingest events or turns",
         Tool::MemoryRecall => "Recall within a budget",
         Tool::MemoryFs => "Memory as files",
+        Tool::HandoffCreate => "Hand off the state of work",
+        Tool::HandoffAccept => "Accept a handoff",
         Tool::ApprovalsList => "List approvals",
         Tool::ApprovalsGet => "Get an approval",
         Tool::AuditList => "Read the audit log",
@@ -2398,6 +2410,8 @@ pub fn tool_descriptor(tool: Tool) -> Value {
         Tool::MemoryIngest => ("Append events or turns to the event log under an idempotency key (L1).", crate::ingest_api::ingest_schema()),
         Tool::MemoryRecall => ("What memory holds on a question, within a token budget.", crate::ingest_api::recall_schema()),
         Tool::MemoryFs => (crate::memfs_tool::DESCRIPTION, crate::memfs_tool::schema()),
+        Tool::HandoffCreate => (crate::handoff_api::CREATE_DESCRIPTION, crate::handoff_api::create_schema()),
+        Tool::HandoffAccept => (crate::handoff_api::ACCEPT_DESCRIPTION, crate::handoff_api::accept_schema()),
         Tool::ApprovalsList => ("The L2/L3 approvals queued for this principal, newest first, each as a redacted summary: kind, tier, recipient class (never the recipient), a masked one-line preview, created/expires times, status and who decided. Use it to see what is waiting on a human; poll one with actions.status. Never approves: a human decides on the approval page, in Slack or with the operator's CLI. Free read.", json!({})),
         Tool::ApprovalsGet => ("One approval's redacted summary by approval_id (kind, tier, recipient class, masked preview, times, status, decision). Not the full body, and never a way to approve. Free read.", json!({"approval_id":{"type":"integer","minimum":1}})),
         Tool::AuditList => ("The principal's audit log, oldest first: one record per write and per approval decision with actor, principal, tool or route, tier, outcome, time and request id. Never bodies. Filter with since_ms and limit (1-500). Free read.", json!({"since_ms":{"type":"integer"},"limit":{"type":"integer","minimum":1,"maximum":500}})),
@@ -3132,6 +3146,14 @@ Records an item was linked to are not touched. Only delete what the user asked t
     }
     if tool == Tool::MemoryFs {
         descriptor["inputSchema"]["required"] = json!(["command"]);
+        descriptor["inputSchema"]["additionalProperties"] = json!(false);
+    }
+    if tool == Tool::HandoffCreate {
+        descriptor["inputSchema"]["required"] = json!(["task", "to_agent"]);
+        descriptor["inputSchema"]["additionalProperties"] = json!(false);
+    }
+    if tool == Tool::HandoffAccept {
+        descriptor["inputSchema"]["required"] = json!(["handoff", "actor"]);
         descriptor["inputSchema"]["additionalProperties"] = json!(false);
     }
     // The core set's descriptions are one agent-facing table (E4-T4, `core_tools::CORE`).

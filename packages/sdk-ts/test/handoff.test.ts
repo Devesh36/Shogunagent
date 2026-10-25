@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { HANDOFF_FORMAT, HANDOFF_SCHEMA_URL, HandoffError, ShogunAgent, type Handoff } from "../src/index.js";
+import { HANDOFF_FORMAT, HANDOFF_SCHEMA_URL, HandoffError, ShogunAgent, handoffEvents, type Handoff } from "../src/index.js";
 import { FakeFetch, memoryFake } from "./fake-fetch.js";
 
 const NOW = Date.parse("2026-10-25T12:00:00Z");
@@ -45,21 +45,21 @@ describe("handoff()", () => {
 });
 
 describe("acceptHandoff()", () => {
-  it("ingests into the receiver's agent_scratch (never world), idempotently, keeping possibly:", async () => {
+  it("sends handoff.accept for the receiver; the core stores it in scratch, and a repeat replays", async () => {
     const fake = memoryFake();
     const c = new ShogunAgent({ fetch: fake.fetch, actor: "agent:writer", now: () => NOW });
     const part = { kind: "data", data: sample(), metadata: { schema: HANDOFF_SCHEMA_URL } };
     const first = await c.acceptHandoff({ kind: "message", role: "agent", parts: [{ kind: "text", text: "hi" }, part] });
-    await c.acceptHandoff(part);
-    const calls = fake.toolCalls("memory.ingest").map((x) => x.body.params.arguments);
+    const again = await c.acceptHandoff(part);
+    const calls = fake.toolCalls("handoff.accept");
     expect(calls).toHaveLength(2);
-    expect(calls[0]).toMatchObject({ namespace: "agent_scratch", actor: "agent:writer", source: "handoff", thread_key: "handoff:hof_1", idempotency_key: "handoff:hof_1:0" });
-    expect(calls[1].idempotency_key).toBe(calls[0].idempotency_key);
-    const contents = (calls[0].events as Array<{ content: string }>).map((e) => e.content);
-    expect(contents[0]).toContain("Draft the Heron rollout note");
-    expect(contents.some((t) => t.startsWith("possibly: open loop: waiting on budget numbers"))).toBe(true);
-    expect(contents.some((t) => t.startsWith("commitment: send the rollout plan by Friday") && t.includes("(event 481)"))).toBe(true);
+    expect(calls[0]!.body.params.arguments).toEqual({ handoff: sample(), actor: "agent:writer" });
+    // One event for the task plus one per row: the reservation the gateway holds.
+    expect(calls[0]!.headers["mcp-quantity"]).toBe("4");
+    expect(fake.toolCalls("memory.ingest")).toHaveLength(0);
     expect(first.handoff.handoff_id).toBe("hof_1");
+    expect(first.accepted).toMatchObject({ namespace: "agent_scratch", replayed: false, thread_key: "handoff:hof_1" });
+    expect(again.accepted.replayed).toBe(true);
   });
 
   it("refuses an expired handoff, one for another agent, and a non-handoff, before any network call", async () => {
@@ -71,14 +71,13 @@ describe("acceptHandoff()", () => {
     expect(fake.calls).toHaveLength(0);
     await c.acceptHandoff(sample({ to_agent: "agent:other" }), { checkAddressee: false });
     expect(fake.calls).toHaveLength(1);
+    expect(fake.toolCalls("handoff.accept")[0]!.body.params.arguments.check_addressee).toBe(false);
   });
 
-  it("splits a handoff larger than one ingest", async () => {
-    const fake = memoryFake();
-    const c = new ShogunAgent({ fetch: fake.fetch, actor: "agent:writer", now: () => NOW });
-    const facts = Array.from({ length: 250 }, (_, i) => ({ type: "fact" as const, kind: "commitment" as const, id: i + 1, text: `item ${i}`, confidence: 0.9, band: "high" as const, provenance: [{ event_id: i + 1, quote: null }] }));
-    const r = await c.acceptHandoff(sample({ facts }));
-    expect(r.ingested).toHaveLength(2);
-    expect(fake.toolCalls("memory.ingest").map((x) => x.body.params.arguments.idempotency_key)).toEqual(["handoff:hof_1:0", "handoff:hof_1:1"]);
+  it("handoffEvents lists what the core stores: the task, then each row, Medium kept as possibly:", () => {
+    const contents = handoffEvents(sample()).map((e) => e.content);
+    expect(contents[0]).toContain("Draft the Heron rollout note");
+    expect(contents.some((t) => t.startsWith("possibly: open loop: waiting on budget numbers"))).toBe(true);
+    expect(contents.some((t) => t.startsWith("commitment: send the rollout plan by Friday") && t.includes("(event 481)"))).toBe(true);
   });
 });

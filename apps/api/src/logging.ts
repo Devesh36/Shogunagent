@@ -54,8 +54,8 @@ export interface LogVars {
     // without the core's `Mcp-Quantity` (settled at 0 — a sidecar older than the contract).
     | "wrong_shard" | "settle_quantity_missing"
     | "stripe_unavailable" | "stripe_failure" | "topup_session_created" | "topup_credited" | "topup_duplicate" | "webhook_rejected"
-    // `POST /v1/handoff` (handoff.ts, plan E16).
-    | "handoff_built"
+    // `POST /v1/handoff` (handoff.ts, plan E16 / E35): relayed to the core, which assembles it.
+    | "handoff_relayed"
     // E19 billing (billing/routes.ts, the Stripe webhook): fixed words.
     | "statement_closed" | "commit_created" | "adjustment_applied" | "refund_debited" | "dispute_resolved" | "licence_linked" | "topup_expired"
     // E3-T2 OAuth (oauth/app.ts): fixed words, never a client id, a code or a token.
@@ -72,7 +72,7 @@ export interface LogVars {
     | "region_refused" | "tenant_directory_unavailable" | "tenant_created" | "tenant_updated" | "principal_attached" | "tenant_admin_added"
     | "scim_token_rotated" | "sso_login_started" | "sso_login_succeeded" | "sso_login_refused" | "saml_replay" | "admin_session_rejected"
     | "scim_rejected" | "scim_user_created" | "scim_user_updated" | "scim_user_deactivated" | "scim_user_deleted" | "scim_group_synced"
-    | "sidecar_unavailable" | "audit_export_streamed" | "oauth_sso_required" | "member_key_issued";
+    | "sidecar_unavailable" | "audit_export_streamed" | "oauth_sso_required" | "member_key_issued" | "member_key_replayed";
   /** Server-chosen provider and model of the accepted batch (ids, not content). */
   relayLogModel?: string;
   /** License id (an opaque token id, not user content). */

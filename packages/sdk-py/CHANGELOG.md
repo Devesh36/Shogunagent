@@ -6,6 +6,12 @@ Format and rules: `docs/release.md` (Keep a Changelog sections, SemVer, newest f
 
 ## Unreleased
 
+### Changed
+
+- `accept_handoff()` calls the core's `handoff.accept` (E35) instead of assembling `memory.ingest`
+  calls itself, with `Mcp-Quantity` set to the events the core will store. It returns
+  `{"handoff", "accepted", "envelope"}` in place of `{"handoff", "ingested"}`.
+
 ### Fixed
 
 - LangGraph adapter: the wrapped node's `config` parameter is annotated `Optional[RunnableConfig]`,

@@ -49,6 +49,20 @@ import type { AdmitRefusal, AgentPrincipal } from "./agent-keys.js";
 
 /** The sidecar's transport path. */
 export const SIDECAR_MCP_PATH = "/mcp";
+/** The sidecar paths the relay serves: the MCP transport, and the REST handoff route whose object
+ * the core assembles (E35). The request's own path picks one; anything else goes to `/mcp`. */
+export const SIDECAR_PATHS: readonly string[] = Object.freeze([SIDECAR_MCP_PATH, "/v1/handoff"]);
+
+/** The sidecar path for `request`: its own path when the relay serves it, else `/mcp`. */
+export function sidecarPathOf(request: Request): string {
+  let path = SIDECAR_MCP_PATH;
+  try {
+    path = new URL(request.url).pathname;
+  } catch {
+    return SIDECAR_MCP_PATH;
+  }
+  return SIDECAR_PATHS.includes(path) ? path : SIDECAR_MCP_PATH;
+}
 /** How long the sidecar may take to send its reply headers. The body is not under this deadline. */
 export const SIDECAR_HEADERS_TIMEOUT_MS = 30_000;
 /** The derived bearer's version tag and MAC context. */
@@ -171,7 +185,7 @@ const jsonReply = (status: number, code: string, message: string, nextAction: st
   new Response(JSON.stringify({ error: { code, message, next_action: nextAction } }), { status, headers: { "content-type": "application/json", "cache-control": "no-store", ...extra } });
 
 export function createMcpRelay(config: McpRelayConfig, fetchFn: FetchFn = (input, init) => fetch(input, init), headersTimeoutMs = SIDECAR_HEADERS_TIMEOUT_MS): McpRelay {
-  const endpoint = `${config.url.replace(/\/+$/, "")}${SIDECAR_MCP_PATH}`;
+  const base = config.url.replace(/\/+$/, "");
   const bearerFor = (p: AgentPrincipal): string | undefined =>
     config.tokens?.get(p.principalId) ?? (config.bearerSecret ? derivedSidecarBearer(config.bearerSecret, p) : undefined);
 
@@ -216,7 +230,7 @@ export function createMcpRelay(config: McpRelayConfig, fetchFn: FetchFn = (input
           redirect: "manual",
           ...(hasBody ? { body: request.body, duplex: "half" } : {}),
         };
-        reply = await fetchFn(endpoint, init);
+        reply = await fetchFn(`${base}${sidecarPathOf(request)}`, init);
       } finally {
         clearTimeout(timer);
       }

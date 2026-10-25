@@ -629,6 +629,27 @@ fn parse_command(positionals: &[String]) -> Result<Command, CliError> {
             shogun_mcp::memfs_tool::parse(&body).map_err(CliError::BadInput)?;
             Ok(Command::Fs { body: body.to_string() })
         }
+        // E35: the A2A handoff, one JSON object each, validated by the shared parser.
+        "handoff" => {
+            let sub = rest.first().map(String::as_str);
+            let raw = rest.get(1..).and_then(join).ok_or(CliError::MissingArgument("<json>"));
+            match sub {
+                Some("create") => {
+                    let body: serde_json::Value = serde_json::from_str(&raw?)
+                        .map_err(|_| CliError::BadInput("handoff create takes one JSON object".into()))?;
+                    shogun_mcp::handoff_api::create_request(&body).map_err(CliError::BadInput)?;
+                    Ok(Command::HandoffCreate { body: body.to_string() })
+                }
+                Some("accept") => {
+                    let body: serde_json::Value = serde_json::from_str(&raw?)
+                        .map_err(|_| CliError::BadInput("handoff accept takes one JSON object".into()))?;
+                    shogun_mcp::handoff_api::accept_request(&body, i64::MIN).map_err(CliError::BadInput)?;
+                    Ok(Command::HandoffAccept { body: body.to_string() })
+                }
+                Some(other) => Err(CliError::UnknownSubcommand { command: "handoff", got: other.to_string() }),
+                None => Err(CliError::MissingArgument("create|accept")),
+            }
+        }
         "recall" => {
             let mut args = serde_json::Map::new();
             let mut words = Vec::new();
@@ -2390,6 +2411,26 @@ mod tests {
         assert!(parse(&v(&["acl", "grant", r#"{"grantee":"agent:a","agent":"a"}"#])).is_err());
         let (_, c) = call(&["acl", "team", r#"{"tenant":"acme","team":"ops","members":["alice"]}"#]);
         assert_eq!((c.method, c.path.as_str()), ("POST", "/v1/teams"));
+    }
+
+    /// E35: `shogun handoff create|accept <json>` are `handoff.create` / `handoff.accept` on the
+    /// same REST routes, validated by the shared parser before anything is sent.
+    #[test]
+    fn handoff_commands_post_the_shared_body() {
+        let inv = parse(&v(&["handoff", "create", r#"{"task":"Draft the note","to_agent":"agent:writer"}"#])).unwrap();
+        assert_eq!(inv.command.tool(), Some(shogun_mcp::memory_api::Tool::HandoffCreate));
+        let call = crate::wire::to_call(&inv.command, false).unwrap();
+        assert_eq!((call.method, call.path.as_str()), ("POST", "/v1/handoff"));
+        let handoff = r#"{"format":"shogunagent-handoff/v1","handoff_id":"hof_12345678-abcd","created_at":1,"expires_at":2,"from_agent":"agent:p","to_agent":"agent:w","task":{"summary":"x","query":"x","thread_key":null},"entities":[],"facts":[],"truncated":false}"#;
+        let accept = format!(r#"{{"handoff":{handoff},"actor":"agent:w"}}"#);
+        let inv = parse(&v(&["handoff", "accept", &accept])).unwrap();
+        assert_eq!(inv.command.tool(), Some(shogun_mcp::memory_api::Tool::HandoffAccept));
+        let call = crate::wire::to_call(&inv.command, false).unwrap();
+        assert_eq!((call.method, call.path.as_str()), ("POST", "/v1/handoff/accept"));
+        assert!(parse(&v(&["handoff", "create", r#"{"to_agent":"agent:w"}"#])).is_err());
+        assert!(parse(&v(&["handoff", "accept", r#"{"handoff":{},"actor":"agent:w"}"#])).is_err());
+        assert!(parse(&v(&["handoff", "send", "{}"])).is_err());
+        assert!(parse(&v(&["handoff"])).is_err());
     }
 
     /// E6-T2: `shogun fs <json>` is `memory.fs`, validated by the shared parser before it is sent.

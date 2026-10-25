@@ -47,7 +47,7 @@ pub use import::{import_single_user_store, ImportReport};
 pub use key_provider::{provider_from_env, EnvKeyProvider, KeyProvider, KeyProviderKind, KmsKeyProvider};
 pub use principal::PrincipalId;
 pub use resolver::{PrincipalResolver, ResolvedPrincipal, TokenPrincipalMap};
-pub use store::{OpenPolicy, OpenPrincipal, PrincipalStore};
+pub use store::{OpenPolicy, OpenPrincipal, PrincipalStore, PurgeReport};
 pub use team::{Team, TeamRegistry};
 
 /// What can go wrong around a principal's store. Never carries a key or a row.
@@ -87,4 +87,7 @@ pub enum TenancyError {
     SourceInUse,
     #[error("invalid principal token map: {0}")]
     InvalidTokenMap(&'static str),
+    /// A request still holds the principal's store open; a purge waits for it (E39).
+    #[error("the principal's store is in use by a request in flight; retry shortly")]
+    Busy,
 }

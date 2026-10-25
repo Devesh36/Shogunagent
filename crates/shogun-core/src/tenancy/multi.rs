@@ -101,6 +101,43 @@ impl BackendResolver for MultiBackends {
         Some(self.teams.to_json())
     }
 
+    /// E39: see [`BackendResolver::purge_principal`]. The purge log is
+    /// `<root>/principal-purges.jsonl` (a principal id cannot contain `.`, so it never collides
+    /// with a principal's directory): one line per purge with the principal id, what was removed,
+    /// the time and the request id. Never a row of the store.
+    fn purge_principal(&self, principal: &str, request_id: &str, now_ms: i64) -> Result<serde_json::Value, (u16, String)> {
+        let id = PrincipalId::parse(principal).map_err(|_| {
+            (400, serde_json::json!({ "error": "invalid_principal", "message": super::TenancyError::InvalidPrincipalId.to_string(), "next_action": "fix_input" }).to_string())
+        })?;
+        let report = match self.store.purge(&id) {
+            Ok(report) => report,
+            Err(super::TenancyError::Busy) => {
+                return Err((
+                    409,
+                    serde_json::json!({ "error": "principal_busy", "message": super::TenancyError::Busy.to_string(), "next_action": "retry_after" }).to_string(),
+                ))
+            }
+            Err(e) => return Err(unavailable(&e)),
+        };
+        let left_teams = self.teams.remove_member(&id).map_err(|e| unavailable(&e))?;
+        let record = serde_json::json!({
+            "ts_ms": now_ms,
+            "principal": id.as_str(),
+            "store_removed": report.store_removed,
+            "key_removed": report.key_removed,
+            "left_teams": left_teams,
+            "request_id": request_id,
+        });
+        append_purge_log(self.store.root(), &record).map_err(|e| unavailable(&super::TenancyError::Io(e)))?;
+        Ok(serde_json::json!({
+            "principal": id.as_str(),
+            "purged": report.store_removed || report.key_removed,
+            "store_removed": report.store_removed,
+            "key_removed": report.key_removed,
+            "left_teams": left_teams,
+        }))
+    }
+
     fn set_team(&self, tenant: &str, team: &str, members: &[String]) -> Result<serde_json::Value, (u16, String)> {
         self.teams
             .set(tenant, team, members)
@@ -118,6 +155,17 @@ impl BackendResolver for MultiBackends {
                 )
             })
     }
+}
+
+/// The operator's purge log under the multi-principal root (E39).
+pub const PURGE_LOG: &str = "principal-purges.jsonl";
+
+/// Append one purge record and sync it: the record outlives the store it describes.
+fn append_purge_log(root: &std::path::Path, record: &serde_json::Value) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(root.join(PURGE_LOG))?;
+    file.write_all(format!("{record}\n").as_bytes())?;
+    file.sync_all()
 }
 
 /// The placeholder [`AppState::new`] takes in multi mode. Never consulted: every memory route

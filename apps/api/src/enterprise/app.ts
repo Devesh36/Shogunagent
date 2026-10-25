@@ -21,7 +21,9 @@
  * Tenant admin routes (the admin session cookie):
  *   GET  /v1/tenant/me                       the signed-in admin and the tenant
  *   GET  /v1/tenant/members                  member principals with their SCIM state
- *   POST /v1/tenant/members/{id}/keys        issue an agent key for a member (fills the key slot)
+ *   POST /v1/tenant/members/{id}/keys        issue an agent key for a member (fills the key slot);
+ *                                            optional Idempotency-Key: a retry answers the same key
+ *                                            reference (never the secret again)
  *   GET  /v1/tenant/audit/export             every member's sidecar audit export, concatenated
  *   POST /v1/tenant/logout                   end the session
  *
@@ -41,7 +43,7 @@ import { createPublicKey, randomUUID } from "node:crypto";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { bodyLimit } from "hono/body-limit";
 
-import { DEFAULT_PBKDF2_ITERATIONS, agentError, agentPrincipalOf, generateAgentKey, hashAgentKey, type AgentPrincipal, type AgentScope, type AgentVars } from "../agent-keys.js";
+import { DEFAULT_PBKDF2_ITERATIONS, agentError, agentPrincipalOf, generateAgentKey, hashAgentKey, type AgentKeyRecord, type AgentPrincipal, type AgentScope, type AgentVars } from "../agent-keys.js";
 import type { AgentStore } from "../agent-store.js";
 import type { LogFn } from "../logging.js";
 import type { ResolveHost } from "../oauth/cimd.js";
@@ -640,6 +642,8 @@ export function createEnterpriseApp(deps: EnterpriseAppDeps): Hono<{ Variables: 
     const principalId = c.req.param("id");
     const body = (c.req.header("content-length") === "0" ? {} : await readJson(c)) ?? {};
     const requested = Array.isArray(body.scopes) ? body.scopes : [...MEMBER_SCOPES];
+    const idem = c.req.header("idempotency-key")?.trim();
+    if (idem !== undefined && (idem.length === 0 || idem.length > 255)) return agentError(c, 400, "invalid_idempotency_key", "Idempotency-Key must be 1 to 255 characters.");
     if (requested.length === 0 || !requested.every((s): s is AgentScope => typeof s === "string" && (MEMBER_SCOPES as readonly string[]).includes(s))) {
       return agentError(c, 400, "invalid_scopes", "scopes must be a non-empty subset of read, write, run (admin is never issued here).");
     }
@@ -648,16 +652,42 @@ export function createEnterpriseApp(deps: EnterpriseAppDeps): Hono<{ Variables: 
       const u = await deps.store.user(tenant.tenantId, principalId);
       if (u && (!u.active || u.deletedAt !== undefined)) return agentError(c, 409, "member_inactive", "This member is deactivated in your identity provider. Reactivate it there first.");
       const at = nowMs();
-      const keyId = `ak_${randomUUID()}`;
-      const { key, prefix } = generateAgentKey("live");
       const scopes = [...new Set(requested)] as AgentScope[];
-      await deps.agentStore.insertKey({
+      // E39: with an Idempotency-Key the key id derives from (tenant, member, key), so a retried
+      // request finds the key it already issued instead of minting a second. The secret is shown
+      // only by the call that created the key; a replay answers its reference, never the secret.
+      const keyId = idem !== undefined ? memberKeyId(tenant.tenantId, principalId, idem) : `ak_${randomUUID()}`;
+      const replay = async (existing: AgentKeyRecord): Promise<Response> => {
+        if ([...existing.scopes].sort().join(",") !== [...scopes].sort().join(",")) {
+          return agentError(c, 409, "idempotency_key_reused", "This Idempotency-Key already issued a key with other scopes. Use a new key for a different request.", "fix_input");
+        }
+        c.set("relayLogAgentKey", keyId);
+        c.set("relayLogEvent", "member_key_replayed");
+        return c.json({
+          key: null, key_id: keyId, principal_id: principalId, tenant_id: tenant.tenantId, scopes: existing.scopes,
+          expires_at: existing.expiresAt !== undefined ? new Date(existing.expiresAt).toISOString() : null, created: false,
+          revoked: existing.revokedAt !== undefined,
+          note: "Same Idempotency-Key: the key issued before. Its secret is shown only once; if it was lost, revoke it with POST /v1/keys/{id}/revoke and issue a new one with a new Idempotency-Key.",
+        }, 200, { "cache-control": "no-store" });
+      };
+      if (idem !== undefined) {
+        const existing = await deps.agentStore.keyById(keyId);
+        if (existing) return replay(existing);
+      }
+      const { key, prefix } = generateAgentKey("live");
+      const inserted = await deps.agentStore.insertKeyOnce({
         keyId, prefix, hash: await hashAgentKey(key, deps.keyIterations ?? DEFAULT_PBKDF2_ITERATIONS), mode: "live",
         principalId, tenantId: tenant.tenantId, scopes, createdAt: at, expiresAt: at + MEMBER_KEY_TTL_MS,
       });
+      if (!inserted) {
+        // A concurrent retry with the same Idempotency-Key won: answer its key, not this secret.
+        const existing = await deps.agentStore.keyById(keyId);
+        if (!existing) return storeFailure(c);
+        return replay(existing);
+      }
       c.set("relayLogAgentKey", keyId);
       c.set("relayLogEvent", "member_key_issued");
-      return c.json({ key, key_id: keyId, principal_id: principalId, tenant_id: tenant.tenantId, scopes, expires_at: new Date(at + MEMBER_KEY_TTL_MS).toISOString(), note: "Shown once. Hand it to the member's agent; revoke it with POST /v1/keys/{id}/revoke." }, 201, { "cache-control": "no-store" });
+      return c.json({ key, key_id: keyId, principal_id: principalId, tenant_id: tenant.tenantId, scopes, expires_at: new Date(at + MEMBER_KEY_TTL_MS).toISOString(), created: true, note: "Shown once. Hand it to the member's agent; revoke it with POST /v1/keys/{id}/revoke." }, 201, { "cache-control": "no-store" });
     } catch {
       return storeFailure(c);
     }
@@ -755,6 +785,14 @@ export function auditExportStream(sidecar: EnterpriseSidecar, tenantId: string, 
       await reader?.cancel().catch(() => undefined);
     },
   });
+}
+
+/** E39: the key id a member key issued under `idem` gets: `ak_` and a UUID-shaped SHA-256 of
+ * (tenant, member, Idempotency-Key), so the same request always names the same key and two
+ * tenants or members never share one. */
+export function memberKeyId(tenantId: string, principalId: string, idem: string): string {
+  const h = sha256Hex(`shogun/member-key/v1\n${tenantId}\n${principalId}\n${idem}`);
+  return `ak_${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
 /** The sweep's enterprise jobs: expire SAML replay rows, and purge the stores of SCIM-deleted

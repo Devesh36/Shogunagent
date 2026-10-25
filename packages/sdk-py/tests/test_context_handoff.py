@@ -7,7 +7,7 @@ import pytest
 from conftest import Fake, memory_fake, recall_payload
 from shogunagent import (
     CONTEXT_CLOSE, CONTEXT_OPEN, HANDOFF_FORMAT, HANDOFF_SCHEMA_URL, HandoffError, RecallResult, context_block, escape_context,
-    replace_context, strip_context, turn_idempotency_key,
+    handoff_events, replace_context, strip_context, turn_idempotency_key,
 )
 
 RECALL = RecallResult.from_payload(recall_payload())
@@ -69,20 +69,21 @@ def test_handoff_request(fake: Fake) -> None:
     assert r["handoff"]["format"] == HANDOFF_FORMAT and r["a2a"]["part"]["metadata"]["schema"] == HANDOFF_SCHEMA_URL
 
 
-def test_accept_handoff_into_scratch_idempotently() -> None:
+def test_accept_handoff_sends_handoff_accept_and_replays() -> None:
     fake = memory_fake()
     c = fake.client()
     part = {"kind": "data", "data": sample(), "metadata": {"schema": HANDOFF_SCHEMA_URL}}
-    c.accept_handoff({"kind": "message", "role": "agent", "parts": [{"kind": "text", "text": "hi"}, part]})
+    first = c.accept_handoff({"kind": "message", "role": "agent", "parts": [{"kind": "text", "text": "hi"}, part]})
     second = c.accept_handoff(part)
-    calls = [x.body["params"]["arguments"] for x in fake.tool_calls("memory.ingest")]
-    assert len(calls) == 2
-    assert calls[0]["namespace"] == "agent_scratch" and calls[0]["actor"] == "agent:test" and calls[0]["source"] == "handoff"
-    assert calls[0]["thread_key"] == "handoff:hof_1" and calls[0]["idempotency_key"] == calls[1]["idempotency_key"] == "handoff:hof_1:0"
-    contents = [e["content"] for e in calls[0]["events"]]
+    calls = fake.tool_calls("handoff.accept")
+    assert len(calls) == 2 and fake.tool_calls("memory.ingest") == []
+    assert calls[0].body["params"]["arguments"] == {"handoff": sample(), "actor": "agent:test"}
+    assert calls[0].headers["mcp-quantity"] == str(len(handoff_events(sample())))
+    assert first["accepted"]["namespace"] == "agent_scratch" and first["accepted"]["replayed"] is False
+    assert second["accepted"]["replayed"] is True
+    contents = [e["content"] for e in handoff_events(sample())]
     assert any(t.startswith("possibly: open loop: waiting on budget numbers") for t in contents)
     assert any(t.startswith("commitment: send the rollout plan by Friday") and "(event 481)" in t for t in contents)
-    assert second["ingested"][0].replayed is True
 
 
 def test_accept_handoff_refusals() -> None:

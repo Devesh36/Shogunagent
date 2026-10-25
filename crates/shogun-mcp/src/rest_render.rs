@@ -321,6 +321,9 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
     if let Some(response) = memory_fs_response(&routed, req, backend) {
         return response;
     }
+    if let Some(response) = handoff_response(&routed, req, backend) {
+        return response;
+    }
     if let Some(response) = governance_response(&routed, req, backend) {
         return response;
     }
@@ -975,6 +978,40 @@ fn memory_fs_response<B: MemoryBackend + ?Sized>(
         }
         Err(crate::ingest_api::Refusal::Unavailable(code)) => {
             (503, serde_json::json!({ "error": code }).to_string())
+        }
+    })
+}
+
+/// The A2A handoff on REST (E35): `POST /v1/handoff` (`handoff.create`, a read with a body) and
+/// `POST /v1/handoff/accept` (`handoff.accept`, an L1 write to the caller's scratch), the MCP
+/// arguments as the body. One parser, one backend path and one envelope with MCP and the CLI
+/// ([`crate::handoff_api::serve`]); a refusal names its code, message and `next_action`. `None`
+/// for every other route.
+fn handoff_response<B: MemoryBackend + ?Sized>(
+    routed: &Routed,
+    req: &RestRequest,
+    backend: &B,
+) -> Option<(u16, String)> {
+    let tool = match routed {
+        Routed::Read { tool, .. } | Routed::Write { tool, .. } if crate::handoff_api::is_handoff_tool(*tool) => *tool,
+        _ => return None,
+    };
+    let args = serde_json::from_str::<serde_json::Value>(req.body.as_deref().unwrap_or("{}"))
+        .unwrap_or(serde_json::Value::Null);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0);
+    Some(match crate::handoff_api::serve(tool, &args, backend, now_ms) {
+        Ok(text) => (200, text),
+        Err(crate::ingest_api::Refusal::BadArguments(message)) => {
+            let code = message.split(':').next().unwrap_or("invalid_request").to_string();
+            let status = if code == "handoff_not_for_you" { 403 } else { 400 };
+            let next = crate::handoff_api::refusal_next_action(&code);
+            (status, serde_json::json!({ "error": code, "message": message, "next_action": next }).to_string())
+        }
+        Err(crate::ingest_api::Refusal::Unavailable(code)) => {
+            (503, serde_json::json!({ "error": code, "next_action": "retry_after" }).to_string())
         }
     })
 }
