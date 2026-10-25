@@ -72,7 +72,7 @@ export interface LogVars {
     | "region_refused" | "tenant_directory_unavailable" | "tenant_created" | "tenant_updated" | "principal_attached" | "tenant_admin_added"
     | "scim_token_rotated" | "sso_login_started" | "sso_login_succeeded" | "sso_login_refused" | "saml_replay" | "admin_session_rejected"
     | "scim_rejected" | "scim_user_created" | "scim_user_updated" | "scim_user_deactivated" | "scim_user_deleted" | "scim_group_synced"
-    | "sidecar_unavailable" | "audit_export_streamed" | "oauth_sso_required" | "member_key_issued";
+    | "sidecar_unavailable" | "audit_export_streamed" | "oauth_sso_required" | "member_key_issued" | "member_key_replayed";
   /** Server-chosen provider and model of the accepted batch (ids, not content). */
   relayLogModel?: string;
   /** License id (an opaque token id, not user content). */

@@ -2732,7 +2732,7 @@
         "tags": [
           "enterprise"
         ],
-        "summary": "Issue an agent key (read / write / run; never admin) for a member principal. Shown once.",
+        "summary": "Issue an agent key (read / write / run; never admin) for a member principal. Shown once; with an Idempotency-Key a retry answers the same key reference (200, key null), never a second key or the secret again.",
         "operationId": "post_v1_tenant_members_id_keys",
         "parameters": [
           {
@@ -2742,6 +2742,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
@@ -2767,6 +2770,37 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "Same Idempotency-Key: the key issued before; its secret is not shown again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "null"
+                    },
+                    "key_id": {
+                      "type": "string"
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "created": {
+                      "type": "boolean",
+                      "const": false
+                    },
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "201": {
             "content": {
               "application/json": {
@@ -2785,8 +2819,22 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "created": {
+                      "type": "boolean",
+                      "const": true
                     }
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_scopes | invalid_idempotency_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -2802,7 +2850,7 @@
             }
           },
           "409": {
-            "description": "member_inactive",
+            "description": "member_inactive | idempotency_key_reused",
             "content": {
               "application/json": {
                 "schema": {

@@ -419,7 +419,11 @@ cross-site POST) that holds the state, nonce and PKCE verifier or the request id
 **SSO enforcement.** With `"enforced": true`, the tenant's principals cannot connect OAuth clients
 by pasting an agent key on `/oauth/authorize` (403 on the consent page). Their keys are issued by a
 tenant admin instead (`POST /v1/tenant/members/{id}/keys`, scopes read / write / run, never
-admin, shown once).
+admin, shown once). Send an `Idempotency-Key` to make issuance safe to retry: the key id derives
+from (tenant, member, Idempotency-Key), so the same request answers `200` with the same `key_id`
+and `key: null` instead of minting a second key (the secret is shown only by the call that created
+it; a lost secret means revoke and issue again with a new Idempotency-Key). The same
+Idempotency-Key with other scopes is `409 idempotency_key_reused`.
 
 **SCIM 2.0.** Base `<base>/scim/v2`, bearer `sct_…` from tenant creation or
 `POST /v1/admin/tenants/{id}/scim-token`. Tested with request shapes from Okta and Entra ID.

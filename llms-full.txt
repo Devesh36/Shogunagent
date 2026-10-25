@@ -747,7 +747,15 @@ itself signed (enveloped, one reference to its own ID; a signed Response around 
 assertion is refused), RSA-SHA256/512 and SHA-256/512 only, verified against the configured
 certificates (never `KeyInfo`), every value read from the signed bytes, `Issuer`, audience,
 recipient, `InResponseTo`, validity window with skew, and the assertion id spent in a replay cache
-until it expires. Encrypted assertions and IdP-initiated sign-in are not supported. Library:
+until it expires. Also (E39): SAML `Version="2.0"` only; the Response's own `Issuer`, when present,
+must be the IdP; the Response and assertion `IssueInstant` may be neither ahead of now nor older
+than the ten-minute sign-in flow (each with the skew); one `Issuer`, `Subject` and `Conditions` per
+assertion; a bearer confirmation whose `NotBefore` is still ahead does not confirm. Not supported,
+and refused with a fixed code rather than half-handled: XML Encryption (an `EncryptedAssertion`,
+`EncryptedID` or `EncryptedAttribute` is `saml_encrypted_assertion_unsupported`; no XML-Enc library
+has been vetted to run on Workers, so configure the IdP to sign the assertion and not encrypt it —
+the POST travels over TLS) and IdP-initiated sign-in (no `InResponseTo` is
+`saml_in_response_to_mismatch`). Library:
 `xml-crypto` 6.4.0 over `@xmldom/xmldom` 0.8.15 — both run on Workers (`nodejs_compat`); the
 workerd test suite signs and verifies an assertion, so SAML is served on Workers, not behind a
 Node-only flag.
@@ -761,7 +769,11 @@ cross-site POST) that holds the state, nonce and PKCE verifier or the request id
 **SSO enforcement.** With `"enforced": true`, the tenant's principals cannot connect OAuth clients
 by pasting an agent key on `/oauth/authorize` (403 on the consent page). Their keys are issued by a
 tenant admin instead (`POST /v1/tenant/members/{id}/keys`, scopes read / write / run, never
-admin, shown once).
+admin, shown once). Send an `Idempotency-Key` to make issuance safe to retry: the key id derives
+from (tenant, member, Idempotency-Key), so the same request answers `200` with the same `key_id`
+and `key: null` instead of minting a second key (the secret is shown only by the call that created
+it; a lost secret means revoke and issue again with a new Idempotency-Key). The same
+Idempotency-Key with other scopes is `409 idempotency_key_reused`.
 
 **SCIM 2.0.** Base `<base>/scim/v2`, bearer `sct_…` from tenant creation or
 `POST /v1/admin/tenants/{id}/scim-token`. Tested with request shapes from Okta and Entra ID.
@@ -771,7 +783,7 @@ admin, shown once).
 | `POST /Users` | A new principal under the tenant (`id` = principal id), no key yet: the key slot is open until a tenant admin issues one |
 | `GET /Users?filter=userName eq "…"` | Exact, case-insensitive match; `externalId eq` too; `startIndex` (1-based) and `count` (≤ 200) per RFC 7644 |
 | `active: false` by `PATCH` or `PUT` (Okta `{"op":"replace","value":{"active":false}}`, Entra `{"op":"Replace","path":"active","value":"False"}`) | Every key of the principal and every OAuth grant minted from them is revoked immediately; reactivation does not bring them back |
-| `DELETE /Users/{id}` | Access revoked now; the user leaves its groups; a tombstone (ids and times) stays; the principal store is purged by the sweep after `SCIM_DELETE_GRACE_DAYS` (default 30) |
+| `DELETE /Users/{id}` | Access revoked now; the user leaves its groups; a tombstone (ids and times) stays; the principal store is purged by the sweep after `SCIM_DELETE_GRACE_DAYS` (default 30): the sweep calls the sidecar's `DELETE /v1/principals/{id}` (operator bearer), which closes the store, removes the KMS-wrapped key first, then the store files and the principal's directory, drops it from every team, and appends a content-free line to `principal-purges.jsonl`. Idempotent; a store still in use answers `409 principal_busy` and the purge stays due for the next sweep |
 | `POST /Groups`, `PATCH` members | A Team (E18): every pair of members gets a world-read grant both ways, pushed to the sidecar (`POST /v1/teams`, `/v1/acl/grant`, `/v1/acl/revoke`); a grant is revoked only when two people share no other group. At most 30 members per group |
 
 Unknown attributes (for example Entra's enterprise extension) are accepted and ignored; nothing

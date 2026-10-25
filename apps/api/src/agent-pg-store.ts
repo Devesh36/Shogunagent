@@ -159,6 +159,17 @@ export class SqlAgentStore implements AgentStore {
     };
   }
 
+  insertKeyOnce(k: AgentKeyRecord): Promise<boolean> {
+    return this.tx(async (tx) => {
+      const inserted = await tx.query(`INSERT INTO agent_keys(${KEY_COLUMNS})
+        VALUES($1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::text,$8::bigint,$9::bigint,$10::bigint,$11::text,$12::bigint,$13::bigint)
+        ON CONFLICT(key_id) DO NOTHING RETURNING key_id`,
+      [k.keyId, k.prefix, k.hash, k.mode, k.principalId, k.tenantId, scopesToText(k.scopes), k.createdAt,
+        k.expiresAt ?? null, k.revokedAt ?? null, k.ref ?? null, k.capDayMicros ?? null, k.capMonthMicros ?? null]);
+      return inserted.length > 0;
+    });
+  }
+
   insertKey(k: AgentKeyRecord): Promise<void> {
     return this.tx(async (tx) => {
       await tx.query(`INSERT INTO agent_keys(${KEY_COLUMNS})
