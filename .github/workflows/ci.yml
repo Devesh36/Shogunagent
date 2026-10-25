@@ -46,7 +46,7 @@ jobs:
       - name: guards (self-test, then the tree)
         run: |
           set -euo pipefail
-          for g in http-egress secret-exposure media-writes log-hygiene migrations batch-source-filter; do
+          for g in http-egress secret-exposure media-writes log-hygiene migrations batch-source-filter desktop-gate; do
             python3 scripts/check-$g.py --self-test
             python3 scripts/check-$g.py
           done
