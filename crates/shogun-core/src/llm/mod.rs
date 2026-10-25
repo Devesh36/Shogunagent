@@ -52,41 +52,10 @@ pub mod traceability;
 pub mod transport;
 pub mod usage;
 
-use std::fmt;
-
-/// A secret string that never appears in logs. `Debug` and `Display` render a fixed redaction;
-/// the real value is only reachable via [`Secret::expose`], which callers must go out of their
-/// way to use (and never log).
-#[derive(Clone)]
-pub struct Secret(String);
-
-impl Secret {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-    /// The raw secret. The single choke point for reading it — never pass the result to a log,
-    /// a record, or telemetry (NFR-SEC-01/02).
-    pub fn expose(&self) -> &str {
-        &self.0
-    }
-    /// Last-4 for a UI echo (NFR-SEC-02: BYOK read-back shows only the last four chars).
-    pub fn last4(&self) -> String {
-        let n = self.0.chars().count();
-        self.0.chars().skip(n.saturating_sub(4)).collect()
-    }
-}
-
-impl fmt::Debug for Secret {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Secret(***redacted***)")
-    }
-}
-
-impl fmt::Display for Secret {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("***redacted***")
-    }
-}
+/// A secret string that never appears in logs. Defined in the dependency-free `shogun-redact`
+/// (E5-T5) so the connector token store below this crate holds credentials in the same type; the
+/// raw value is only reachable via [`Secret::expose`].
+pub use shogun_redact::Secret;
 
 /// The Select KK key — the Batch lane only (indexing / classification / Dream Cycle / Morning
 /// Brief). A distinct type from [`ByokKey`] so the two can never be interchanged (invariant 5).

@@ -31,6 +31,8 @@ pub const USER_SECRET_ACCOUNTS: &[&str] = &[
     // Development-only credential for the operator-managed loopback Gmail backend.
     "gmail-local-backend-token",
     "memory-api-tokens",
+    // The Batch relay bearer a principal's hourly Dream Cycle presents (`token_store`, E5-T5).
+    "batch-relay-bearer",
     // Legacy: the background-service key a development build could hold.
     "select-kk-batch",
 ];

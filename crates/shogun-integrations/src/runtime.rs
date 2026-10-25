@@ -463,7 +463,7 @@ impl<T> ConnectorRuntime<T> {
     }
 
     /// Restore without mistaking a denied read for an absent grant. No store writes here.
-    pub fn restore_from_store(&mut self, service: Service, store: &impl crate::token::TokenStore) {
+    pub fn restore_from_store(&mut self, service: Service, store: &impl crate::token::GrantStore) {
         match store.load(service) {
             Ok(Some(tokens)) => {
                 self.restore_connected(service);
@@ -1408,9 +1408,9 @@ mod tests {
 
     #[test]
     fn stored_grants_distinguish_absent_locked_and_connected_without_writes() {
-        use crate::token::{TokenLoadError, TokenStore};
+        use crate::token::{GrantStore, TokenLoadError};
         struct FakeStore(Result<Option<crate::oauth::TokenSet>, TokenLoadError>);
-        impl TokenStore for FakeStore {
+        impl GrantStore for FakeStore {
             fn load(&self, _: Service) -> Result<Option<crate::oauth::TokenSet>, TokenLoadError> {
                 self.0.clone()
             }

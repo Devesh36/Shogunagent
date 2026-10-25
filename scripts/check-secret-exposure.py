@@ -21,8 +21,13 @@ ALLOWLIST = {
     "crates/shogun-core/src/llm/anthropic.rs",     # builds the x-api-key header (the traced egress)
     "crates/shogun-core/src/llm/openai_compat.rs",  # builds the Authorization: Bearer header (OpenAI/OpenRouter egress)
     "crates/shogun-core/src/llm/relay.rs",          # builds Authorization: Bearer <license token> for the batch relay (traced egress; decision: docs/batch-relay-design.md §4.1)
-    "crates/shogun-core/src/llm/mod.rs",           # defines expose() + its unit tests
-    # Future: the Keychain store module, when added, goes here with a decision record.
+    "crates/shogun-core/src/llm/mod.rs",           # re-exports Secret; its unit tests read expose()
+    "crates/shogun-redact/src/secret.rs",          # defines Secret + expose() (moved below the core for the E5-T5 token store) and its tests
+    # E5-T5 token stores (decision: docs/implementation-plan.md E5-T5, crates/shogun-integrations/src/token_store/mod.rs).
+    # Each must read the raw credential exactly once, to seal it or to hand it to its OS store; none logs it.
+    "crates/shogun-integrations/src/token_store/file.rs",    # seals the value with ChaCha20-Poly1305 before it touches disk (0600)
+    "crates/shogun-integrations/src/token_store/grants.rs",  # parses a stored OAuth grant back into the TokenSet the refresh path uses
+    "crates/shogun-integrations/src/keychain.rs",            # hands the value to the macOS Keychain (feature `desktop`, macOS only)
 }
 
 EXPOSE_RE = re.compile(r"\.expose\s*\(")

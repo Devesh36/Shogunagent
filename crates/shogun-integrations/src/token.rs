@@ -3,8 +3,8 @@
 //! connected" — a background sync 50 minutes after connecting must not fail just because the access
 //! token expired; [`TokenManager`] refreshes it transparently using the stored refresh token.
 //!
-//! Pure and Linux-testable over two seams: [`TokenStore`] (Keychain on macOS — [`crate::live`] —
-//! or [`MemoryTokenStore`] in tests) and [`crate::oauth::TokenExchange`] (reqwest live, fake in
+//! Pure and Linux-testable over two seams: [`GrantStore`] (Keychain on the Mac, a sealed
+//! [`crate::token_store::TokenStore`] on a server, [`MemoryTokenStore`] in tests) and [`crate::oauth::TokenExchange`] (reqwest live, fake in
 //! tests). Secrets live only in the store (Keychain in production); nothing here logs a token.
 
 use serde::{Deserialize, Serialize};
@@ -62,8 +62,12 @@ impl TokenLoadError {
     }
 }
 
-/// Persists per-service grants in Keychain in production; memory only in tests.
-pub trait TokenStore {
+/// One principal's OAuth grants, per service, as parsed [`TokenSet`]s: what the refresh logic
+/// ([`TokenManager`]) reads and writes. The Mac app's Keychain implements it directly; every other
+/// store reaches it through [`crate::token_store::PrincipalGrants`] over a
+/// [`crate::token_store::TokenStore`] (E5-T5), so connector sync runs the same code against any of
+/// them. Memory only in tests ([`MemoryTokenStore`]).
+pub trait GrantStore {
     fn load(&self, service: Service) -> Result<Option<TokenSet>, TokenLoadError>;
     fn save(&self, service: Service, tokens: &TokenSet) -> Result<(), String>;
     fn delete(&self, service: Service) -> Result<(), String>;
@@ -142,13 +146,13 @@ pub fn is_transient_token_failure(reason: &str) -> bool {
 
 /// Produces a valid access token for a service, refreshing on demand. Borrows the config, the token
 /// exchange (network), and the store.
-pub struct TokenManager<'a, X: TokenExchange, S: TokenStore> {
+pub struct TokenManager<'a, X: TokenExchange, S: GrantStore> {
     cfg: &'a AuthConfig,
     exchange: &'a X,
     store: &'a S,
 }
 
-impl<'a, X: TokenExchange, S: TokenStore> TokenManager<'a, X, S> {
+impl<'a, X: TokenExchange, S: GrantStore> TokenManager<'a, X, S> {
     pub fn new(cfg: &'a AuthConfig, exchange: &'a X, store: &'a S) -> Self {
         Self { cfg, exchange, store }
     }
@@ -204,14 +208,14 @@ pub type ConfigSelector = Box<dyn Fn(Service) -> Option<AuthConfig> + Send + Syn
 /// (`shogun-core::mcp_http::HttpMcpRpc`) uses, so a first-layer call an hour after connecting still
 /// succeeds. Pure (no network of its own) — the refresh network call goes through the injected
 /// [`TokenExchange`].
-pub struct ManagedTokenProvider<X: TokenExchange, S: TokenStore> {
+pub struct ManagedTokenProvider<X: TokenExchange, S: GrantStore> {
     config_for: ConfigSelector,
     exchange: X,
     store: S,
     clock: fn() -> i64,
 }
 
-impl<X: TokenExchange, S: TokenStore> ManagedTokenProvider<X, S> {
+impl<X: TokenExchange, S: GrantStore> ManagedTokenProvider<X, S> {
     /// One config for every service (fine while only Google services are released — they share
     /// endpoints and one OAuth client). Uses the wall clock.
     pub fn new(cfg: AuthConfig, exchange: X, store: S) -> Self {
@@ -231,7 +235,7 @@ impl<X: TokenExchange, S: TokenStore> ManagedTokenProvider<X, S> {
     }
 }
 
-impl<X: TokenExchange, S: TokenStore> crate::rpc::TokenProvider for ManagedTokenProvider<X, S> {
+impl<X: TokenExchange, S: GrantStore> crate::rpc::TokenProvider for ManagedTokenProvider<X, S> {
     fn access_token(&self, service: Service) -> Result<String, String> {
         let _credential_operation = credential_guard(service);
         // PATs and API keys have no OAuth client or refresh exchange. Valid stored credentials
@@ -265,7 +269,7 @@ impl MemoryTokenStore {
     }
 }
 
-impl TokenStore for MemoryTokenStore {
+impl GrantStore for MemoryTokenStore {
     fn load(&self, service: Service) -> Result<Option<TokenSet>, TokenLoadError> {
         let g = self.tokens.lock().map_err(|_| TokenLoadError::Unavailable)?;
         Ok(g.iter().find(|(s, _)| *s == service).map(|(_, t)| t.clone()))
@@ -359,7 +363,7 @@ mod tests {
             reads_before_lock: std::cell::Cell<u32>,
             error: TokenLoadError,
         }
-        impl TokenStore for LockedStore {
+        impl GrantStore for LockedStore {
             fn load(&self, _: Service) -> Result<Option<TokenSet>, TokenLoadError> {
                 let remaining = self.reads_before_lock.get();
                 if remaining == 0 {
@@ -489,7 +493,7 @@ mod tests {
 
     /// Loads and deletes like [`MemoryTokenStore`], but every save fails (a locked Keychain).
     struct SaveFails(MemoryTokenStore);
-    impl TokenStore for SaveFails {
+    impl GrantStore for SaveFails {
         fn load(&self, service: Service) -> Result<Option<TokenSet>, TokenLoadError> { self.0.load(service) }
         fn save(&self, _: Service, _: &TokenSet) -> Result<(), String> { Err("keychain busy".into()) }
         fn delete(&self, service: Service) -> Result<(), String> { self.0.delete(service) }
@@ -557,7 +561,7 @@ mod tests {
         use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
         #[derive(Clone)]
         struct SharedStore(Arc<MemoryTokenStore>);
-        impl TokenStore for SharedStore {
+        impl GrantStore for SharedStore {
             fn load(&self, service: Service) -> Result<Option<TokenSet>, TokenLoadError> { self.0.load(service) }
             fn save(&self, service: Service, tokens: &TokenSet) -> Result<(),String> { self.0.save(service,tokens) }
             fn delete(&self, service: Service) -> Result<(),String> { self.0.delete(service) }

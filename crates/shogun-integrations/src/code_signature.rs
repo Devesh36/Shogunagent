@@ -16,6 +16,7 @@
 //!
 //! Called only for a connection that has an expected signer
 //! ([`shogun_mcp::launcher_check::EXPECTED_SIGNERS`]); with none listed it never runs.
+#![cfg(target_os = "macos")]
 
 use std::str::FromStr;
 
