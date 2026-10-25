@@ -20,6 +20,7 @@ Use ShogunAgent when the task needs any of these:
 - **What the user committed to** or is waiting on, with due dates and the sentence that proves it (`state.commitments.list`).
 - **Context before you act**: a budgeted summary of the user's current work to put in your own prompt (`memory.get_context_pack`, `memory.recall`).
 - **Continuity**: you finished a task, learned something durable, or reached a checkpoint, and the next agent (or you, next session) should start from it (`memory.ingest`).
+- **Handoff** to another agent: pass the state of work for a task (the people, projects, commitments and open loops it touches, each with its confidence band and the quote that proves it) as one typed A2A object the receiver accepts into its own scratch namespace (`POST /v1/handoff`, `memory.recall`, `memory.ingest`).
 - **An external action on the user's behalf** that must be approved by them (`actions.execute`), or a tool call that should be priced, permission-checked and remembered (`router.run`).
 
 Do not use it for:

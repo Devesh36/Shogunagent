@@ -15,6 +15,7 @@
  *   POST /v1/quote                       the exact cost of a call, nothing reserved [read]
  *   GET  /v1/receipts?since=             per-call receipts                         [read]
  *   POST /v1/receipts/:id/dispute        open a dispute                            [write]
+ *   POST /v1/handoff                     an A2A state-of-work handoff (handoff.ts)  [read]
  *   ALL  /mcp                            the metered MCP proxy (metering.ts)       [by unit]
  *
  * Bodies are read only where the route's contract is JSON the gateway itself defines
@@ -37,6 +38,7 @@ import { classifyCall, pricingDocument, quoteCost, usageOf, FREE_ALLOWANCE_MICRO
 import { DEFAULT_POW_BITS, MAX_POW_BITS, challengeHash, mintChallenge, verifyPow } from "./pow.js";
 import { WindowLimiter, type RateLimiter } from "./ratelimit.js";
 import { metered, type MeteringDeps } from "./metering.js";
+import { HANDOFF_PATH, handleHandoff } from "./handoff.js";
 import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
 
 /** Self-registration: at most this many per IP per hour (in-process default; production wires
@@ -134,7 +136,7 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
 
   // --- the other agent-readable documents (E10) and the status window over the agent routes ---
   const wellknown = createWellknown({ ...(deps.wellknown ?? {}), publicBaseUrl: deps.publicBaseUrl, now });
-  for (const path of ["/mcp", "/v1/agents", "/v1/agents/*", "/v1/keys/*", "/v1/wallet", "/v1/wallet/*", "/v1/quote", "/v1/receipts", "/v1/receipts/*"]) {
+  for (const path of ["/mcp", "/v1/agents", "/v1/agents/*", "/v1/keys/*", "/v1/wallet", "/v1/wallet/*", "/v1/quote", "/v1/receipts", "/v1/receipts/*", HANDOFF_PATH]) {
     app.use(path, wellknown.observe);
   }
   app.route("/", wellknown.app);
@@ -418,6 +420,16 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     } catch {
       return storeFailure(c);
     }
+  });
+
+  // --- A2A handoff (E16): the state of work for a task, built from one recall through the core ---
+  app.post(HANDOFF_PATH, requireKey(["read"]), bodyLimit({ maxSize: MAX_SMALL_BODY_BYTES, onError: bodyTooLarge }), async (c) => {
+    const p = principalOf(c);
+    return handleHandoff(c, p, await readJson(c), {
+      publicBaseUrl: deps.publicBaseUrl,
+      ...(deps.mcpUpstream ? { mcpUpstream: deps.mcpUpstream } : {}),
+      now,
+    });
   });
 
   // --- the metered MCP proxy (E9-T5) ---

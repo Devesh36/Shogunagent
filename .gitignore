@@ -27,3 +27,7 @@ __pycache__/
 
 # router listing:check report (E21)
 apps/router/listing-report.json
+# Python SDK (packages/sdk-py)
+.venv/
+.pytest_cache/
+*.egg-info/

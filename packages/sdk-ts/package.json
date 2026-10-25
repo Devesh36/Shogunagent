@@ -1,0 +1,59 @@
+{
+  "name": "@shogunagent/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript client for ShogunAgent, the state layer for AI agents: recall, ingest, state reads, context packs, permission-tiered actions, the router, quotes and typed A2A handoffs, plus withShogunAgent() middleware for the Vercel AI SDK, OpenAI Agents SDK, Claude Agent SDK, Mastra and LangGraph.js.",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/Torutesu/Shogunagent", "directory": "packages/sdk-ts" },
+  "homepage": "https://shogunagent.dev",
+  "type": "module",
+  "engines": { "node": ">=18.17" },
+  "sideEffects": false,
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./ai-sdk": {
+      "types": "./dist/types/adapters/ai-sdk.d.ts",
+      "import": "./dist/esm/adapters/ai-sdk.js",
+      "require": "./dist/cjs/adapters/ai-sdk.js"
+    },
+    "./openai-agents": {
+      "types": "./dist/types/adapters/openai-agents.d.ts",
+      "import": "./dist/esm/adapters/openai-agents.js",
+      "require": "./dist/cjs/adapters/openai-agents.js"
+    },
+    "./claude-agent-sdk": {
+      "types": "./dist/types/adapters/claude-agent-sdk.d.ts",
+      "import": "./dist/esm/adapters/claude-agent-sdk.js",
+      "require": "./dist/cjs/adapters/claude-agent-sdk.js"
+    },
+    "./mastra": {
+      "types": "./dist/types/adapters/mastra.d.ts",
+      "import": "./dist/esm/adapters/mastra.js",
+      "require": "./dist/cjs/adapters/mastra.js"
+    },
+    "./langgraph": {
+      "types": "./dist/types/adapters/langgraph.d.ts",
+      "import": "./dist/esm/adapters/langgraph.js",
+      "require": "./dist/cjs/adapters/langgraph.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  }
+}

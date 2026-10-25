@@ -38,6 +38,15 @@
       ]
     },
     {
+      "id": "handoff",
+      "name": "Handoff",
+      "description": "Handoff to another agent: pass the state of work for a task (the people, projects, commitments and open loops it touches, each with its confidence band and the quote that proves it) as one typed A2A object the receiver accepts into its own scratch namespace.",
+      "tags": [
+        "memory.recall",
+        "memory.ingest"
+      ]
+    },
+    {
       "id": "an-external-action-on-the-user-s-behalf",
       "name": "An external action on the user's behalf",
       "description": "An external action on the user's behalf that must be approved by them, or a tool call that should be priced, permission-checked and remembered.",

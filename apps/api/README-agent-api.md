@@ -37,6 +37,7 @@ Conventions:
 | POST | `/v1/quote` | `read` | The exact cost of a call, nothing reserved |
 | GET | `/v1/receipts?since=&limit=` | `read` | Per-call receipts, oldest first |
 | POST | `/v1/receipts/{id}/dispute` | `write` | Open a dispute on a receipt (one per receipt) |
+| POST | `/v1/handoff` | `read` | An A2A state-of-work handoff for a task, built from one recall through the core (free; `docs/api/handoff.md`) |
 | ALL | `/mcp` | by unit (see below) | The metered MCP Streamable HTTP proxy |
 
 ## 1. Register

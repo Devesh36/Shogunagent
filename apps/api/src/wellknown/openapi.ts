@@ -124,6 +124,32 @@ const components: Json = {
     },
     QuoteResponse: { type: "object", required: ["quote", "method", "name", "balance_micro_usd", "sufficient", "caps", "usage", "next_action"], properties: { quote: ref("Usage"), method: { type: "string" }, name: { type: ["string", "null"] }, balance_micro_usd: micro("Spendable now"), sufficient: { type: "boolean" }, caps: ref("Caps"), usage: ref("Usage"), next_action: { type: ["string", "null"], enum: ["top_up", null] } } },
     Receipt: { type: "object", required: ["id", "key_id", "method", "name", "unit", "quantity", "cost_micro_usd", "reserved_micro_usd", "settled", "ts"], properties: { id: { type: "string", pattern: "^rcpt_" }, key_id: { type: "string" }, method: { type: "string" }, name: { type: ["string", "null"] }, unit: { type: "string" }, quantity: { type: "integer" }, cost_micro_usd: micro("Settled cost"), reserved_micro_usd: { oneOf: [micro("Held while in flight"), { type: "null" }] }, settled: { type: "boolean" }, ts: { type: "string", format: "date-time" } } },
+    HandoffRequest: {
+      type: "object", required: ["task", "to_agent"],
+      properties: {
+        task: { type: "string", minLength: 1, maxLength: 2000, description: "What the receiving agent is asked to do." },
+        to_agent: { type: "string", pattern: "^[A-Za-z0-9_.:@/-]{1,128}$", description: "The receiving agent's id." },
+        from_agent: { type: "string", pattern: "^[A-Za-z0-9_.:@/-]{1,128}$", description: "Your agent id; default agent:<key id>." },
+        query: { type: "string", minLength: 1, maxLength: 2000, description: "What to recall for the task; default task." },
+        budget_tokens: { type: "integer", minimum: 100, maximum: 32000, default: 2000 },
+        ttl_seconds: { type: "integer", minimum: 60, maximum: 86400, default: 3600 },
+        thread_key: { type: "string", maxLength: 256 },
+      },
+    },
+    HandoffResponse: {
+      type: "object", required: ["result", "usage", "latency_ms", "next_action"],
+      properties: {
+        result: {
+          type: "object", required: ["handoff", "a2a"],
+          properties: {
+            handoff: { $ref: "https://shogunagent.dev/schemas/handoff.schema.json", description: "docs/api/handoff.schema.json: a strict subset of export v1." },
+            a2a: { type: "object", required: ["part", "message"], properties: { part: { type: "object", description: "{kind: \"data\", data: <handoff>, metadata: {schema}}" }, message: { type: "object", description: "An A2A message carrying the part." } } },
+          },
+        },
+        usage: ref("Usage"), latency_ms: { type: "integer" }, hints: { type: "array", items: { type: "object" } },
+        next_action: { type: ["string", "null"], enum: ["narrow_query", null] },
+      },
+    },
     Receipts: { type: "object", required: ["receipts", "next_since"], properties: { receipts: { type: "array", items: ref("Receipt") }, next_since: { type: ["string", "null"], format: "date-time" } } },
     DisputeRequest: { type: "object", required: ["reason"], properties: { reason: { type: "string", minLength: 1, maxLength: 1000 } } },
     Dispute: { type: "object", required: ["dispute_id", "receipt_id", "status", "ts"], properties: { dispute_id: { type: "string", pattern: "^dsp_" }, receipt_id: { type: "string" }, status: { type: "string", enum: ["open", "resolved", "rejected"] }, ts: { type: "string", format: "date-time" } } },
@@ -190,6 +216,14 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     { method: "post", path: "/v1/quote", tag: "billing", security: "key", scope: "read", summary: "The exact cost of a call. Nothing is reserved.", requestBody: jsonBody(ref("QuoteRequest")), responses: { "200": jsonBody(ref("QuoteResponse")), "400": errorResponse("invalid_quantity | invalid_price | run_price_unavailable | invalid_json") } },
     { method: "get", path: "/v1/receipts", tag: "billing", security: "key", scope: "read", summary: "Per-call receipts, oldest first. Page with next_since.", parameters: [{ name: "since", in: "query", schema: { type: "string" }, description: "ISO-8601 or epoch milliseconds." }, { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 500, default: 100 } }], responses: { "200": jsonBody(ref("Receipts")), "400": errorResponse("invalid_since | invalid_limit") } },
     { method: "post", path: "/v1/receipts/{id}/dispute", tag: "billing", security: "key", scope: "write", summary: "Open a dispute on a receipt (one per receipt; a second answers 200 with the existing one).", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: jsonBody(ref("DisputeRequest")), responses: { "201": jsonBody(ref("Dispute")), "200": jsonBody(ref("Dispute")), "400": errorResponse("invalid_reason | invalid_json"), "404": errorResponse("receipt_not_found") } },
+    // --- A2A handoff (E16) ---
+    {
+      method: "post", path: "/v1/handoff", tag: "a2a", security: "key", scope: "read",
+      summary: "The state of work for a task as a typed handoff object (a strict subset of export v1) plus its A2A data part. Free.",
+      description: "Built from one memory.recall of the task through the core: people, projects, commitments and open loops with their confidence band and provenance quotes; Low never travels. The receiver ingests it into its own agent_scratch namespace, never the principal's world.",
+      requestBody: jsonBody(ref("HandoffRequest")),
+      responses: { "200": jsonBody(ref("HandoffResponse")), "400": errorResponse("missing_task | invalid_to_agent | invalid_from_agent | invalid_budget_tokens | invalid_ttl_seconds | invalid_json"), "403": errorResponse("insufficient_scope"), "502": errorResponse("upstream_error | memory_update_pending: the core refused the recall"), "503": errorResponse("upstream_unavailable, with Retry-After") },
+    },
     // --- the metered MCP proxy ---
     {
       method: "all", path: "/mcp", tag: "mcp", security: "key", scope: "any",
@@ -254,6 +288,7 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       { name: "keys", description: "Key caps and revocation." },
       { name: "wallet", description: "Prepaid micro-USD wallet (Stripe card rail)." },
       { name: "billing", description: "Quotes, receipts, disputes." },
+      { name: "a2a", description: "State-of-work handoff between agents (docs/api/handoff.md)." },
       { name: "mcp", description: "The metered MCP Streamable HTTP proxy." },
       { name: "router", description: "discover / inspect / run (apps/router)." },
     ],
