@@ -1,0 +1,19 @@
+# CI render case: Vault Transit with Kubernetes auth, an evaluation Secret, no gateway.
+region: on-prem-tokyo
+keyProvider:
+  type: vault
+  vault:
+    addr: https://vault.internal:8200
+    namespace: acme
+    transitKey: shogunagent-principals
+    kubernetesRole: shogunagent
+gateway:
+  enabled: false
+secrets:
+  create: true
+  values:
+    SHOGUN_PRINCIPAL_TOKENS: "alice:example-token-not-real"
+networkPolicy:
+  egress:
+    kmsCidrs: ["10.40.0.5/32"]
+    ports: [8200]

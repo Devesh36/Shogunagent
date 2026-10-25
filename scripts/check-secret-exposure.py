@@ -27,7 +27,13 @@ ALLOWLIST = {
     # Each must read the raw credential exactly once, to seal it or to hand it to its OS store; none logs it.
     "crates/shogun-integrations/src/token_store/file.rs",    # seals the value with ChaCha20-Poly1305 before it touches disk (0600)
     "crates/shogun-integrations/src/token_store/grants.rs",  # parses a stored OAuth grant back into the TokenSet the refresh path uses
-    "crates/shogun-integrations/src/keychain.rs",            # hands the value to the macOS Keychain (feature `desktop`, macOS only)
+    "crates/shogun-integrations/src/token_store/kms.rs",     # E26: seals the value under a KMS-wrapped data key (ChaCha20-Poly1305) for the hosted/BYOC RemoteTokenStore
+    # E26 customer-KMS clients (decision: docs/implementation-plan.md E26, deploy/README.md). Each reads its
+    # workload credential only to sign or authenticate the traced KMS call; none logs it.
+    "crates/shogun-core/src/tenancy/key_provider/aws.rs",    # SigV4 signing key and the x-amz-security-token header; the STS web-identity token in the AssumeRole body
+    "crates/shogun-core/src/tenancy/key_provider/gcp.rs",    # Authorization: Bearer <workload token> for Cloud KMS
+    "crates/shogun-core/src/tenancy/key_provider/vault.rs",  # X-Vault-Token header; the pod's service-account JWT in the Kubernetes login body
+    "crates/shogun-integrations/src/keychain.rs",           # hands the value to the macOS Keychain (feature `desktop`, macOS only)
 }
 
 EXPOSE_RE = re.compile(r"\.expose\s*\(")

@@ -1,0 +1,82 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy -}}
+# Ingress only to the gateway port; egress only to DNS and the configured LLM relay / KMS /
+# database addresses. The sidecar's port is never reachable from outside the pod (it binds
+# loopback), so no rule mentions it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "shogunagent.fullname" . }}
+  labels:
+    {{- include "shogunagent.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "shogunagent.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.gateway.enabled }}
+    - ports:
+        - port: {{ .Values.gateway.port }}
+          protocol: TCP
+      {{- with $np.ingressFrom }}
+      from:
+        {{- toYaml . | nindent 8 }}
+      {{- else }}
+      from:
+        - podSelector: {}
+      {{- end }}
+    {{- end }}
+  egress:
+    {{- if $np.dns.enabled }}
+    - to:
+        - namespaceSelector:
+            {{- toYaml $np.dns.namespaceSelector | nindent 12 }}
+          podSelector:
+            {{- toYaml $np.dns.podSelector | nindent 12 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- end }}
+    {{- $cidrs := concat $np.egress.llmRelayCidrs $np.egress.kmsCidrs }}
+    {{- if $cidrs }}
+    - to:
+        {{- range $cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- range $np.egress.ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+    {{- if $np.egress.databaseCidrs }}
+    - to:
+        {{- range $np.egress.databaseCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: 5432
+          protocol: TCP
+    {{- end }}
+    {{- with $np.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if eq .Values.keyProvider.type "gcp-kms" }}
+    # GKE Workload Identity: the metadata server (the sidecar's KMS token).
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 988
+          protocol: TCP
+    {{- end }}
+{{- end }}

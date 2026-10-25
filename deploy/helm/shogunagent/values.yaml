@@ -1,0 +1,202 @@
+# ShogunAgent BYOC chart. Every setting is described in deploy/README.md; the sidecar's variables
+# are also listed there in full. Secrets never go in this file: point `secrets.existingSecret` at a
+# Secret you manage (External Secrets, Sealed Secrets, Vault Agent, ...), or set `secrets.create`
+# for a throwaway cluster only.
+
+# The region this release serves. Recorded as a label and passed to both containers; a release
+# never talks to another region (deploy/README.md "Regions").
+region: "ap-northeast-1"
+
+# One replica is the supported default. More than one needs the sharding model in
+# deploy/README.md ("Sharding") and `sharding.acknowledged: true`: every principal lives on exactly
+# one replica's volume, and whatever routes requests must pin a principal to its replica.
+replicaCount: 1
+sharding:
+  acknowledged: false
+
+image:
+  # The sidecar image published by .github/workflows/release.yml (Dockerfile at the repo root).
+  repository: ghcr.io/torutesu/shogunagent
+  # Defaults to v<appVersion>.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+sidecar:
+  # The sidecar binds 127.0.0.1 only (its Host guard refuses any other Host), so it is reachable
+  # from the gateway container in the same pod and from nothing else.
+  port: 7464
+  # Where the principal stores live on the volume.
+  principalsDir: /data/principals
+  maxOpen: 64
+  # Extra arguments after `--multi <dir> --key-provider <type>`.
+  extraArgs: []
+  extraEnv: []
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  probes:
+    # Exec probes: GET /v1/status over loopback (bash /dev/tcp; the image has no curl).
+    liveness:
+      initialDelaySeconds: 10
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+
+gateway:
+  # The gateway (apps/api, Node entry). Build it with deploy/compose/gateway.Dockerfile and push it
+  # to your registry. Disabled = the pod runs the sidecar alone; then the Service is not created
+  # and something in `extraContainers` must front it.
+  enabled: true
+  image:
+    repository: shogunagent-gateway
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  port: 8787
+  # Non-secret gateway settings (apps/api/src/boot.ts). Secrets come from `secrets`.
+  env:
+    DAILY_SPEND_CAP_USD: "50"
+    BATCH_PROVIDER: "openai"
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+keyProvider:
+  # env | aws-kms | gcp-kms | vault  (shogun-api --key-provider). `env` is for evaluation only:
+  # the key then sits in the Secret as SHOGUN_DB_KEY.
+  type: aws-kms
+  # Seconds an unwrapped principal key stays in memory (0 = ask the KMS on every open).
+  cacheSeconds: 300
+  timeoutSeconds: 10
+  aws:
+    keyId: ""            # SHOGUN_AWS_KMS_KEY_ID: key id, ARN or alias/...
+    region: ""           # SHOGUN_AWS_KMS_REGION
+    endpoint: ""         # SHOGUN_AWS_KMS_ENDPOINT (VPC endpoint / FIPS), optional
+    stsEndpoint: ""      # SHOGUN_AWS_STS_ENDPOINT, optional
+  gcp:
+    key: ""              # SHOGUN_GCP_KMS_KEY: projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>
+    endpoint: ""         # SHOGUN_GCP_KMS_ENDPOINT, optional
+  vault:
+    addr: ""             # VAULT_ADDR (https)
+    namespace: ""        # VAULT_NAMESPACE, optional
+    transitMount: transit
+    transitKey: ""       # SHOGUN_VAULT_TRANSIT_KEY
+    # Kubernetes auth: the pod's projected service-account token is exchanged for a Vault token.
+    kubernetesRole: ""   # SHOGUN_VAULT_K8S_ROLE
+    kubernetesMount: kubernetes
+
+# Approval links (E15): where a human approves an L3 request. The signing key itself is a secret.
+approvals:
+  baseUrl: ""
+
+secrets:
+  # A Secret you manage, with any of these keys (all optional unless your setup needs them):
+  #   SHOGUN_PRINCIPAL_TOKENS, SHOGUN_ADMIN_TOKEN, SHOGUN_APPROVAL_SIGNING_KEY,
+  #   WEBHOOK_SIGNING_SECRET, OPENAI_API_KEY, ANTHROPIC_API_KEY, LICENSE_PUBKEY_B64,
+  #   RELAY_DATABASE_URL, AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (only without IRSA),
+  #   SHOGUN_GCP_ACCESS_TOKEN (only without Workload Identity), VAULT_TOKEN, SHOGUN_DB_KEY (env).
+  # The sidecar and the gateway both read it; neither logs a value.
+  existingSecret: ""
+  # Evaluation clusters only: render a Secret from `secrets.values` (they end up in Helm's release
+  # record in clear). Never in production.
+  create: false
+  values: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  # IRSA: eks.amazonaws.com/role-arn: arn:aws:iam::<acct>:role/<role>
+  # GKE Workload Identity: iam.gke.io/gcp-service-account: <sa>@<project>.iam.gserviceaccount.com
+  annotations: {}
+  # The sidecar needs a projected token only for IRSA or Vault Kubernetes auth.
+  automountServiceAccountToken: true
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  capabilities:
+    drop: ["ALL"]
+
+persistence:
+  # One PVC per replica, holding <principal>/memory.db and <principal>/<principal>.key.wrapped.
+  size: 20Gi
+  storageClassName: ""
+  accessModes: ["ReadWriteOnce"]
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+# Optional local embeddings (embed-local, E24): a volume holding fetched models, and one holding
+# the ONNX Runtime 1.22 shared library. Any volume source (PVC, CSI, image volume, ...).
+embedLocal:
+  enabled: false
+  modelsVolume: {}
+  #  persistentVolumeClaim:
+  #    claimName: shogun-models
+  onnxRuntimeVolume: {}
+  #  persistentVolumeClaim:
+  #    claimName: onnxruntime-1-22
+  ortLibPath: /opt/onnxruntime/lib/libonnxruntime.so
+
+networkPolicy:
+  enabled: true
+  # Ingress to the gateway port: from these peers only (empty = any pod in the namespace).
+  ingressFrom: []
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: ingress-nginx
+  # Egress besides DNS. Standard NetworkPolicy matches addresses, not host names: list the CIDRs
+  # of the LLM relay or provider endpoints, the KMS endpoint (or its VPC endpoint), STS, Vault and
+  # Postgres. Nothing else leaves the pod.
+  egress:
+    llmRelayCidrs: []
+    kmsCidrs: []
+    databaseCidrs: []
+    ports: [443]
+    # Extra raw egress rules (e.g. a podSelector for in-cluster Postgres or Vault).
+    extraRules: []
+  dns:
+    enabled: true
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    podSelector:
+      matchLabels:
+        k8s-app: kube-dns
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+terminationGracePeriodSeconds: 30
+extraContainers: []
+extraVolumes: []

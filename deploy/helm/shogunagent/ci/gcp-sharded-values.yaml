@@ -1,0 +1,27 @@
+# CI render case: GCP Cloud KMS through Workload Identity, two shards, local embeddings.
+region: asia-northeast1
+replicaCount: 2
+sharding:
+  acknowledged: true
+keyProvider:
+  type: gcp-kms
+  gcp:
+    key: projects/acme/locations/asia-northeast1/keyRings/shogunagent/cryptoKeys/principals
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: shogunagent@acme.iam.gserviceaccount.com
+secrets:
+  existingSecret: shogunagent-secrets
+embedLocal:
+  enabled: true
+  modelsVolume:
+    persistentVolumeClaim:
+      claimName: shogun-models
+      readOnly: true
+  onnxRuntimeVolume:
+    persistentVolumeClaim:
+      claimName: onnxruntime-1-22
+      readOnly: true
+persistence:
+  storageClassName: premium-rwo
+  size: 50Gi

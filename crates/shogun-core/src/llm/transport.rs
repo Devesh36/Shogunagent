@@ -86,6 +86,40 @@ impl HttpRequest {
         Ok(self)
     }
 
+    /// A GET to the cloud instance-metadata service (E26: the GCP KMS provider's
+    /// workload-identity token). The one place plain `http://` reaches a non-loopback host, and
+    /// only these hosts: `metadata.google.internal` and the link-local `169.254.169.254`, under
+    /// `/computeMetadata/`. Redirects are never followed.
+    pub fn cloud_metadata(url: impl Into<String>, headers: Vec<(String, String)>) -> Result<Self, TransportError> {
+        let url = url.into();
+        let Ok(parsed) = url::Url::parse(&url) else {
+            return Err(TransportError::InsecureUrl(url));
+        };
+        let host_ok = match parsed.host() {
+            Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("metadata.google.internal"),
+            Some(url::Host::Ipv4(a)) => a == std::net::Ipv4Addr::new(169, 254, 169, 254),
+            _ => false,
+        };
+        let ok = parsed.scheme() == "http"
+            && host_ok
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+            && parsed.path().starts_with("/computeMetadata/");
+        if !ok {
+            return Err(TransportError::InsecureUrl(url));
+        }
+        Ok(Self {
+            method: Method::Get,
+            url,
+            headers,
+            body: None,
+            max_body_bytes: None,
+            timeout: None,
+            public_web: false,
+            no_redirects: true,
+        })
+    }
+
     /// Keep licensed gateway requests on their configured origin, including 307/308 bodies.
     pub fn without_redirects(mut self) -> Self {
         self.no_redirects = true;
@@ -107,7 +141,11 @@ impl HttpRequest {
 
 /// Header names whose values are secrets and must never be printed.
 fn is_secret_header(name: &str) -> bool {
-    name.eq_ignore_ascii_case("x-api-key") || name.eq_ignore_ascii_case("authorization")
+    name.eq_ignore_ascii_case("x-api-key")
+        || name.eq_ignore_ascii_case("authorization")
+        // E26 KMS providers: the AWS session token and the Vault token.
+        || name.eq_ignore_ascii_case("x-amz-security-token")
+        || name.eq_ignore_ascii_case("x-vault-token")
 }
 
 impl fmt::Debug for HttpRequest {

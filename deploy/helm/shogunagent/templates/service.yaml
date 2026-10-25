@@ -1,0 +1,41 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "shogunagent.fullname" . }}
+  labels:
+    {{- include "shogunagent.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "shogunagent.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: gateway
+      protocol: TCP
+{{- end }}
+---
+# Headless: gives each replica a stable name (<release>-<n>.<release>-headless) for the
+# principal-sharding model (deploy/README.md "Sharding"). Only the gateway port is published; the
+# sidecar listens on loopback inside the pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "shogunagent.fullname" . }}-headless
+  labels:
+    {{- include "shogunagent.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    {{- include "shogunagent.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.gateway.port }}
+      targetPort: {{ .Values.gateway.port }}
+      protocol: TCP

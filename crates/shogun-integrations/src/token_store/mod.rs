@@ -9,7 +9,7 @@
 //! |---|---|---|
 //! | ShogunAI Mac app (feature `desktop`) | `keychain::KeychainTokenStore` | the macOS Keychain |
 //! | Local Linux server (`shogun-api --multi`) | [`FileSealedTokenStore`] | ChaCha20-Poly1305 under a key derived from the principal's store key, files 0600 |
-//! | Hosted gateway | [`RemoteTokenStore`] | KMS envelope over Postgres rows (interface here; the backing lands with the gateway) |
+//! | Hosted gateway / BYOC | [`RemoteTokenStore`] | KMS envelope over Postgres rows: [`KmsSealer`] over a customer KMS key ([`KeyWrapper`], implemented in the core for AWS KMS, GCP Cloud KMS and Vault Transit) |
 //!
 //! Connector sync never sees which one it has: [`PrincipalGrants`] adapts any store to the
 //! per-service [`crate::token::GrantStore`] the [`crate::token::TokenManager`] /
@@ -17,7 +17,7 @@
 //!
 //! Nothing here logs or formats a value: errors are content-free codes, `Secret` redacts under
 //! `Debug` / `Display`, and the raw value is read (`Secret::expose`) only in the files that seal it or
-//! parse it (`grants.rs`, `file.rs`; `scripts/check-secret-exposure.py`).
+//! parse it (`grants.rs`, `file.rs`, `kms.rs`; `scripts/check-secret-exposure.py`).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -29,10 +29,12 @@ pub use shogun_redact::Secret;
 
 mod file;
 mod grants;
+pub mod kms;
 mod remote;
 
 pub use file::{FileSealedTokenStore, SealKey, SealKeySource};
 pub use grants::PrincipalGrants;
+pub use kms::{DataKey, KeyWrapper, KmsError, KmsSealer, Unwrapped, WrappedDataKey};
 pub use remote::{KmsEnvelope, RemoteTokenStore, SealedRow, SealedRowBackend};
 
 /// The principal a single-user deployment (the Mac app, a one-person local server) stores under.

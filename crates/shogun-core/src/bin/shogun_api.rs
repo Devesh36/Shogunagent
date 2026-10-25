@@ -215,6 +215,24 @@ fn gate_or_exit(db_path: &str, db_env_set: bool) {
     }
 }
 
+/// The principal stores' key provider (E26): `--key-provider env|aws-kms|gcp-kms|vault`, else
+/// `SHOGUN_KEY_PROVIDER`, else `env` (`SHOGUN_DB_KEY` / `SHOGUN_DB_KEY_<PRINCIPAL>`). A KMS provider
+/// keeps each principal's wrapped data key next to its store under `root` and reads its settings
+/// from the environment once (`deploy/README.md` lists every variable). A bad setting exits here,
+/// naming the variable; a KMS that is down later makes that principal's store refuse to open.
+fn principal_keys(root: &std::path::Path) -> Arc<dyn shogun_core::tenancy::KeyProvider> {
+    use shogun_core::tenancy::{provider_from_env, KeyProviderKind, TenancyError};
+    let vars: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let exit = |e: TenancyError| -> ! {
+        eprintln!("{FACE}: {e}");
+        std::process::exit(1);
+    };
+    let kind = KeyProviderKind::select(std::env::args().skip(1), &vars).unwrap_or_else(|e| exit(e));
+    let keys = provider_from_env(kind, root, &vars).unwrap_or_else(|e| exit(e));
+    eprintln!("{FACE}: key provider: {}", kind.as_str());
+    keys
+}
+
 /// Multi-principal mode (ShogunAgent E2-T2): `--multi` on the command line, or `SHOGUN_MULTI_ROOT`
 /// set. One process serves `<root>/<principal>/memory.db` for every principal the bearer map
 /// names, opening each file on demand (`SHOGUN_MULTI_MAX_OPEN`, default 64) with the key from
@@ -222,11 +240,8 @@ fn gate_or_exit(db_path: &str, db_env_set: bool) {
 /// `SHOGUN_PRINCIPAL_TOKENS="principal:token[:agent_id],…"` until `apps/api` issues agent keys
 /// (E3). None of the desktop gates (memory_api.json, plan files, Keychain, heartbeat) apply.
 async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
-    use shogun_core::tenancy::{EnvKeyProvider, PrincipalStore, TokenPrincipalMap};
-    let keys = EnvKeyProvider::from_env().unwrap_or_else(|e| {
-        eprintln!("{FACE}: {e}");
-        std::process::exit(1);
-    });
+    use shogun_core::tenancy::{PrincipalStore, TokenPrincipalMap};
+    let keys = principal_keys(&root);
     let resolver = TokenPrincipalMap::from_env().unwrap_or_else(|e| {
         eprintln!("{FACE}: {e}");
         std::process::exit(1);
@@ -245,7 +260,7 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
     let (embedder, line) = shogun_core::embed_models::load_configured();
     eprintln!("{FACE}: {line}");
     let store = Arc::new(
-        PrincipalStore::new(root.clone(), Arc::new(keys), clock.clone(), max_open).with_embedder(embedder),
+        PrincipalStore::new(root.clone(), keys, clock.clone(), max_open).with_embedder(embedder),
     );
     let state = shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), clock);
     let port = std::env::var("SHOGUN_API_PORT")
@@ -294,11 +309,8 @@ async fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
     use shogun_core::llm::relay::{ModelClass, RelayBatchClient, RelayConfig};
     use shogun_core::llm::transport::ReqwestTransport;
     use shogun_core::tenancy::credentials::{local_store, relay_bearer, token_dir, TOKEN_STORE_DIR_VAR};
-    use shogun_core::tenancy::{dream_tick, EnvKeyProvider, KeyProvider, PrincipalStore};
-    let keys: Arc<dyn KeyProvider> = Arc::new(EnvKeyProvider::from_env().unwrap_or_else(|e| {
-        eprintln!("{FACE}: {e}");
-        std::process::exit(1);
-    }));
+    use shogun_core::tenancy::{dream_tick, PrincipalStore};
+    let keys = principal_keys(&root);
     let clock = wall_clock();
     let now = (clock)();
     let tokens = local_store(
@@ -342,16 +354,13 @@ async fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
 fn store_relay_credential(root: std::path::PathBuf, principal: &str) -> std::io::Result<()> {
     use shogun_core::llm::Secret;
     use shogun_core::tenancy::credentials::{local_store, token_dir, TOKEN_STORE_DIR_VAR};
-    use shogun_core::tenancy::{EnvKeyProvider, KeyProvider, PrincipalId};
+    use shogun_core::tenancy::PrincipalId;
     use shogun_integrations::{CredentialSlot, TokenStore};
     let principal = PrincipalId::parse(principal).unwrap_or_else(|e| {
         eprintln!("{FACE}: {e}");
         std::process::exit(2);
     });
-    let keys: Arc<dyn KeyProvider> = Arc::new(EnvKeyProvider::from_env().unwrap_or_else(|e| {
-        eprintln!("{FACE}: {e}");
-        std::process::exit(1);
-    }));
+    let keys = principal_keys(&root);
     let store = local_store(
         token_dir(&root, std::env::var_os(TOKEN_STORE_DIR_VAR).map(std::path::PathBuf::from)),
         keys,

@@ -8,8 +8,9 @@
 //! - [`PrincipalId`]: a validated slug, which is also the directory name under the store root.
 //! - [`KeyProvider`]: where a principal's SQLCipher key comes from — the environment
 //!   ([`EnvKeyProvider`]: `SHOGUN_DB_KEY`, or `SHOGUN_DB_KEY_<PRINCIPAL>` per principal) or a KMS
-//!   ([`KmsKeyProvider`], a stub until hosted lands). Keys are held as [`shogun_memory::DbKey`]
-//!   and never rendered.
+//!   ([`KmsKeyProvider`], E26: envelope encryption under the customer's AWS KMS, GCP Cloud KMS or
+//!   Vault Transit key, the wrapped data key stored next to the principal's file). Keys are held
+//!   as [`shogun_memory::DbKey`] and never rendered.
 //! - [`PrincipalStore`]: `principal_id → <root>/<id>/memory.db`, opened with the daemon's own
 //!   [`crate::daemon::Db`] / [`crate::daemon::DaemonDb`] machinery, with an LRU of open handles
 //!   and a hard cap on how many stay open.
@@ -38,7 +39,7 @@ pub mod store;
 pub mod team;
 
 pub use import::{import_single_user_store, ImportReport};
-pub use key_provider::{EnvKeyProvider, KeyProvider, KmsKeyProvider};
+pub use key_provider::{provider_from_env, EnvKeyProvider, KeyProvider, KeyProviderKind, KmsKeyProvider};
 pub use principal::PrincipalId;
 pub use resolver::{PrincipalResolver, ResolvedPrincipal, TokenPrincipalMap};
 pub use store::{OpenPolicy, OpenPrincipal, PrincipalStore};
@@ -54,8 +55,19 @@ pub enum TenancyError {
     /// Names the variable (suffix), never its value.
     #[error("{0} is not a 64-character hex key")]
     InvalidKey(String),
-    #[error("the KMS key provider is not available in this build")]
+    #[error("the KMS key provider is not available in this build (it needs the `net` feature)")]
     KmsUnavailable,
+    /// The KMS refused, failed or could not be reached. The store stays closed; nothing falls
+    /// back to another key or to plaintext. Content-free (`KmsError` carries a status at most).
+    #[error("the principal's key could not be unwrapped by the KMS: {0}")]
+    Kms(shogun_integrations::token_store::KmsError),
+    /// The wrapped-key file next to the principal's store is missing, unreadable or not this
+    /// principal's.
+    #[error("the principal's wrapped key: {0}")]
+    WrappedKey(&'static str),
+    /// A KMS provider setting is missing or malformed; names the variable, never its value.
+    #[error("key provider configuration: {0} is missing or invalid")]
+    KmsConfig(&'static str),
     #[error("principal store i/o: {0}")]
     Io(#[from] std::io::Error),
     #[error("could not open the principal's store: {0}")]

@@ -11,8 +11,10 @@
 //! - [`SealedRowBackend`] stores and fetches opaque [`SealedRow`]s. The Postgres client implements
 //!   it; the type it is handed has no plaintext field to write.
 //!
-//! [`RemoteTokenStore`] composes the two into a [`TokenStore`]. Nothing implements the two traits
-//! for production in this crate yet: the gateway does, when the hosted store lands.
+//! [`RemoteTokenStore`] composes the two into a [`TokenStore`]. [`super::KmsSealer`] (E26) is the
+//! production [`KmsEnvelope`]: envelope encryption under the customer's KMS key through a
+//! [`super::KeyWrapper`] the core implements for AWS KMS, GCP Cloud KMS and Vault Transit. The
+//! Postgres [`SealedRowBackend`] lands with the gateway's store.
 
 use super::{valid_principal, CredentialSlot, Secret, TokenStore, TokenStoreError};
 

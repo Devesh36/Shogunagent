@@ -6,6 +6,10 @@
 #   docker run -e SHOGUN_DB_PATH=/data/memory.db -e SHOGUN_DB_KEY=<hex> -e SHOGUN_API_TOKEN=... \
 #     -v shogunagent-data:/data -p 7464:7464 shogunagent
 #
+# Multi-principal (BYOC, E26): `docker run … shogunagent --multi /data/principals --key-provider
+# aws-kms|gcp-kms|vault`, with the provider's settings in the environment. deploy/README.md lists
+# them; deploy/helm and deploy/compose run this image that way.
+#
 # Server build profile: `embed-local` is on (E24), so the binaries can use a local embedding model.
 # Nothing is downloaded at build or run time. Vector search turns on only when the operator has
 # fetched the model (`docker run … shogun models fetch`, into SHOGUN_MODELS_DIR=/data/models) and

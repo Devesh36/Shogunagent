@@ -1,0 +1,16 @@
+apiVersion: v2
+name: shogunagent
+description: >-
+  ShogunAgent BYOC / on-prem: the Rust sidecar (per-principal SQLCipher stores, keys from the
+  customer's KMS) and the gateway (apps/api) in one pod, one StatefulSet per region.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/Torutesu/Shogunagent
+sources:
+  - https://github.com/Torutesu/Shogunagent
+keywords:
+  - shogunagent
+  - byoc
+  - kms

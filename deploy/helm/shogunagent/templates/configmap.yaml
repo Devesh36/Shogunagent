@@ -1,0 +1,63 @@
+{{- include "shogunagent.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "shogunagent.fullname" . }}-config
+  labels:
+    {{- include "shogunagent.labels" . | nindent 4 }}
+data:
+  # Sidecar (crates/shogun-core/src/bin/shogun_api.rs, tenancy::key_provider).
+  SHOGUN_REGION: {{ .Values.region | quote }}
+  SHOGUN_API_PORT: {{ .Values.sidecar.port | quote }}
+  SHOGUN_MULTI_ROOT: {{ .Values.sidecar.principalsDir | quote }}
+  SHOGUN_MULTI_MAX_OPEN: {{ .Values.sidecar.maxOpen | quote }}
+  SHOGUN_KEY_PROVIDER: {{ .Values.keyProvider.type | quote }}
+  SHOGUN_KMS_KEY_CACHE_SECS: {{ .Values.keyProvider.cacheSeconds | quote }}
+  SHOGUN_KMS_TIMEOUT_SECS: {{ .Values.keyProvider.timeoutSeconds | quote }}
+  {{- with .Values.keyProvider.aws }}
+  {{- if .keyId }}
+  SHOGUN_AWS_KMS_KEY_ID: {{ .keyId | quote }}
+  {{- end }}
+  {{- if .region }}
+  SHOGUN_AWS_KMS_REGION: {{ .region | quote }}
+  {{- end }}
+  {{- if .endpoint }}
+  SHOGUN_AWS_KMS_ENDPOINT: {{ .endpoint | quote }}
+  {{- end }}
+  {{- if .stsEndpoint }}
+  SHOGUN_AWS_STS_ENDPOINT: {{ .stsEndpoint | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.keyProvider.gcp }}
+  {{- if .key }}
+  SHOGUN_GCP_KMS_KEY: {{ .key | quote }}
+  {{- end }}
+  {{- if .endpoint }}
+  SHOGUN_GCP_KMS_ENDPOINT: {{ .endpoint | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.keyProvider.vault }}
+  {{- if .addr }}
+  VAULT_ADDR: {{ .addr | quote }}
+  {{- end }}
+  {{- if .namespace }}
+  VAULT_NAMESPACE: {{ .namespace | quote }}
+  {{- end }}
+  SHOGUN_VAULT_TRANSIT_MOUNT: {{ .transitMount | quote }}
+  {{- if .transitKey }}
+  SHOGUN_VAULT_TRANSIT_KEY: {{ .transitKey | quote }}
+  {{- end }}
+  {{- if .kubernetesRole }}
+  SHOGUN_VAULT_K8S_ROLE: {{ .kubernetesRole | quote }}
+  SHOGUN_VAULT_K8S_MOUNT: {{ .kubernetesMount | quote }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.approvals.baseUrl }}
+  SHOGUN_APPROVAL_BASE_URL: {{ .Values.approvals.baseUrl | quote }}
+  {{- end }}
+  {{- if .Values.embedLocal.enabled }}
+  SHOGUN_MODELS_DIR: /models
+  ORT_DYLIB_PATH: {{ .Values.embedLocal.ortLibPath | quote }}
+  {{- end }}
+  # SQLite temporary files go to the writable /tmp volume (the root file system is read-only).
+  SQLITE_TMPDIR: /tmp
