@@ -24,6 +24,7 @@ members = [
     "crates/fusion-eval",
     "crates/dedup-bench",
     "crates/spike-harness",
+    "crates/loop-bench",
 ]
 
 [workspace.package]
