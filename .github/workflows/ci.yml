@@ -50,6 +50,14 @@ jobs:
             python3 scripts/check-$g.py --self-test
             python3 scripts/check-$g.py
           done
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: every env var apps/api and apps/router read is in the production runbook (E41)
+        run: |
+          set -euo pipefail
+          node scripts/check-env-docs.mjs --self-test
+          node scripts/check-env-docs.mjs
 
   relay:
     name: apps/api (typecheck, node tests)

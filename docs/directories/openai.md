@@ -68,6 +68,10 @@ submitting, decide one of:
 
 Until one is chosen and built, do not submit. **(Owner decision.)**
 
+The options, what our records say about the rule, and a recommendation (a free, read-only
+toolset for the ChatGPT client) are in `docs/directories/openai-credit-rule.md`; what every
+directory still needs is in `docs/directories/submission-checklist.md`.
+
 ## Demo account procedure
 
 Same as the Anthropic one, with its own principal so the two reviews never share state:
