@@ -47,6 +47,19 @@ pub fn query_asks_for_latest(query: &str) -> bool {
             .any(|phrase| normalized.contains(phrase))
 }
 
+/// True for one word that is a recency cue ("latest", "currently", "now" …): the words
+/// [`query_asks_for_latest`] reads and [`super::lexical_terms`] leaves out of the terms, since a
+/// row rarely says "currently" and ranking must not require it. A caller that counts what a
+/// question names (the chat's follow-up detection) adds these back: the cue is part of the
+/// question's content even though it is not searched for as text.
+pub fn is_recency_cue_word(word: &str) -> bool {
+    let normalized = super::terms::normalize(word);
+    let word = normalized.trim();
+    !word.is_empty()
+        && !word.contains(|character: char| !character.is_alphanumeric())
+        && super::terms::is_latest_word(word)
+}
+
 /// Exact local calendar boundaries supplied by the OS-facing caller.
 ///
 /// Two boundaries are required because a local day can be 23 or 25 hours across DST changes.

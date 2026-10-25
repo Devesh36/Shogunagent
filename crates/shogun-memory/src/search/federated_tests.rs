@@ -1102,7 +1102,10 @@ fn relevance_floor_blanks_a_question_the_log_only_shares_a_project_name_with() {
         "what did we decide about the kestrel compliance audit",
         None,
         10_000,
-        &FederatedSearchOptions::default(),
+        &FederatedSearchOptions {
+            abstain_below_floor: true,
+            ..FederatedSearchOptions::default()
+        },
         10,
     )
     .unwrap();
@@ -1113,6 +1116,35 @@ fn relevance_floor_blanks_a_question_the_log_only_shares_a_project_name_with() {
     assert!((coverage - 0.25).abs() < 1e-6, "coverage {coverage}");
     assert!(result.hits.is_empty(), "{:?}", result.hits);
     assert!(result.raw_event_ranks.is_empty());
+}
+
+#[test]
+fn relevance_floor_is_reported_but_does_not_empty_the_result_unless_asked() {
+    // The daemon's suggestion and context paths read the best candidates whatever the floor
+    // says and express the doubt through their own answerability signal; only a caller that
+    // sets `abstain_below_floor` gets the empty result.
+    let conn = crate::open_in_memory().unwrap();
+    kestrel_log(&conn);
+
+    let result = search_federated(
+        &conn,
+        "what did we decide about the kestrel compliance audit",
+        None,
+        10_000,
+        &FederatedSearchOptions::default(),
+        10,
+    )
+    .unwrap();
+    assert!(!result.relevance.passed, "{:?}", result.relevance);
+    assert_eq!(result.relevance.reason, RelevanceFloorReason::BelowFloor);
+    let coverage = result.relevance.coverage.unwrap();
+    assert!((coverage - 0.25).abs() < 1e-6, "coverage {coverage}");
+    assert!(!result.hits.is_empty(), "the candidates stay without the opt-in");
+    assert!(!result.raw_event_ranks.is_empty());
+    assert!(result
+        .hits
+        .iter()
+        .all(|hit| matches!(hit.source_id, FederatedSourceId::Event(_))));
 }
 
 #[test]
@@ -1159,6 +1191,7 @@ fn relevance_floor_reports_no_candidates_when_nothing_matches_at_all() {
     .unwrap();
     assert!(!result.relevance.passed);
     assert_eq!(result.relevance.reason, RelevanceFloorReason::NoCandidates);
+    // Nothing matched, so the result is empty with or without the opt-in.
     assert!(result.hits.is_empty());
 }
 
@@ -1345,4 +1378,16 @@ fn latest_cues_are_recognised_in_english_and_japanese_and_not_elsewhere() {
         .iter()
         .any(|term| term == "currently"));
     assert!(!lexical_terms("現在の価格").iter().any(|term| term == "現在"));
+}
+
+#[test]
+fn a_recency_cue_word_is_recognised_on_its_own_so_callers_can_count_it_back_in() {
+    // The chat's follow-up detection counts what a question names; the cue leaves the search
+    // terms but is still part of the question's content.
+    for word in ["now", "Now", "latest", "currently", "newest", "nowadays"] {
+        assert!(crate::search::is_recency_cue_word(word), "{word}");
+    }
+    for word in ["nowhere", "launch", "yesterday", "current", "", "now?"] {
+        assert!(!crate::search::is_recency_cue_word(word), "{word:?}");
+    }
 }

@@ -369,6 +369,25 @@ fn answer_entities(text: &str) -> Vec<String> {
 /// At most this much history is folded into one retrieval query.
 const HISTORY_QUERY_MAX_CHARS: usize = 240;
 
+/// How many things the message names on its own, for [`is_follow_up`]: the search's lexical
+/// terms minus the words that name a time, plus the recency cues ("now", "latest", "currently")
+/// the search leaves out of its terms because it reads them as an ordering hint rather than
+/// text to match (`shogun_memory::search::is_recency_cue_word`). "When is the Orchid launch
+/// now?" names three things and stands on its own; the ranking's choice not to search for "now"
+/// must not turn it into a follow-up that borrows the previous topic.
+fn content_word_count(message: &str, is_time_word: &impl Fn(&str) -> bool) -> usize {
+    let terms = shogun_memory::search::lexical_terms(message)
+        .into_iter()
+        .filter(|t| !is_time_word(t))
+        .count();
+    let cues = message
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .filter(|w| shogun_memory::search::is_recency_cue_word(w) && !is_time_word(w))
+        .count();
+    terms + cues
+}
+
 /// The query a chat turn retrieves with. The message itself always leads; a follow-up
 /// ([`is_follow_up`]) also carries the previous user turn's words and the names in the last
 /// answer, so "why was it moved?" retrieves what "it" was. Words that name a time
@@ -380,10 +399,7 @@ pub fn retrieval_query(
     is_time_word: impl Fn(&str) -> bool,
 ) -> String {
     let message = strip_citations(message);
-    let topical = shogun_memory::search::lexical_terms(&message)
-        .into_iter()
-        .filter(|t| !is_time_word(t))
-        .count();
+    let topical = content_word_count(&message, &is_time_word);
     if history.is_empty() || !is_follow_up(&message, topical) {
         return message;
     }

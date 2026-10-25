@@ -221,13 +221,17 @@ pub fn event_places(
 }
 
 /// Relevance floor (E12-T1): the share of the question's content words — weighted by idf, source
-/// cues like "meeting" never required — that the best hit must contain before any evidence is
-/// returned (`relevance_floor` has the exact rule).
+/// cues like "meeting" never required — that the best hit must contain before the result counts
+/// as evidence (`relevance_floor` has the exact rule).
 ///
-/// Below it the search returns no hits at all and [`RelevanceFloor::passed`] is false, so a
-/// question nothing in memory answers ("what did we decide about the kestrel compliance audit"
-/// over a log that only ever mentions kestrel) comes back empty instead of handing a downstream
-/// agent rows that merely share a project name. Calibrated on `memory-bench --workload
+/// Every search measures it and reports the verdict in [`FederatedSearchResult::relevance`];
+/// whether a failing verdict also empties the result is the caller's choice
+/// ([`FederatedSearchOptions::abstain_below_floor`]). With it set, a question nothing in memory
+/// answers ("what did we decide about the kestrel compliance audit" over a log that only ever
+/// mentions kestrel) comes back empty instead of handing a downstream agent rows that merely
+/// share a project name. Without it the best candidates are still returned and the verdict
+/// travels with them, so a suggestion surface keeps its candidates and reports the doubt
+/// through its answerability signal instead. Calibrated on `memory-bench --workload
 /// abstention`, where the best chatter row covers one of four words (0.25) or two of four
 /// ("hardware budget" against "budget spreadsheet for kestrel", 0.50 with two words missing),
 /// against the answer-bearing workloads whose answers cover two of three or more (≥ 0.67), and
@@ -259,8 +263,10 @@ pub enum RelevanceFloorReason {
     BelowFloor,
 }
 
-/// The relevance floor's verdict for one search. `passed == false` means the result carries no
-/// evidence on purpose; callers map it onto their abstention signal
+/// The relevance floor's verdict for one search. `passed == false` means the best candidate did
+/// not cover enough of the question to count as evidence: with
+/// [`FederatedSearchOptions::abstain_below_floor`] the result is then empty on purpose; without
+/// it the candidates are returned anyway and the caller maps the verdict onto its own signal
 /// (`AnswerabilityV1 { answerable: false, .. }` in the Memory API).
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct RelevanceFloor {
@@ -273,7 +279,9 @@ pub struct RelevanceFloor {
 }
 
 impl RelevanceFloor {
-    const fn not_applicable() -> Self {
+    /// The verdict of a search that measured nothing: an empty question, or a result assembled
+    /// without running the search at all.
+    pub const fn not_applicable() -> Self {
         Self {
             passed: true,
             reason: RelevanceFloorReason::NotApplicable,
@@ -313,6 +321,14 @@ pub struct FederatedSearchOptions {
     /// ([`query_asks_for_latest`]). A caller that knows the question is about the present state
     /// — a "what is the current value" tool, the temporal benchmark — sets it explicitly.
     pub prefer_latest: bool,
+    /// Return no hits at all when the best candidate falls below the relevance floor
+    /// ([`RELEVANCE_FLOOR_COVERAGE`]). Off by default: the floor is always measured and reported
+    /// in [`FederatedSearchResult::relevance`], but the candidates are returned, so a surface that
+    /// shows suggestions (the daemon's context assembly, `memory.search` with its answerability
+    /// verdict) keeps them and says how little they cover. A caller whose consumer would read any
+    /// row as evidence — the abstention benchmark, an agent that cannot weigh the verdict — opts
+    /// in and gets an empty result instead.
+    pub abstain_below_floor: bool,
 }
 
 impl Default for FederatedSearchOptions {
@@ -330,6 +346,7 @@ impl Default for FederatedSearchOptions {
             excerpt_chars: DEFAULT_EXCERPT_CHARS,
             widen_event_lexical: false,
             prefer_latest: false,
+            abstain_below_floor: false,
         }
     }
 }
@@ -344,7 +361,9 @@ pub struct FederatedSearchResult {
     /// True only when bounded archive-wide raw-event BM25 completed.
     pub event_lexical_all_history: bool,
     /// Whether the best candidate covered enough of the question to count as evidence. When it
-    /// did not, `hits` and `raw_event_ranks` are empty on purpose.
+    /// did not and the caller asked to abstain ([`FederatedSearchOptions::abstain_below_floor`]),
+    /// `hits` and `raw_event_ranks` are empty on purpose; otherwise they hold the best candidates
+    /// and this verdict says how little of the question they cover.
     pub relevance: RelevanceFloor,
     pub cold: ColdScanStats,
     pub elapsed_micros: u64,
@@ -659,7 +678,7 @@ pub fn search_federated(
         apply_latest_ordering(&mut candidates);
     }
     let relevance = relevance_floor(&concepts, &concept_weights, &candidates, options, limit);
-    if !relevance.passed {
+    if !relevance.passed && options.abstain_below_floor {
         return Ok(FederatedSearchResult {
             hits: Vec::new(),
             raw_event_ranks: Vec::new(),

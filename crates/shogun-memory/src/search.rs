@@ -22,8 +22,8 @@ pub use federated::{
     MIN_FACT_CONFIDENCE, RELEVANCE_FLOOR_COVERAGE,
 };
 pub use filtering::{
-    evidence_source_label, query_asks_about_screen, query_asks_for_latest, query_time_window,
-    query_wants_visual_recall, visual_recall_window, LocalDayBounds,
+    evidence_source_label, is_recency_cue_word, query_asks_about_screen, query_asks_for_latest,
+    query_time_window, query_wants_visual_recall, visual_recall_window, LocalDayBounds,
 };
 pub use grams::{maintain_gram_index, GramIndexReport};
 pub use model::SearchHit;
