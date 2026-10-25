@@ -98,16 +98,18 @@ the call against the principal's store. Implementation: `apps/api/src/mcp-proxy.
 1. **Authenticate.** No valid agent key or OAuth access token: `401` with
    `WWW-Authenticate: Bearer realm="shogunagent", resource_metadata="<base>/.well-known/oauth-protected-resource/mcp"`
    (the pointer is present when OAuth is served), before any other header is looked at.
-2. **Classify** from `Mcp-Method`, `Mcp-Name`, `Mcp-Quantity` (`400 missing_header` when a `POST`
-   lacks `Mcp-Method`, or a `tools/call` lacks `Mcp-Name`). Region (`421 wrong_region`), scope
-   (`403 insufficient_scope`), dry run.
+2. **Classify** from `Mcp-Method`, `Mcp-Name`, `Mcp-Quantity`. Region (`421 wrong_region`), scope
+   (`403 insufficient_scope`), dry run. Missing or mismatched `Mcp-Method` / `Mcp-Name` are refused
+   by the core (JSON-RPC `400 missing_header` / `*_mismatch`) before anything runs, and the refusal
+   settles at 0; a `POST` without `Mcp-Method` is classified as free protocol traffic.
 3. **Can this gateway serve the principal?** No sidecar configured: `503 upstream_unavailable`
    (`next_action: retry_after`). The principal's store lives on another replica (`SHOGUN_SHARD`):
    `421 wrong_shard`. No sidecar bearer for the principal: `503 principal_not_provisioned`
    (`next_action: contact_operator`). Nothing is reserved in any of these.
 4. **Reserve** the quote (wallet or commit, the four caps, the global breaker; `402` as in
    `docs/api/402.md`).
-5. **Relay** to `<SHOGUN_SIDECAR_URL>/mcp`: the request body is handed on as a stream and the reply
+5. **Relay** to `<SHOGUN_SIDECAR_URL>/mcp`, through the configured transport (global `fetch`, or a
+   Workers binding with `SHOGUN_SIDECAR_BINDING`; options in `docs/deploy/production.md` §1): the request body is handed on as a stream and the reply
    body comes back as a stream; neither is read, buffered, logged or stored by the gateway
    (invariants 1 and 2). Request headers passed: `Content-Type`, `Accept`, `Mcp-Method`,
    `Mcp-Name`, `Mcp-Protocol-Version`, `Last-Event-ID`, `Idempotency-Key`; the agent's

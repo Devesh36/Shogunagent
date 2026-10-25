@@ -22,6 +22,21 @@
  *   `agent:<key_id>`; this needs the sidecar resolver described in docs/api/billing.md §"Hosted
  *   /mcp" (not in the sidecar yet). A token from the list wins over a derived one.
  *
+ * Transport (the seam): the sidecar binds 127.0.0.1 only and refuses a non-loopback `Host`
+ * (deploy/README.md §1), so how the gateway reaches it depends on where the gateway runs. The relay
+ * only needs a `fetch`-shaped function (`FetchFn`); boot picks one:
+ *
+ * - **URL** (`SHOGUN_SIDECAR_URL`, global `fetch`): the Node gateway in the sidecar's own pod
+ *   (`deploy/helm`, `deploy/compose`: `http://127.0.0.1:7464`), or any private origin the runtime
+ *   can reach that forwards to the sidecar's loopback with a loopback `Host`.
+ * - **Workers binding** (`SHOGUN_SIDECAR_BINDING=<name>`): the Worker calls `env[<name>].fetch` — a
+ *   service binding or a Workers VPC service whose private origin is a Cloudflare Tunnel connector
+ *   running inside the sidecar's pod. The URL's origin is then only a label
+ *   (`SHOGUN_SIDECAR_URL`, default `http://sidecar.internal`); the path is kept. A binding named in
+ *   the config but absent at runtime leaves the relay off (`/mcp` answers 503).
+ *
+ * With neither, `/mcp` answers `503 upstream_unavailable` with `next_action: retry_after`.
+ *
  * Sharding (deploy/README.md §5.2): a principal lives on exactly one replica,
  * `fnv1a64(principal_id) mod replicaCount`. Each gateway talks only to its own pod's loopback
  * sidecar, which creates a store for any principal it is asked about, so with `SHOGUN_SHARD=i/n`
@@ -107,9 +122,15 @@ export function parseShard(raw: string): { index: number; count: number } {
   return { index, count };
 }
 
+/** The URL origin used with a Workers binding when `SHOGUN_SIDECAR_URL` is unset (a label only). */
+export const SIDECAR_BINDING_ORIGIN = "http://sidecar.internal";
+
 export interface McpRelayConfig {
-  /** The sidecar's base URL (`SHOGUN_SIDECAR_URL`). */
+  /** The sidecar's base URL (`SHOGUN_SIDECAR_URL`); with `binding`, only its path matters. */
   url: string;
+  /** `SHOGUN_SIDECAR_BINDING`: the name of a Workers service / VPC binding to reach the sidecar
+   * through instead of the public network. */
+  binding?: string;
   /** principal → sidecar bearer (`SHOGUN_SIDECAR_PRINCIPAL_TOKENS`). */
   tokens?: ReadonlyMap<string, string>;
   /** `SHOGUN_SIDECAR_BEARER_SECRET`: derive a bearer for any principal. */
@@ -119,6 +140,15 @@ export interface McpRelayConfig {
 }
 
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
+
+/** The `fetch` of a Workers binding (`env[name]`), or `undefined` when the runtime has none by
+ * that name. */
+export function bindingFetch(env: Record<string, unknown>, name: string): FetchFn | undefined {
+  const binding = env[name] as { fetch?: unknown } | undefined;
+  if (!binding || typeof binding.fetch !== "function") return undefined;
+  const f = binding.fetch as (input: string, init?: RequestInit) => Promise<Response>;
+  return (input, init) => f.call(binding, input, init);
+}
 
 export interface McpRelay {
   /** `MeteringDeps.mcpUpstream`: relay one request. Throws only when nothing was sent or the

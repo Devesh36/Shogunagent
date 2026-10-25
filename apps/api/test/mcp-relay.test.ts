@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { AgentPrincipal } from "../src/agent-keys.js";
 import { BootError, agentLaneLine, createRelay, mcpRelayConfigFromEnv, postgresStore, relayConfigFromEnv } from "../src/boot.js";
-import { createMcpRelay, derivedSidecarBearer, fnv1a64, parseShard, parseSidecarPrincipalTokens, shardOf, type FetchFn } from "../src/mcp-proxy.js";
+import { SIDECAR_BINDING_ORIGIN, bindingFetch, createMcpRelay, derivedSidecarBearer, fnv1a64, parseShard, parseSidecarPrincipalTokens, shardOf, type FetchFn } from "../src/mcp-proxy.js";
 import { settledQuantity } from "../src/metering.js";
 import { FREE_ALLOWANCE_MICROS, RATE_MICROS } from "../src/pricing.js";
 import { solvePow } from "../src/pow.js";
@@ -15,6 +15,9 @@ import releaseKey from "../../../packages/config/license-public-key.json";
 import { BASE, authed, makeAgentRig, mcp, registerAgent, type AgentRig } from "./agent-helpers.js";
 import { AGENT_SQL } from "./agent-store.test.js";
 import { FakeGateway } from "./helpers.js";
+import { InMemoryAgentStore } from "../src/agent-store.js";
+import { NoRateLimit } from "../src/ratelimit.js";
+import { InMemoryUsageStore } from "../src/usage.js";
 import { sqliteDouble } from "./sql-double.js";
 
 interface Err { error: { code: string; message: string; next_action: string | null } }
@@ -312,5 +315,55 @@ describe("createRelay → a sidecar on loopback", () => {
     expect(log).not.toContain("jsonrpc");
     expect(log).not.toContain(key.slice(8));
     expect(log).not.toContain(principalId);
+  });
+});
+
+/** The transport seam: a Worker reaches the loopback-only sidecar through a binding (service or
+ * Workers VPC → Cloudflare Tunnel in the pod), never by URL; without the binding, /mcp stays 503. */
+describe("the sidecar transport seam (SHOGUN_SIDECAR_BINDING)", () => {
+  const env = {
+    ANTHROPIC_API_KEY: "sk-ant-test-not-a-real-key", LICENSE_PUBKEY_B64: (releaseKey as { ed25519: string }).ed25519, DAILY_SPEND_CAP_USD: "10", BATCH_PROVIDER: "anthropic", OPENAI_API_KEY: "sk-test-not-a-real-key",
+    AGENT_API_ENABLED: "1", AGENT_POW_SECRET: "a-sixteen-char-secret!", PUBLIC_BASE_URL: "https://api.example.test", AGENT_POW_BITS: "8", AGENT_KEY_PBKDF2_ITERATIONS: "1000",
+    SHOGUN_SIDECAR_BINDING: "SIDECAR", SHOGUN_SIDECAR_BEARER_SECRET: "c".repeat(32),
+  };
+  const memStore = () => ({ usage: new InMemoryUsageStore(), rateLimit: new NoRateLimit(), agent: new InMemoryAgentStore(), close: () => Promise.resolve() });
+
+  it("parses the binding, defaulting the URL to a label", () => {
+    expect(mcpRelayConfigFromEnv({ SHOGUN_SIDECAR_BINDING: "SIDECAR", SHOGUN_SIDECAR_BEARER_SECRET: "c".repeat(32) }))
+      .toEqual({ url: SIDECAR_BINDING_ORIGIN, binding: "SIDECAR", bearerSecret: "c".repeat(32) });
+    expect(() => mcpRelayConfigFromEnv({ SHOGUN_SIDECAR_BINDING: "not a name", SHOGUN_SIDECAR_BEARER_SECRET: "c".repeat(32) })).toThrow("SHOGUN_SIDECAR_BINDING");
+    expect(() => mcpRelayConfigFromEnv({ SHOGUN_SIDECAR_BINDING: "SIDECAR" })).toThrow("bearer source");
+    expect(agentLaneLine(relayConfigFromEnv(env))).toContain("mcp relay on (binding)");
+    expect(bindingFetch({}, "SIDECAR")).toBeUndefined();
+    expect(bindingFetch({ SIDECAR: "a string var" }, "SIDECAR")).toBeUndefined();
+  });
+
+  async function registered(relay: ReturnType<typeof createRelay>): Promise<string> {
+    const challenge = ((await (await relay.app.request("/v1/agents/challenge")).json()) as { challenge: string }).challenge;
+    const reg = await relay.app.request("/v1/agents", { method: "POST", headers: { "cf-connecting-ip": "203.0.113.79", "x-agent-pow": `${challenge}:${solvePow(challenge, 8)!}` } });
+    return ((await reg.json()) as { key: string }).key;
+  }
+
+  it("answers 503 with next_action when the binding is not bound, and relays through it when it is", async () => {
+    const config = relayConfigFromEnv(env);
+    const call = (relay: ReturnType<typeof createRelay>, key: string) => relay.app.request("/mcp", { method: "POST", headers: { authorization: `Bearer ${key}`, "mcp-method": "tools/call", "mcp-name": "memory.ingest", "mcp-quantity": "1" }, body: "{}" });
+    const unbound = createRelay(config, memStore(), { gateway: new FakeGateway(), log: () => undefined });
+    const off = await call(unbound, await registered(unbound));
+    expect(off.status).toBe(503);
+    expect(((await off.json()) as Err).error).toEqual(expect.objectContaining({ code: "upstream_unavailable", next_action: "retry_after" }));
+
+    const seen: string[] = [];
+    const binding = {
+      fetch(this: unknown, input: string): Promise<Response> {
+        expect(this).toBe(binding);
+        seen.push(input);
+        return Promise.resolve(new Response('{"jsonrpc":"2.0","id":1,"result":{}}', { status: 200, headers: { "content-type": "application/json", "mcp-quantity": "1" } }));
+      },
+    };
+    const bound = createRelay(config, memStore(), { gateway: new FakeGateway(), log: () => undefined, sidecarFetch: bindingFetch({ SIDECAR: binding }, "SIDECAR")! });
+    const on = await call(bound, await registered(bound));
+    expect(on.status).toBe(200);
+    expect(on.headers.get("x-usage-cost-micro-usd")).toBe(String(RATE_MICROS.ingest));
+    expect(seen).toEqual([`${SIDECAR_BINDING_ORIGIN}/mcp`]);
   });
 });

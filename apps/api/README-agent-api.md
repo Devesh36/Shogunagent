@@ -168,8 +168,7 @@ X-Latency-Ms: 41
 ```
 
 The body is the core's, relayed untouched as a stream. Sequence inside the gateway: verify key
-(`401` with `WWW-Authenticate` first, whatever else the request says) → classify (`Mcp-Method` is
-required on a `POST`, `Mcp-Name` on a `tools/call`) → quote → **reserve** (wallet and the four cap
+(`401` with `WWW-Authenticate` first, whatever else the request says) → classify → quote → **reserve** (wallet and the four cap
 counters in one transaction) → relay to the principal's sidecar → **settle** once from the reply's
 `Mcp-Quantity` (the units the core took, capped at the reservation; `0` for a JSON-RPC error, a
 refusal or an idempotent replay, which travel as HTTP 200; a non-2xx or a reply without the header
@@ -180,7 +179,7 @@ A dry run answers `200 { "dry_run": true, "quote": { "unit", "quantity", "cost_m
 "sufficient": true, "balance_micro_usd": …, "usage": {…,"cost_micro_usd":0}, "latency_ms" }`.
 The real call then settles at exactly `quote.cost_micro_usd` when the core takes every unit.
 
-Refusals: `401` (key), `400 missing_header | invalid_metering_header`, `403 insufficient_scope`,
+Refusals: `401` (key), `400 invalid_metering_header` (and the core's JSON-RPC `400 missing_header`), `403 insufficient_scope`,
 `402 payment_required | cap_exceeded` (`docs/api/402.md`), `421 wrong_shard`,
 `503 upstream_unavailable | principal_not_provisioned | core_rejected_gateway | wallet_unavailable | capacity_exhausted`
 (the last is the company's global daily breaker; `Retry-After` to UTC midnight).
@@ -337,8 +336,9 @@ tables.
   unsettled receipts are never deleted (they hold money).
 
 The core behind `/mcp` is the sidecar relay (E34, `src/mcp-proxy.ts`): on with
-`SHOGUN_SIDECAR_URL` and `SHOGUN_SIDECAR_PRINCIPAL_TOKENS` or `SHOGUN_SIDECAR_BEARER_SECRET`
-(optionally `SHOGUN_SHARD`); without them `/mcp` answers `503 upstream_unavailable` before
+`SHOGUN_SIDECAR_URL` (or, on the Worker, `SHOGUN_SIDECAR_BINDING`) and
+`SHOGUN_SIDECAR_PRINCIPAL_TOKENS` or `SHOGUN_SIDECAR_BEARER_SECRET` (optionally `SHOGUN_SHARD`;
+transport options in `docs/deploy/production.md` §1); without them `/mcp` answers `503 upstream_unavailable` before
 reserving. Not in this slice: the router's `runPricer`, storage billing (the
 rate is published; the sweep that books it comes with the core's usage report), and webhook
 delivery of the billing events (`wallet.low_balance`, `cap.reached` go to the in-memory notifier

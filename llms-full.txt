@@ -518,8 +518,7 @@ X-Latency-Ms: 41
 ```
 
 The body is the core's, relayed untouched as a stream. Sequence inside the gateway: verify key
-(`401` with `WWW-Authenticate` first, whatever else the request says) → classify (`Mcp-Method` is
-required on a `POST`, `Mcp-Name` on a `tools/call`) → quote → **reserve** (wallet and the four cap
+(`401` with `WWW-Authenticate` first, whatever else the request says) → classify → quote → **reserve** (wallet and the four cap
 counters in one transaction) → relay to the principal's sidecar → **settle** once from the reply's
 `Mcp-Quantity` (the units the core took, capped at the reservation; `0` for a JSON-RPC error, a
 refusal or an idempotent replay, which travel as HTTP 200; a non-2xx or a reply without the header
@@ -530,7 +529,7 @@ A dry run answers `200 { "dry_run": true, "quote": { "unit", "quantity", "cost_m
 "sufficient": true, "balance_micro_usd": …, "usage": {…,"cost_micro_usd":0}, "latency_ms" }`.
 The real call then settles at exactly `quote.cost_micro_usd` when the core takes every unit.
 
-Refusals: `401` (key), `400 missing_header | invalid_metering_header`, `403 insufficient_scope`,
+Refusals: `401` (key), `400 invalid_metering_header` (and the core's JSON-RPC `400 missing_header`), `403 insufficient_scope`,
 `402 payment_required | cap_exceeded` (`docs/api/402.md`), `421 wrong_shard`,
 `503 upstream_unavailable | principal_not_provisioned | core_rejected_gateway | wallet_unavailable | capacity_exhausted`
 (the last is the company's global daily breaker; `Retry-After` to UTC midnight).
@@ -687,8 +686,9 @@ tables.
   unsettled receipts are never deleted (they hold money).
 
 The core behind `/mcp` is the sidecar relay (E34, `src/mcp-proxy.ts`): on with
-`SHOGUN_SIDECAR_URL` and `SHOGUN_SIDECAR_PRINCIPAL_TOKENS` or `SHOGUN_SIDECAR_BEARER_SECRET`
-(optionally `SHOGUN_SHARD`); without them `/mcp` answers `503 upstream_unavailable` before
+`SHOGUN_SIDECAR_URL` (or, on the Worker, `SHOGUN_SIDECAR_BINDING`) and
+`SHOGUN_SIDECAR_PRINCIPAL_TOKENS` or `SHOGUN_SIDECAR_BEARER_SECRET` (optionally `SHOGUN_SHARD`;
+transport options in `docs/deploy/production.md` §1); without them `/mcp` answers `503 upstream_unavailable` before
 reserving. Not in this slice: the router's `runPricer`, storage billing (the
 rate is published; the sweep that books it comes with the core's usage report), and webhook
 delivery of the billing events (`wallet.low_balance`, `cap.reached` go to the in-memory notifier
@@ -1125,16 +1125,18 @@ the call against the principal's store. Implementation: `apps/api/src/mcp-proxy.
 1. **Authenticate.** No valid agent key or OAuth access token: `401` with
    `WWW-Authenticate: Bearer realm="shogunagent", resource_metadata="<base>/.well-known/oauth-protected-resource/mcp"`
    (the pointer is present when OAuth is served), before any other header is looked at.
-2. **Classify** from `Mcp-Method`, `Mcp-Name`, `Mcp-Quantity` (`400 missing_header` when a `POST`
-   lacks `Mcp-Method`, or a `tools/call` lacks `Mcp-Name`). Region (`421 wrong_region`), scope
-   (`403 insufficient_scope`), dry run.
+2. **Classify** from `Mcp-Method`, `Mcp-Name`, `Mcp-Quantity`. Region (`421 wrong_region`), scope
+   (`403 insufficient_scope`), dry run. Missing or mismatched `Mcp-Method` / `Mcp-Name` are refused
+   by the core (JSON-RPC `400 missing_header` / `*_mismatch`) before anything runs, and the refusal
+   settles at 0; a `POST` without `Mcp-Method` is classified as free protocol traffic.
 3. **Can this gateway serve the principal?** No sidecar configured: `503 upstream_unavailable`
    (`next_action: retry_after`). The principal's store lives on another replica (`SHOGUN_SHARD`):
    `421 wrong_shard`. No sidecar bearer for the principal: `503 principal_not_provisioned`
    (`next_action: contact_operator`). Nothing is reserved in any of these.
 4. **Reserve** the quote (wallet or commit, the four caps, the global breaker; `402` as in
    `docs/api/402.md`).
-5. **Relay** to `<SHOGUN_SIDECAR_URL>/mcp`: the request body is handed on as a stream and the reply
+5. **Relay** to `<SHOGUN_SIDECAR_URL>/mcp`, through the configured transport (global `fetch`, or a
+   Workers binding with `SHOGUN_SIDECAR_BINDING`; options in `docs/deploy/production.md` §1): the request body is handed on as a stream and the reply
    body comes back as a stream; neither is read, buffered, logged or stored by the gateway
    (invariants 1 and 2). Request headers passed: `Content-Type`, `Accept`, `Mcp-Method`,
    `Mcp-Name`, `Mcp-Protocol-Version`, `Last-Event-ID`, `Idempotency-Key`; the agent's

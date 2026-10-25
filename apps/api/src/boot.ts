@@ -139,9 +139,13 @@ import { FetchDeepgramGateway } from "./deepgram.js";
  *                              required and X402_MAX_TIMEOUT_SECONDS is optional (60). Needs
  *                              sql/x402-payments.sql applied.
  *
- * The hosted `/mcp` relay (E34; mcp-proxy.ts). On when SHOGUN_SIDECAR_URL and one of the two
- * bearer sources are set; otherwise `/mcp` answers `503 upstream_unavailable` before reserving:
+ * The hosted `/mcp` relay (E34; mcp-proxy.ts). On when a transport (SHOGUN_SIDECAR_URL or
+ * SHOGUN_SIDECAR_BINDING) and one of the two bearer sources are set; otherwise `/mcp` answers
+ * `503 upstream_unavailable` before reserving:
  * - SHOGUN_SIDECAR_URL       — the sidecar's base URL (`http://127.0.0.1:7464` in a pod).
+ * - SHOGUN_SIDECAR_BINDING   — optional, Workers only: the name of a service / Workers VPC binding
+ *                              that reaches the sidecar privately (a Cloudflare Tunnel in its pod).
+ *                              Set = the relay calls that binding, never the public network.
  * - SHOGUN_SIDECAR_PRINCIPAL_TOKENS — secret, optional: the sidecar's `SHOGUN_PRINCIPAL_TOKENS`
  *                              (`principal:token[:agent_id],…`). The gateway presents a principal's
  *                              token to the sidecar instead of the agent's key.
@@ -205,7 +209,7 @@ import { DEFAULT_DELETE_GRACE_DAYS, enterpriseJobs } from "./enterprise/app.js";
 import { DEFAULT_CLOCK_SKEW_SECS } from "./enterprise/oidc.js";
 import { DEFAULT_REGION, REGION_RE, parseRegionEndpoints, type RegionConfig } from "./enterprise/region.js";
 import { httpEnterpriseSidecar } from "./enterprise/sidecar-ops.js";
-import { createMcpRelay, parseShard, parseSidecarPrincipalTokens, type McpRelayConfig } from "./mcp-proxy.js";
+import { SIDECAR_BINDING_ORIGIN, createMcpRelay, parseShard, parseSidecarPrincipalTokens, type FetchFn, type McpRelayConfig } from "./mcp-proxy.js";
 import { SqlEnterpriseStore, type EnterpriseStore } from "./enterprise/store.js";
 import { DEFAULT_BATCH_PRICES, priceFor, priceTableWithOverride, spendCapMicrosFromEnv, usageMicros, usdCapMicrosFromEnv, type PriceTable, type SpendBreaker } from "./spend.js";
 import { SETTLE_WINDOW_DAYS, keepCutoff, utcDate, type UsageStore } from "./usage.js";
@@ -363,15 +367,18 @@ export interface AgentConfig {
 /** Parse the `/mcp` relay settings, or `undefined` when no bearer source is set. Throws
  * `BootError` naming the variable, never echoing a value. */
 export function mcpRelayConfigFromEnv(env: EnvRecord): McpRelayConfig | undefined {
-  const url = env.SHOGUN_SIDECAR_URL?.trim();
+  const rawUrl = env.SHOGUN_SIDECAR_URL?.trim();
+  const binding = env.SHOGUN_SIDECAR_BINDING?.trim();
   const tokenSpec = env.SHOGUN_SIDECAR_PRINCIPAL_TOKENS?.trim();
   const bearerSecret = env.SHOGUN_SIDECAR_BEARER_SECRET?.trim();
   const shardRaw = env.SHOGUN_SHARD?.trim();
   if (!tokenSpec && !bearerSecret) {
-    if (shardRaw) throw new BootError("SHOGUN_SHARD needs the /mcp relay (SHOGUN_SIDECAR_URL with SHOGUN_SIDECAR_PRINCIPAL_TOKENS or SHOGUN_SIDECAR_BEARER_SECRET)");
+    if (shardRaw || binding) throw new BootError(`${shardRaw ? "SHOGUN_SHARD" : "SHOGUN_SIDECAR_BINDING"} needs the /mcp relay's bearer source (SHOGUN_SIDECAR_PRINCIPAL_TOKENS or SHOGUN_SIDECAR_BEARER_SECRET)`);
     return undefined;
   }
-  if (!url || !/^https?:\/\/[^\s]+$/.test(url)) throw new BootError("missing or invalid SHOGUN_SIDECAR_URL (the sidecar's base URL; a sidecar bearer source is set)");
+  if (binding && !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(binding)) throw new BootError("invalid SHOGUN_SIDECAR_BINDING (the name of a Workers binding)");
+  const url = rawUrl || (binding ? SIDECAR_BINDING_ORIGIN : undefined);
+  if (!url || !/^https?:\/\/[^\s]+$/.test(url)) throw new BootError("missing or invalid SHOGUN_SIDECAR_URL (the sidecar's base URL, or set SHOGUN_SIDECAR_BINDING; a sidecar bearer source is set)");
   if (bearerSecret !== undefined && bearerSecret !== "" && bearerSecret.length < 32) throw new BootError("invalid SHOGUN_SIDECAR_BEARER_SECRET (at least 32 characters, the same value the sidecar has)");
   let tokens: Map<string, string> | undefined;
   if (tokenSpec) {
@@ -389,7 +396,7 @@ export function mcpRelayConfigFromEnv(env: EnvRecord): McpRelayConfig | undefine
       throw new BootError("invalid SHOGUN_SHARD (<index>/<count> with 0 <= index < count, e.g. 0/2)");
     }
   }
-  return { url, ...(tokens && tokens.size > 0 ? { tokens } : {}), ...(bearerSecret ? { bearerSecret } : {}), ...(shard ? { shard } : {}) };
+  return { url, ...(binding ? { binding } : {}), ...(tokens && tokens.size > 0 ? { tokens } : {}), ...(bearerSecret ? { bearerSecret } : {}), ...(shard ? { shard } : {}) };
 }
 
 export interface EnterpriseConfig {
@@ -562,7 +569,7 @@ export async function billingJobs(config: Pick<RelayConfig, "agent">, store: Pic
 /** Whether the agent API is served; one boot-log line, so a 404 on `/v1/agents` is not a mystery. */
 export function agentLaneLine(config: Pick<RelayConfig, "agent">): string {
   if (!config.agent) return "agent_api closed (AGENT_API_ENABLED unset)";
-  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"}; provider payouts ${config.agent.payouts ? "on" : "off: PAYOUTS_STATE_SECRET unset"}; x402 ${config.agent.x402 ? "on" : "off"}; mcp relay ${config.agent.mcpRelay ? `on${config.agent.mcpRelay.shard ? ` (shard ${config.agent.mcpRelay.shard.index}/${config.agent.mcpRelay.shard.count})` : ""}` : "off: SHOGUN_SIDECAR_URL or its bearer source unset"}; enterprise ${config.agent.enterprise ? `on (region ${config.agent.enterprise.region.served}; sidecar ops ${config.agent.enterprise.sidecar ? "on" : "off"})` : "off"})`;
+  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"}; provider payouts ${config.agent.payouts ? "on" : "off: PAYOUTS_STATE_SECRET unset"}; x402 ${config.agent.x402 ? "on" : "off"}; mcp relay ${config.agent.mcpRelay ? `on${config.agent.mcpRelay.binding ? " (binding)" : ""}${config.agent.mcpRelay.shard ? ` (shard ${config.agent.mcpRelay.shard.index}/${config.agent.mcpRelay.shard.count})` : ""}` : "off: SHOGUN_SIDECAR_URL or its bearer source unset"}; enterprise ${config.agent.enterprise ? `on (region ${config.agent.enterprise.region.served}; sidecar ops ${config.agent.enterprise.sidecar ? "on" : "off"})` : "off"})`;
 }
 
 /** The Batch price table in force: the override, or the shipped defaults. */
@@ -762,6 +769,9 @@ export interface RelayShared {
   log?: LogFn;
   /** Injected clock (tests). */
   now?: () => Date;
+  /** E34: how the /mcp relay reaches the sidecar. Default: global `fetch` to `SHOGUN_SIDECAR_URL`;
+   * the Worker passes its `SHOGUN_SIDECAR_BINDING` binding's `fetch` (mcp-proxy.ts `bindingFetch`). */
+  sidecarFetch?: FetchFn;
 }
 
 export interface Relay {
@@ -813,8 +823,12 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
   const traceExporter = shared.traceExporter ?? newTraceExporter(config, metrics);
   // E26: the operator client to the sidecar (teams, grants, audit export, purge), when configured.
   const enterpriseSidecar = config.agent?.enterprise?.sidecar ? httpEnterpriseSidecar(config.agent.enterprise.sidecar.url, config.agent.enterprise.sidecar.adminToken) : undefined;
-  // E34: the hosted /mcp relay to the principal's sidecar, when configured.
-  const mcpRelay = config.agent?.mcpRelay ? createMcpRelay(config.agent.mcpRelay) : undefined;
+  // E34: the hosted /mcp relay to the principal's sidecar, when configured. A binding transport
+  // needs the runtime's binding (`shared.sidecarFetch`); without it the relay stays off (503).
+  const relayConfig = config.agent?.mcpRelay;
+  const mcpRelay = relayConfig && (!relayConfig.binding || shared.sidecarFetch)
+    ? createMcpRelay(relayConfig, shared.sidecarFetch)
+    : undefined;
   const deps: RelayDeps = {
     gateway,
     usage: store.usage,

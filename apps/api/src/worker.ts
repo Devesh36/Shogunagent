@@ -31,6 +31,7 @@ import type { ExecutionContext } from "hono";
 import { BootError, agentLaneLine, createRelay, formLaneLine, newMetrics, newTraceExporter, postgresStore, relayConfigFromEnv, trialLaneLine, type EnvRecord, type RelayConfig, providerGateways } from "./boot.js";
 import type { AnthropicGateway } from "./gateway.js";
 import { operational } from "./logging.js";
+import { bindingFetch } from "./mcp-proxy.js";
 import type { RelayMetrics } from "./metrics.js";
 import type { OtlpTraceExporter } from "./observability.js";
 import { postgresClient } from "./sql.js";
@@ -92,6 +93,8 @@ function boot(env: WorkerEnv): BootState {
     operational.info(trialLaneLine(config));
     operational.info(formLaneLine(config));
     operational.info(agentLaneLine(config));
+    // E34: a relay binding named in the config but not bound to this Worker leaves /mcp at 503.
+    if (config.agent?.mcpRelay?.binding && !bindingFetch(env, config.agent.mcpRelay.binding)) operational.warn("mcp relay off: the SHOGUN_SIDECAR_BINDING binding is not bound to this Worker");
     const provided = providerGateways(config);
     const metrics = newMetrics(config);
     const traceExporter = newTraceExporter(config, metrics);
@@ -155,7 +158,10 @@ export default {
 
     // Per request: the client (see the module comment) and therefore the store and the app around
     // it. Composition is a handful of object literals; the metrics window and the gateway persist.
-    const relay = createRelay(config, openStore(s.booted), { metrics, gateway, ...(orphanSweep ? { orphanSweep } : {}), ...(traceExporter ? { traceExporter } : {}) });
+    // E34: the /mcp relay's private path to the sidecar, when it is a binding (mcp-proxy.ts).
+    const binding = config.agent?.mcpRelay?.binding;
+    const sidecarFetch = binding ? bindingFetch(env, binding) : undefined;
+    const relay = createRelay(config, openStore(s.booted), { metrics, gateway, ...(orphanSweep ? { orphanSweep } : {}), ...(traceExporter ? { traceExporter } : {}), ...(sidecarFetch ? { sidecarFetch } : {}) });
     return relay.app.fetch(request, env, ctx);
   },
 
