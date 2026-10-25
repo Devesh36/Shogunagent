@@ -5,10 +5,12 @@ The router's first-party connectors (Gmail, Google Calendar, GitHub, Linear, Sla
 token in its Worker environment: for each run it asks apps/api for the token of the principal behind
 the caller's agent key, uses it for that one vendor request, and drops it.
 
-This page is the contract between the two. The router side is built (`apps/router/src/transport.ts`,
-`caller_connector` auth; tests in `apps/router/test/hardening.test.ts`). **The apps/api side is not
-built yet**: until it is, apps/api answers 404 for the unknown path, which the router reports to
-every caller as `connector_not_connected` (see "Until the route exists" below).
+This page is the contract between the two. Both sides are built: the router's client
+(`apps/router/src/transport.ts`, `caller_connector` auth; tests in `apps/router/test/hardening.test.ts`)
+and the apps/api route (`apps/api/src/connector-tokens.ts`, served with the router's wallet when
+`ROUTER_SETTLEMENT_TOKEN` is set; tests in `apps/api/test/connector-tokens.test.ts`, which also drive
+the router's real client against the route in-process). What is still missing before the hosted
+first-party connectors can work is listed under "What the gateway does not have yet" below.
 
 ## Route
 
@@ -92,8 +94,44 @@ token from the env variable each names. That is one account for every caller and
 own machine only. Without the flag (and without the wallet URL) the connectors answer
 `503 provider_unavailable` (`try_alternative`) before any network call.
 
-## Until the route exists
+## How apps/api opens a row (E48)
 
-Production must not list the first-party connectors before apps/api serves this route: a 404 from an
-unknown route would be read as "not connected" for every caller. The pre-launch checklist
-(`docs/deploy/production.md` §9) keeps them out of the hosted catalog until the route ships.
+`apps/api/src/connector-tokens.ts` reads the row with the `connector_tokens` store
+(`SqlConnectorRows`) and opens it with `KmsSealer`, a byte-compatible TypeScript twin of the Rust
+`shogun_integrations::token_store::KmsSealer`: the row is
+`[1][u16 BE wrapped-key length][wrapped data key][12-byte nonce][ChaCha20-Poly1305 ciphertext ‖ tag]`,
+the data key is unwrapped by the KMS under the context `shogun/token/v1/<principal>/<slot>`, and the
+AEAD's associated data is `shogun-token-kms/v1|<principal>|<slot>`. The stored value is the JSON
+`shogun_integrations::token::serialize` writes (`access_token`, `refresh_token`, `expires_at_ms`,
+`account_label`). A KMS that does not answer is `503` (nothing opened); a row that does not open, or
+does not parse, is `404` and logs `connector_token_unreadable`.
+
+The KMS itself is a `KeyWrapper` the runtime passes in (`RelayShared.connectorKeyWrapper` in
+`apps/api/src/boot.ts`), and the refresh is a `ConnectorRefresher` (`connectorRefresher`). Without a
+wrapper the route still authenticates both bearers, then answers `404 connector_not_connected` and
+logs `connector_vault_unconfigured`: the same answer an unconnected principal gets, never a token.
+Without a refresher, a token expiring within 60 seconds is returned as is while it is still valid
+(`expires_at` tells the router), and an expired one is `404` (`connector_token_expired`). A refresh
+that answers `revoked` is `404`; one that fails while the old token is still valid returns the old
+token, and `503` when it has expired. A refreshed tokenset is sealed again and written back before
+the answer (a failed write-back is logged `connector_token_writeback_failed` and the fresh token is
+still returned); a refresh response without a refresh token keeps the stored one.
+
+## What the gateway does not have yet
+
+- **A KMS key wrapper in any runtime.** The AWS KMS, GCP Cloud KMS and Vault Transit clients live in
+  the Rust core (`shogun-core` `tenancy::key_provider`), behind its single traced egress. Neither the
+  Worker nor the Node entry passes a `KeyWrapper`, so production answers `404` for every caller.
+  Options for the owner: a TypeScript client for the region's KMS in the gateway, or a sidecar
+  endpoint that opens the row in the core (needs a `crates/` change).
+- **A writer.** Nothing writes `connector_tokens` rows yet: the hosted connect flow (the user
+  authorising Gmail etc. for their principal) is not built.
+- **A refresh path.** No `ConnectorRefresher` is wired (the OAuth broker's refresh, #1101 D6). Two
+  runs refreshing the same grant at once would both call the vendor; providers that rotate refresh
+  tokens need a per-row lock when the refresher lands.
+
+## Until all of that exists
+
+Production must not list the first-party connectors in the hosted catalog: every caller would get
+`connector_not_connected`. The pre-launch checklist (`docs/deploy/production.md` §9) keeps them out
+until the wrapper, the writer and the refresh path ship.

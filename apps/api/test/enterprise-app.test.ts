@@ -21,7 +21,7 @@ import { sqliteDouble } from "./sql-double.js";
 import { TEST_IDP_CERT } from "./saml-test-idp-cert.js";
 
 const ENTERPRISE_SQL = readFileSync(new URL("../sql/enterprise.sql", import.meta.url), "utf8");
-const AGENT_SQL = readFileSync(new URL("../sql/agent-keys.sql", import.meta.url), "utf8");
+const AGENT_SQL = readFileSync(new URL("../sql/agent-keys.sql", import.meta.url), "utf8") + "\n" + readFileSync(new URL("../sql/agent-receipts-settled-quantity.sql", import.meta.url), "utf8");
 const OAUTH_SQL = readFileSync(new URL("../sql/agent-oauth.sql", import.meta.url), "utf8");
 
 async function errorOf(res: Response): Promise<{ code: string; message: string; next_action: string | null; [k: string]: unknown }> {

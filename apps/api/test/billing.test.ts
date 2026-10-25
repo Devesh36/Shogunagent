@@ -21,7 +21,7 @@ import { BASE, TEST_KEY_ITERATIONS, authed, makeAgentRig, mcp, registerAgent, ty
 import { makeKeys, signLicense } from "./helpers.js";
 import { sqliteDouble } from "./sql-double.js";
 
-const AGENT_SQL = readFileSync(new URL("../sql/agent-keys.sql", import.meta.url), "utf8");
+const AGENT_SQL = readFileSync(new URL("../sql/agent-keys.sql", import.meta.url), "utf8") + "\n" + readFileSync(new URL("../sql/agent-receipts-settled-quantity.sql", import.meta.url), "utf8");
 
 const backends: Array<[string, () => AgentStore]> = [
   ["in-memory", () => new InMemoryAgentStore()],

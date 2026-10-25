@@ -1,0 +1,20 @@
+-- The quantity a receipt settled at (docs/implementation-plan.md E48; docs/api/billing.md).
+--
+-- Provisioning, not a refinery migration (same rule as agent-keys.sql): apply once per database,
+-- after agent-keys.sql, as the table owner (shogun_relay) with search_path=relay:
+--   psql "$RELAY_DATABASE_URL" -v ON_ERROR_STOP=1 -c 'SET search_path = relay' -f apps/api/sql/agent-receipts-settled-quantity.sql
+-- Idempotent (IF NOT EXISTS) and additive only: never DROP / RENAME / ALTER COLUMN here.
+--
+-- `quantity` stays the quantity reserved (quoted) for the call. `settled_quantity` is what the call
+-- settled at: the quantity the core reported in its reply `Mcp-Quantity` (capped at the
+-- reservation), 1 for a router run that succeeded, 0 for a failed, refused or replayed call; a
+-- free call is written settled at its reserved quantity. NULL while the receipt is unsettled, and
+-- on rows settled before this file was applied (GET /v1/receipts reports those as
+-- `settled_quantity: null`). A number and nothing else: no body, no content.
+--
+-- The gateway's boot check (`SqlAgentStore.checkSchema`) reads this column, so a gateway built
+-- with E48 refuses to serve the agent API until this file is applied: apply it BEFORE deploying
+-- that gateway. agent-keys-permissions.sql already covers the table (RLS on, nothing for other
+-- roles); a column needs no grant of its own.
+-- Rollback (if ever needed): older gateways ignore the column; leave it in place.
+ALTER TABLE agent_receipts ADD COLUMN IF NOT EXISTS settled_quantity BIGINT;

@@ -180,6 +180,7 @@ import { REGISTER_PER_HOUR, REGISTER_WINDOW_MS } from "./agent-app.js";
 import { DEFAULT_PBKDF2_ITERATIONS, MAX_PBKDF2_ITERATIONS } from "./agent-keys.js";
 import { parseSigningKey } from "./wellknown/agent-card.js";
 import { SqlAgentStore } from "./agent-pg-store.js";
+import { KmsSealer, SqlConnectorRows, type ConnectorRefresher, type ConnectorRowStore, type KeyWrapper } from "./connector-tokens.js";
 import { httpSidecarClient } from "./approvals/sidecar-client.js";
 import { InMemoryWebhookStore, SqlWebhookStore, type WebhookStore } from "./approvals/webhooks.js";
 import type { AgentStore } from "./agent-store.js";
@@ -728,6 +729,9 @@ export interface RelayStore {
   x402?: X402Store;
   /** The enterprise directory (E26). Absent = the enterprise lane is not served even when configured. */
   enterprise?: EnterpriseStore;
+  /** E48: the sealed connector credentials (`connector_tokens`). Read only when the runtime also
+   * supplies a KMS key wrapper (`RelayShared.connectorKeyWrapper`). */
+  connectorRows?: ConnectorRowStore;
   close(): Promise<void>;
 }
 
@@ -752,6 +756,7 @@ export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurs
     registerLimiter: new SqlWindowLimiter(db, config.agent?.registerPerHour ?? REGISTER_PER_HOUR, REGISTER_WINDOW_MS, () => warn("ratelimit_unavailable (failing open)")),
     webhooks: new SqlWebhookStore(db),
     enterprise: new SqlEnterpriseStore(db),
+    connectorRows: new SqlConnectorRows(db),
     close: () => db.close(),
   };
 }
@@ -772,6 +777,12 @@ export interface RelayShared {
   /** E34: how the /mcp relay reaches the sidecar. Default: global `fetch` to `SHOGUN_SIDECAR_URL`;
    * the Worker passes its `SHOGUN_SIDECAR_BINDING` binding's `fetch` (mcp-proxy.ts `bindingFetch`). */
   sidecarFetch?: FetchFn;
+  /** E48: the KMS key wrapper that opens `connector_tokens` rows (connector-tokens.ts). No entry
+   * supplies one yet: without it the connector-token route answers `404 connector_not_connected`
+   * and logs `connector_vault_unconfigured`. */
+  connectorKeyWrapper?: KeyWrapper;
+  /** E48: the OAuth broker's refresh path for expiring connector tokens. Absent = no refresh. */
+  connectorRefresher?: ConnectorRefresher;
 }
 
 export interface Relay {
@@ -889,6 +900,12 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
         } : {}),
         // E32: the router's wallet — reserve and settle every router run here, once.
         ...(config.agent.routerWallet ? { routerWallet: config.agent.routerWallet } : {}),
+        // E48: the router's per-caller connector tokens, served with the wallet. The rows are read
+        // only when this runtime has a KMS key wrapper to open them.
+        connectorTokens: {
+          ...(store.connectorRows && shared.connectorKeyWrapper ? { rows: store.connectorRows, sealer: new KmsSealer(shared.connectorKeyWrapper) } : {}),
+          ...(shared.connectorRefresher ? { refresher: shared.connectorRefresher } : {}),
+        },
         // E30: x402 acceptance, only with X402_ENABLED=1 (off by default; docs/decisions/0002-x402.md).
         ...(config.agent.x402 && store.x402 ? {
           x402: { config: config.agent.x402, facilitator: httpFacilitator(config.agent.x402.facilitatorUrl), store: store.x402 },

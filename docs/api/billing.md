@@ -134,6 +134,14 @@ reply header:
 | `2xx` without `Mcp-Quantity`, or with anything but a whole number | 0, logged as `event=settle_quantity_missing` |
 | any reply to a free call (`read`, `protocol`) | 0, whatever the header says (invariant 10) |
 
+The receipt records both figures (E48): `reserved_quantity` (the quote, also `quantity`) and
+`settled_quantity`, the quantity it settled at under the table above (`0` when it settled at 0;
+a free call is recorded at its reserved quantity). `GET /v1/receipts` returns both;
+`settled_quantity` is `null` while the call is in flight and on receipts settled before the
+gateway recorded it (`apps/api/sql/agent-receipts-settled-quantity.sql`). A router run's receipt
+settles at the router's reported quantity for an `ok` run and 0 otherwise. An x402-paid call
+settles at its whole quantity or 0.
+
 What the sidecar MUST send on every reply to a billable `tools/call` (`ingest`, `model_op`,
 `run` units):
 

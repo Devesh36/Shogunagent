@@ -66,6 +66,9 @@ export interface LogVars {
     | "approval_page" | "approval_decided" | "approval_refused" | "approval_notified" | "slack_rejected" | "webhook_registered"
     // E29 provider payouts (payouts-app.ts): fixed words, never an amount, a provider id or a reference.
     | "payout_store_unavailable" | "settlement_rejected" | "settlements_recorded" | "router_reserved" | "router_reserve_replayed" | "connect_link_created" | "payouts_run"
+    // E48 connector tokens for the router (connector-tokens.ts): fixed words, never a token, a slot value or a principal.
+    | "connector_token_served" | "connector_token_refreshed" | "connector_token_rejected" | "connector_not_connected" | "connector_token_unreadable"
+    | "connector_token_expired" | "connector_token_revoked" | "connector_token_unavailable" | "connector_vault_unconfigured"
     // E30 x402 (billing/x402.ts): fixed words, never a payment payload.
     | "x402_rejected" | "x402_replayed" | "x402_verified" | "x402_settled" | "x402_settle_failed"
     // E26 enterprise (enterprise/*.ts): fixed words, never a token, an assertion, a claim or a SCIM body.
@@ -96,7 +99,8 @@ export function routeTemplate(pathname: string): string {
     "/health", "/openapi.json", "/llms.txt", "/llms-full.txt", "/privacy", "/terms"].includes(pathname)) return pathname;
   // E19 billing and E3-T2 OAuth: fixed paths; ids collapsed below.
   // E32: the router's internal wallet routes (fixed paths).
-  if (["/v1/internal/router/reserve", "/v1/internal/router/settlements"].includes(pathname)) return pathname;
+  // E48: the router's connector-token route (connector-tokens.ts, a fixed path).
+  if (["/v1/internal/router/reserve", "/v1/internal/router/settlements", "/v1/internal/router/connector-token"].includes(pathname)) return pathname;
   if (["/v1/statements", "/v1/commit", "/v1/agents/me/licence", "/v1/admin/commits", "/v1/admin/adjustments",
     "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server",
     "/oauth/authorize", "/oauth/token", "/oauth/revoke"].includes(pathname)) return pathname;

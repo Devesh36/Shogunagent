@@ -34,6 +34,12 @@ const E19_COLUMNS: ReadonlyArray<[string, string]> = [
   ["agent_disputes", "credit_micros,resolved_at"],
 ];
 
+/** Columns added by a later, separate provisioning file: [table, columns, the file to apply]. */
+const LATER_COLUMNS: ReadonlyArray<[string, string, string]> = [
+  // E48: the quantity a receipt settled at.
+  ["agent_receipts", "settled_quantity", "sql/agent-receipts-settled-quantity.sql"],
+];
+
 const COMMIT_COLUMNS = "commit_id,subject_kind,subject_id,amount_micros,discount_bps,starts_at,ends_at,drawn_micros,overage_micros,overage_reported_micros,created_at,stripe_customer_id,stripe_subscription_item";
 
 function commitFromRow(r: Row): CommitRecord {
@@ -79,7 +85,7 @@ function keyFromRow(r: Row): AgentKeyRecord {
   };
 }
 
-const RECEIPT_COLUMNS = "receipt_id,principal_id,key_id,method,name,unit,quantity,estimate,cost,settled,day,month,ts,list_cost,funding,commit_id";
+const RECEIPT_COLUMNS = "receipt_id,principal_id,key_id,method,name,unit,quantity,estimate,cost,settled,day,month,ts,list_cost,funding,commit_id,settled_quantity";
 
 function receiptFromRow(r: Row): Receipt {
   return {
@@ -88,6 +94,7 @@ function receiptFromRow(r: Row): Receipt {
     unit: String(r.unit) as MeterUnit, quantity: num(r.quantity), estimateMicros: num(r.estimate), costMicros: num(r.cost),
     listCostMicros: opt(r.list_cost) ?? num(r.cost), funding: r.funding === "commit" ? "commit" : r.funding === "x402" ? "x402" : "wallet",
     ...(optText(r.commit_id) !== undefined ? { commitId: String(r.commit_id) } : {}),
+    ...(opt(r.settled_quantity) !== undefined ? { settledQuantity: num(r.settled_quantity) } : {}),
     settled: num(r.settled) === 1, day: String(r.day), month: String(r.month), ts: num(r.ts),
   };
 }
@@ -119,6 +126,13 @@ export class SqlAgentStore implements AgentStore {
         await this.db.query(`SELECT ${columns} FROM ${table} LIMIT 1`);
       } catch {
         throw new AgentStoreUnavailable(`agent store columns missing: ${table} (re-apply sql/agent-keys.sql)`);
+      }
+    }
+    for (const [table, columns, file] of LATER_COLUMNS) {
+      try {
+        await this.db.query(`SELECT ${columns} FROM ${table} LIMIT 1`);
+      } catch {
+        throw new AgentStoreUnavailable(`agent store columns missing: ${table} (apply ${file})`);
       }
     }
   }
@@ -242,10 +256,11 @@ export class SqlAgentStore implements AgentStore {
     return this.tx<ReserveOutcome>(async (tx) => {
       if (!validReserve(input)) return { kind: "unavailable" };
       const funding = input.funding ?? input.commit?.funding ?? "wallet";
+      // A free call is written settled at its reserved quantity; any other starts unsettled (NULL).
       const insertReceipt = (settled: 0 | 1): Promise<Row[]> => tx.query(`INSERT INTO agent_receipts(${RECEIPT_COLUMNS})
-        VALUES($1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::bigint,$8::bigint,0,$9::smallint,$10::text,$11::text,$12::bigint,0,$13::text,$14::text)`,
+        VALUES($1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::bigint,$8::bigint,0,$9::smallint,$10::text,$11::text,$12::bigint,0,$13::text,$14::text,$15::bigint)`,
       [input.receiptId, input.principalId, input.keyId, input.method, input.name ?? null, input.unit, input.quantity, input.micros, settled, input.day, input.month, input.ts,
-        funding, input.commit?.commitId ?? null]);
+        funding, input.commit?.commitId ?? null, settled === 1 ? input.quantity : null]);
       if (input.micros === 0) {
         await insertReceipt(1);
         return { kind: "ok" };
@@ -293,13 +308,19 @@ export class SqlAgentStore implements AgentStore {
     }).catch(() => ({ kind: "unavailable" } as const));
   }
 
-  settle(receiptId: string, actualMicros: number, listMicros: number = actualMicros): Promise<void> {
+  settle(receiptId: string, actualMicros: number, listMicros: number = actualMicros, settledQuantity?: number): Promise<void> {
     return this.tx(async (tx) => {
       if (!Number.isSafeInteger(actualMicros) || actualMicros < 0) return;
       const list = Number.isSafeInteger(listMicros) && listMicros >= actualMicros ? listMicros : actualMicros;
+      // The settled quantity is computed in SQL from the row's reserved quantity (`settledQuantityFor`):
+      // the reported figure capped at the reservation, or all of it when charged and none when not.
+      const reported = settledQuantity !== undefined && Number.isSafeInteger(settledQuantity) && settledQuantity >= 0 ? settledQuantity : null;
       // The flag flip is the once-only guard: a second settle finds no unsettled row.
-      const rows = await tx.query(`UPDATE agent_receipts SET settled=1,cost=$2::bigint,list_cost=$3::bigint WHERE receipt_id=$1::text AND settled=0
-        RETURNING principal_id,key_id,estimate,day,month,funding,commit_id`, [receiptId, actualMicros, list]);
+      const rows = await tx.query(`UPDATE agent_receipts SET settled=1,cost=$2::bigint,list_cost=$3::bigint,
+        settled_quantity=CASE WHEN $4::bigint IS NOT NULL THEN CASE WHEN $4::bigint < quantity THEN $4::bigint ELSE quantity END
+          WHEN $2::bigint > 0 THEN quantity ELSE 0 END
+        WHERE receipt_id=$1::text AND settled=0
+        RETURNING principal_id,key_id,estimate,day,month,funding,commit_id`, [receiptId, actualMicros, list, reported]);
       const r = rows[0];
       if (!r) return;
       const estimate = num(r.estimate);

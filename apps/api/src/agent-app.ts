@@ -15,6 +15,7 @@
  *   POST /v1/quote                       the exact cost of a call, nothing reserved [read]
  *   GET  /v1/receipts?since=             per-call receipts                         [read]
  *   POST /v1/receipts/:id/dispute        open a dispute                            [write]
+ *   POST /v1/internal/router/connector-token  a caller's connector token for one router run (connector-tokens.ts) [router token + caller key]
  *   POST /v1/handoff                     an A2A state-of-work handoff, relayed to the core (handoff.ts) [read]
  *   ALL  /mcp                            the metered MCP proxy (metering.ts)       [by unit]
  *
@@ -52,6 +53,7 @@ import { createApprovalsApp, type ApprovalsDeps } from "./approvals/app.js";
 import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
 import { registerPayoutRoutes, type PayoutDeps } from "./payouts-app.js";
 import { ROUTER_RESERVE_PATH, ROUTER_SETTLEMENTS_PATH, registerRouterWalletRoutes } from "./router-wallet.js";
+import { CONNECTOR_TOKEN_PATH, registerConnectorTokenRoute, type ConnectorRefresher, type ConnectorRowStore, type KmsSealer } from "./connector-tokens.js";
 import { createEnterpriseApp, ssoConsentPolicy, type EnterpriseDeps } from "./enterprise/app.js";
 import { regionAdmission } from "./enterprise/region.js";
 
@@ -110,6 +112,10 @@ export interface AgentDeps extends MeteringDeps {
    * reserves and settles its runs here (`/v1/internal/router/{reserve,settlements}`). Absent, a
    * `payouts.settlementToken` serves the same routes. */
   routerWallet?: { token: string };
+  /** E48: where the router's per-caller connector tokens come from (connector-tokens.ts). Served
+   * with the router's wallet (same `ROUTER_SETTLEMENT_TOKEN`); without `rows` and `sealer` the
+   * route answers every caller `404 connector_not_connected`. */
+  connectorTokens?: { rows?: ConnectorRowStore; sealer?: KmsSealer; refresher?: ConnectorRefresher };
   /** The enterprise lane (E26, enterprise/app.ts): tenants, SSO for tenant admins, SCIM, region
    * separation, the tenant audit export. Absent = none of those routes exist and every principal
    * is served here. */
@@ -503,6 +509,9 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
       return c.json({
         receipts: rows.map((r) => ({
           id: r.receiptId, key_id: r.keyId, method: r.method, name: r.name ?? null, unit: r.unit, quantity: r.quantity,
+          // E48: what was reserved and what the call settled at (null while in flight, and on a
+          // receipt settled before the gateway recorded it).
+          reserved_quantity: r.quantity, settled_quantity: r.settled ? (r.settledQuantity ?? null) : null,
           cost_micro_usd: r.costMicros, reserved_micro_usd: r.settled ? null : r.estimateMicros, settled: r.settled, funding: r.funding, ts: new Date(r.ts).toISOString(),
         })),
         next_since: last ? new Date(last.ts + 1).toISOString() : null,
@@ -548,8 +557,10 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   // --- E32 the router's wallet: every router run reserved and settled here, once ---
   const routerToken = deps.routerWallet?.token ?? deps.payouts?.settlementToken;
   if (routerToken) {
-    for (const path of [ROUTER_RESERVE_PATH, ROUTER_SETTLEMENTS_PATH]) app.use(path, wellknown.observe);
+    for (const path of [ROUTER_RESERVE_PATH, ROUTER_SETTLEMENTS_PATH, CONNECTOR_TOKEN_PATH]) app.use(path, wellknown.observe);
     registerRouterWalletRoutes(app, { token: routerToken, metering: meteringDeps, ...(deps.payouts ? { payouts: deps.payouts.store } : {}) });
+    // E48: the calling principal's connector token for one router run (docs/api/connector-tokens.md).
+    registerConnectorTokenRoute(app, { token: routerToken, keyLookup: meteringDeps.keyLookup, log: deps.log, now, ...(deps.connectorTokens ?? {}) });
   } else if (deps.payouts) {
     app.post(ROUTER_SETTLEMENTS_PATH, (c) => agentError(c, 503, "settlements_unavailable", "Run settlements are not accepted on this gateway (ROUTER_SETTLEMENT_TOKEN unset).", "retry_after", { "retry-after": "3600" }));
   }

@@ -86,7 +86,9 @@ export async function settleRouterRun(deps: MeteringDeps, s: RunSettlementInput)
     if (commit) charged = discounted(list, commit.discountBps);
   }
   // The store's settle is the once-only step; it throws on a store failure (503 → redelivery).
-  await deps.store.settle(receiptId, charged, list);
+  // The receipt records the run's settled quantity next to the reserved one (E48): the router's
+  // reported quantity for an `ok` run, 0 for a failure or an empty result.
+  await deps.store.settle(receiptId, charged, list, s.outcome === "ok" ? s.quantity : 0);
   // The breaker and the low-balance notice ride on the shared helper (its own settle is a no-op now).
   await settleCall(deps, receiptId, charged, list, { principalId: receipt.principalId }, receipt.funding);
   return "settled";
