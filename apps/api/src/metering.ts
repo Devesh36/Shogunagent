@@ -67,6 +67,20 @@ export interface MeteringDeps {
    * against the same day as the Batch lane. Absent = not booked (development). */
   usage?: UsageStore;
   spendBreaker?: SpendBreaker;
+  /** Remote approvals (E15): called with the decision token when the core's answer names one in
+   * `X-Shogun-Approval-Token` (an approval was queued). The header is read, never the body, and
+   * is not passed on to the agent (the body already carries the URL). */
+  onApprovalToken?: (token: string) => Promise<unknown>;
+}
+
+/** Run `work` past the response: Workers' `waitUntil` when there is one, else detached. */
+function deferWork(c: Context, work: Promise<unknown>): void {
+  const settled = work.catch(() => undefined);
+  try {
+    c.executionCtx.waitUntil(settled);
+  } catch {
+    void settled;
+  }
 }
 
 /** What one classified request is, before any money moves. */
@@ -243,6 +257,9 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
     const charged = upstream.status >= 200 && upstream.status < 300 ? quote.cost_micro_usd : 0;
     await settleCall(deps, reserved.receiptId, charged);
     const headers = new Headers(upstream.headers);
+    const approvalToken = headers.get("x-shogun-approval-token");
+    headers.delete("x-shogun-approval-token");
+    if (approvalToken && deps.onApprovalToken) deferWork(c, deps.onApprovalToken(approvalToken));
     for (const [k, v] of Object.entries(usageHeaders(reserved.receiptId, { ...quote, cost_micro_usd: charged }))) headers.set(k, v);
     headers.set("x-latency-ms", String(Math.max(0, now().getTime() - startedMs)));
     return new Response(upstream.body, { status: upstream.status, headers });

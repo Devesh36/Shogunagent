@@ -37,6 +37,7 @@ import { classifyCall, pricingDocument, quoteCost, usageOf, FREE_ALLOWANCE_MICRO
 import { DEFAULT_POW_BITS, MAX_POW_BITS, challengeHash, mintChallenge, verifyPow } from "./pow.js";
 import { WindowLimiter, type RateLimiter } from "./ratelimit.js";
 import { metered, type MeteringDeps } from "./metering.js";
+import { createApprovalsApp, type ApprovalsDeps } from "./approvals/app.js";
 import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
 
 /** Self-registration: at most this many per IP per hour (in-process default; production wires
@@ -77,6 +78,9 @@ export interface AgentDeps extends MeteringDeps {
   /** The agent-readable documents (plan E10, `wellknown/app.ts`): the agent card's signing key,
    * the MCP URL when it is not `<publicBaseUrl>/mcp`, and test overrides. */
   wellknown?: Omit<WellknownDeps, "publicBaseUrl" | "now">;
+  /** Remote approvals (E15, approvals/app.ts): the approval page, the Slack app and the
+   * webhooks. Absent = those routes do not exist on this gateway. */
+  approvals?: Omit<ApprovalsDeps, "log" | "now" | "publicBaseUrl">;
 }
 
 /** The client IP as the edge reports it. Workers set `CF-Connecting-IP`; behind another proxy the
@@ -420,8 +424,17 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     }
   });
 
+  // --- remote approvals (E15): the page, Slack, webhooks, and the notification hook ---
+  let onApprovalToken: MeteringDeps["onApprovalToken"];
+  if (deps.approvals) {
+    for (const path of ["/v1/webhooks", "/v1/webhooks/*", "/v1/slack/interactions", "/v1/approvals/notify"]) app.use(path, wellknown.observe);
+    const approvals = createApprovalsApp({ ...deps.approvals, log: deps.log, now, publicBaseUrl: deps.publicBaseUrl }, requireKey);
+    app.route("/", approvals.app);
+    onApprovalToken = approvals.notifyCreated;
+  }
+
   // --- the metered MCP proxy (E9-T5) ---
-  app.all("/mcp", metered(deps));
+  app.all("/mcp", metered(onApprovalToken ? { ...deps, onApprovalToken } : deps));
 
   return app;
 }

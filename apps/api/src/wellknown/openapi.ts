@@ -140,7 +140,7 @@ const components: Json = {
 };
 
 interface Route {
-  method: "get" | "post" | "patch" | "all";
+  method: "get" | "post" | "patch" | "delete" | "all";
   path: string;
   tag: string;
   summary: string;
@@ -190,6 +190,12 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     { method: "post", path: "/v1/quote", tag: "billing", security: "key", scope: "read", summary: "The exact cost of a call. Nothing is reserved.", requestBody: jsonBody(ref("QuoteRequest")), responses: { "200": jsonBody(ref("QuoteResponse")), "400": errorResponse("invalid_quantity | invalid_price | run_price_unavailable | invalid_json") } },
     { method: "get", path: "/v1/receipts", tag: "billing", security: "key", scope: "read", summary: "Per-call receipts, oldest first. Page with next_since.", parameters: [{ name: "since", in: "query", schema: { type: "string" }, description: "ISO-8601 or epoch milliseconds." }, { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 500, default: 100 } }], responses: { "200": jsonBody(ref("Receipts")), "400": errorResponse("invalid_since | invalid_limit") } },
     { method: "post", path: "/v1/receipts/{id}/dispute", tag: "billing", security: "key", scope: "write", summary: "Open a dispute on a receipt (one per receipt; a second answers 200 with the existing one).", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: jsonBody(ref("DisputeRequest")), responses: { "201": jsonBody(ref("Dispute")), "200": jsonBody(ref("Dispute")), "400": errorResponse("invalid_reason | invalid_json"), "404": errorResponse("receipt_not_found") } },
+    // --- remote approvals (E15): webhooks for agents; the page, Slack and the notification are for humans and the core ---
+    { method: "post", path: "/v1/webhooks", tag: "approvals", security: "key", scope: "write", summary: "Register an HTTPS endpoint for approval.created / approval.decided. Deliveries are signed (X-Shogun-Signature: t=<unix>,v1=HMAC-SHA256(secret, \"<t>.<body>\")), retried with backoff, and carry the redacted summary only. The secret is shown once.", requestBody: jsonBody({ type: "object", required: ["url"], properties: { url: { type: "string", format: "uri" }, events: { type: "array", items: { type: "string", enum: ["approval.created", "approval.decided"] } } } }), responses: { "201": jsonBody({ type: "object", properties: { id: { type: "string" }, url: { type: "string" }, events: { type: "array", items: { type: "string" } }, secret: { type: "string" } } }), "400": errorResponse("invalid_url | invalid_events | invalid_json"), "409": errorResponse("too_many_webhooks") } },
+    { method: "get", path: "/v1/webhooks", tag: "approvals", security: "key", scope: "read", summary: "The principal's approval webhooks (no secrets).", responses: { "200": jsonBody({ type: "object" }) } },
+    { method: "delete", path: "/v1/webhooks/{id}", tag: "approvals", security: "key", scope: "write", summary: "Remove one of the principal's webhooks.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": jsonBody({ type: "object" }), "404": errorResponse("webhook_not_found") } },
+    { method: "get", path: "/approve/{token}", tag: "approvals", security: "none", summary: "The human approval page for an approval URL (redacted summary, Approve / Reject). Not for agents: an agent never decides its own L2/L3.", parameters: [{ name: "token", in: "path", required: true, schema: { type: "string" } }], responses: { "200": { description: "HTML page" }, "410": { description: "The link expired" } } },
+    { method: "post", path: "/v1/slack/interactions", tag: "approvals", security: "none", summary: "Slack button presses on approval messages (Slack-signed). Not for agents.", responses: { "200": { description: "Acknowledged" }, "401": errorResponse("invalid_signature") } },
     // --- the metered MCP proxy ---
     {
       method: "all", path: "/mcp", tag: "mcp", security: "key", scope: "any",
@@ -256,6 +262,7 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       { name: "billing", description: "Quotes, receipts, disputes." },
       { name: "mcp", description: "The metered MCP Streamable HTTP proxy." },
       { name: "router", description: "discover / inspect / run (apps/router)." },
+      { name: "approvals", description: "Remote L2/L3 approvals: webhooks for the principal, the approval page and Slack for humans." },
     ],
     paths,
     components,

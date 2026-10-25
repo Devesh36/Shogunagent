@@ -50,7 +50,9 @@ export interface LogVars {
     // The agent routes (agent-app.ts / metering.ts): fixed words, never a value.
     | "agent_key_rejected" | "agent_registered" | "pow_rejected" | "register_rate_limited" | "payment_required" | "cap_exceeded"
     | "wallet_unavailable" | "capacity_exhausted" | "dry_run" | "run_price_unavailable" | "upstream_unavailable" | "upstream_failure"
-    | "stripe_unavailable" | "stripe_failure" | "topup_session_created" | "topup_credited" | "topup_duplicate" | "webhook_rejected";
+    | "stripe_unavailable" | "stripe_failure" | "topup_session_created" | "topup_credited" | "topup_duplicate" | "webhook_rejected"
+    // Remote approvals (approvals/app.ts, plan E15): fixed words, never a token or a summary.
+    | "approval_page" | "approval_decided" | "approval_refused" | "approval_notified" | "slack_rejected" | "webhook_registered";
   /** Server-chosen provider and model of the accepted batch (ids, not content). */
   relayLogModel?: string;
   /** License id (an opaque token id, not user content). */
@@ -72,6 +74,11 @@ export function routeTemplate(pathname: string): string {
   // The agent-readable documents (plan E10, wellknown/app.ts): fixed paths, no ids.
   if (["/.well-known/mcp/server-card.json", "/.well-known/agent-card.json", "/.well-known/status.json", "/.well-known/mcp-config",
     "/health", "/openapi.json", "/llms.txt", "/llms-full.txt"].includes(pathname)) return pathname;
+  // Remote approvals (plan E15). The approval page's path carries the decision token: it is
+  // collapsed to its template, never logged.
+  if (["/v1/slack/interactions", "/v1/approvals/notify", "/v1/webhooks"].includes(pathname)) return pathname;
+  if (/^\/approve\/[^/]+$/.test(pathname)) return "/approve/:token";
+  if (/^\/v1\/webhooks\/[^/]+$/.test(pathname)) return "/v1/webhooks/:id";
   if (/^\/v1\/keys\/[^/]+\/revoke$/.test(pathname)) return "/v1/keys/:id/revoke";
   if (/^\/v1\/keys\/[^/]+$/.test(pathname)) return "/v1/keys/:id";
   if (/^\/v1\/receipts\/[^/]+\/dispute$/.test(pathname)) return "/v1/receipts/:id/dispute";

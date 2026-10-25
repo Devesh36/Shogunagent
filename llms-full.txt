@@ -387,6 +387,12 @@ Conventions:
 | GET | `/v1/receipts?since=&limit=` | `read` | Per-call receipts, oldest first |
 | POST | `/v1/receipts/{id}/dispute` | `write` | Open a dispute on a receipt (one per receipt) |
 | ALL | `/mcp` | by unit (see below) | The metered MCP Streamable HTTP proxy |
+| POST | `/v1/webhooks` | `write` | Register an approval webhook (`approval.created`, `approval.decided`) |
+| GET | `/v1/webhooks` | `read` | The principal's approval webhooks (no secrets) |
+| DELETE | `/v1/webhooks/{id}` | `write` | Remove one |
+| GET / POST | `/approve/{token}` | the link (+ CSRF on POST) | The human approval page (E15) |
+| POST | `/v1/slack/interactions` | Slack signature | Slack button presses on approval messages (E15) |
+| POST | `/v1/approvals/notify` | the signed token | An approval was queued: post to Slack, deliver webhooks |
 
 ## 1. Register
 
@@ -561,6 +567,49 @@ curl -s -X POST $BASE/v1/receipts/rcpt_…/dispute -H "Authorization: Bearer $KE
 `201 { "dispute_id": "dsp_…", "receipt_id": "rcpt_…", "status": "open", "ts": "…" }`; a second
 dispute on the same receipt answers `200` with the existing one. Someone else's receipt is `404`.
 
+## 7. Remote approvals (E15)
+
+An L3 call (and an L2 one the core queues) answers with an approval URL on this gateway:
+`https://<gateway>/approve/<token>`. The token is minted by the sidecar, signed with
+`SHOGUN_APPROVAL_SIGNING_KEY` (the sidecar and the gateway hold the same value; nothing else
+does), expires with the approval (10 minutes) and decides once. Hand the URL to a human; poll
+`actions.status` until it reads `approved` or `rejected`. An agent never decides: there is no
+tool for it, and the sidecar refuses an agent's bearer on the decide route (`403 human_only`).
+
+- **Web page** (`GET /approve/{token}`): server-rendered, no JavaScript, the redacted summary
+  (kind, tier, recipient class — never the recipient — a masked one-line preview, times) and
+  Approve / Reject. The form carries a CSRF value bound to a `SameSite=Strict` cookie and to the
+  link; a POST from another origin, without the cookie or with a wrong value is refused. The page
+  sends `Referrer-Policy: no-referrer` and a `default-src 'none'` CSP. The decision is recorded as
+  `web:approval-page`.
+- **Slack** (`SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_APPROVAL_CHANNEL`): when an
+  approval is queued the gateway posts the summary with Approve / Reject buttons to the channel
+  (or a user's DM) with `chat.postMessage`. A press reaches `POST /v1/slack/interactions`, which
+  verifies Slack's signature (`v0`, five-minute window) before parsing, decides as
+  `slack:<user id>`, and replaces the message with the outcome.
+- **Webhooks**: `POST /v1/webhooks {"url": "https://…", "events": ["approval.created",
+  "approval.decided"]}` → `201 {id, url, events, secret}` (the secret is shown once; it is derived
+  from `WEBHOOK_SIGNING_SECRET` and never stored). Each delivery is signed
+  `X-Shogun-Signature: t=<unix>,v1=hex(HMAC-SHA256(secret, "<t>.<raw body>"))` with
+  `X-Shogun-Event` and `X-Shogun-Delivery`; a network error, 429 or 5xx is retried after 1 s, 5 s
+  and 30 s. The body is the redacted summary only:
+
+  ```json
+  { "id": "whd_…", "event": "approval.created", "created_at": "…", "principal_id": "prn_…",
+    "approval": { "approval_id": 9, "status": "pending", "level": "L3", "kind": "Send email",
+                  "recipient_class": "email_recipient", "preview": "…", "created_at": "…", "expires_at": "…" } }
+  ```
+
+How the gateway learns of a new approval without reading a body: the core's answer to the call
+that queued it carries `X-Shogun-Approval-Token`; the `/mcp` proxy reads that header (and drops
+it from the relayed answer) and fans out. A core that is not behind `/mcp` posts the token to
+`POST /v1/approvals/notify`. All three surfaces reach the sidecar through one client
+(`src/approvals/sidecar-client.ts`): `GET /v1/approvals/{id}` and
+`POST /v1/approvals/{id}/decide` with the token in `X-Shogun-Approval-Token`. The sidecar verifies
+the token again, spends its nonce (`409 token_replayed` on a second use, `410 token_expired`
+after expiry), records who decided and when, and writes the decision to the principal's audit
+log.
+
 ## Licence tokens and agent keys together (E3-T4)
 
 The Ed25519 licence token stays the credential of the Mac app's routes. Both credentials meter
@@ -573,7 +622,12 @@ tables.
 ## Operations
 
 - Provision: `psql … -f apps/api/sql/agent-keys.sql` then `-f apps/api/sql/agent-keys-permissions.sql`.
-- Secrets (`wrangler secret put`): `AGENT_POW_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
+- Secrets (`wrangler secret put`): `AGENT_POW_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`;
+  for remote approvals `SHOGUN_APPROVAL_SIGNING_KEY` (≥ 32 characters, the sidecar's value),
+  `WEBHOOK_SIGNING_SECRET` (≥ 32 characters) and optionally `SLACK_BOT_TOKEN` +
+  `SLACK_SIGNING_SECRET`; vars `SHOGUN_SIDECAR_URL` and `SLACK_APPROVAL_CHANNEL`. Provision
+  `apps/api/sql/approval-webhooks.sql`. The sidecar needs `SHOGUN_APPROVAL_SIGNING_KEY`,
+  `SHOGUN_APPROVAL_BASE_URL=https://<gateway>` and, for the operator's CLI, `SHOGUN_ADMIN_TOKEN`.
 - Vars: `AGENT_API_ENABLED=1`, `PUBLIC_BASE_URL`, optionally `AGENT_POW_BITS`,
   `AGENT_REGISTER_PER_HOUR`, `AGENT_KEY_PBKDF2_ITERATIONS`, the four `AGENT_*_CAP_*_USD`.
 - Boot log: `agent_api open (card top-ups on)` / `agent_api closed (AGENT_API_ENABLED unset)`.
