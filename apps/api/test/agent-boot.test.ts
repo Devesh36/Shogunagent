@@ -1,6 +1,7 @@
 /** The agent API's boot settings (boot.ts `agentConfigFromEnv`) and its wiring through
  * `createRelay` into the relay app: off by default, names-only refusals, and the mounted routes
  * sharing the relay's logger and the licence ledger. */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { BootError, agentConfigFromEnv, agentLaneLine, createRelay, postgresStore, relayConfigFromEnv } from "../src/boot.js";
@@ -121,5 +122,31 @@ describe("createRelay with the agent API", () => {
     await relay.sweep();
     expect(lines.filter((l) => l.includes("agent maintenance unavailable"))).toHaveLength(0);
     expect(SHARED_STORE_SQL.length).toBeGreaterThan(0);
+  });
+});
+
+describe("E19 / E3-T2 settings", () => {
+  it("parses the overage price and the OAuth secret, refusing by name", () => {
+    const on = agentConfigFromEnv({ ...agentEnv, STRIPE_SECRET_KEY: "sk_test_x", STRIPE_WEBHOOK_SECRET: "whsec_x", STRIPE_COMMIT_OVERAGE_PRICE_ID: "price_123", AGENT_OAUTH_SECRET: "o".repeat(32) })!;
+    expect(on.stripe).toEqual({ secretKey: "sk_test_x", webhookSecret: "whsec_x", overagePriceId: "price_123" });
+    expect(on.oauthSecret).toBe("o".repeat(32));
+    expect(agentLaneLine({ agent: on })).toContain("oauth on");
+    expect(refusal({ ...agentEnv, STRIPE_COMMIT_OVERAGE_PRICE_ID: "price_123" })).toBe("STRIPE_COMMIT_OVERAGE_PRICE_ID needs STRIPE_SECRET_KEY");
+    expect(refusal({ ...agentEnv, STRIPE_SECRET_KEY: "sk_test_x", STRIPE_WEBHOOK_SECRET: "whsec_x", STRIPE_COMMIT_OVERAGE_PRICE_ID: "nope" })).toContain("STRIPE_COMMIT_OVERAGE_PRICE_ID");
+    expect(refusal({ ...agentEnv, AGENT_OAUTH_SECRET: "short" })).toBe("invalid AGENT_OAUTH_SECRET (at least 32 characters)");
+  });
+
+  it("serves OAuth on the Postgres-shaped store when the secret is set", async () => {
+    const config = relayConfigFromEnv({ ...relayEnv, ...agentEnv, AGENT_OAUTH_SECRET: "o".repeat(32) });
+    const db = sqliteDouble(AGENT_SQL + "\n" + readFileSync(new URL("../sql/agent-oauth.sql", import.meta.url), "utf8"));
+    const store = postgresStore(db, config, () => undefined);
+    await store.agent.checkSchema();
+    await store.oauth.checkSchema();
+    const relay = createRelay(config, store, { gateway: new FakeGateway(), log: () => undefined });
+    const as = (await (await relay.app.request("/.well-known/oauth-authorization-server")).json()) as { issuer: string };
+    expect(as.issuer).toBe(agentEnv.PUBLIC_BASE_URL);
+    await relay.sweep();
+    const closed = createRelay(relayConfigFromEnv({ ...relayEnv, ...agentEnv }), store, { gateway: new FakeGateway(), log: () => undefined });
+    expect((await closed.app.request("/.well-known/oauth-authorization-server")).status).toBe(404);
   });
 });

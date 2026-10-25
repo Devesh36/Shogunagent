@@ -29,14 +29,23 @@ import {
   DEFAULT_PBKDF2_ITERATIONS, agentError, agentPrincipalOf, generateAgentKey, hashAgentKey, requireAgentKey,
   type AgentKeyRecord, type AgentPrincipal, type AgentScope, type AgentVars,
 } from "./agent-keys.js";
+import type { KeyObject } from "node:crypto";
+
 import { capSubjectKey, capSubjectPrincipal, type AgentStore } from "./agent-store.js";
-import { MAX_TOPUP_MICROS, MIN_TOPUP_MICROS, StripeError, createCheckoutSession, creditFromEvent, verifyStripeSignature, type StripeFetch } from "./billing/stripe.js";
+import type { TrustedKeys } from "./auth.js";
+import { InMemoryNotifier } from "./billing/notify.js";
+import { registerBillingRoutes } from "./billing/routes.js";
+import {
+  MAX_TOPUP_MICROS, MIN_TOPUP_MICROS, StripeError, chargeRefundedOf, checkoutSessionEventOf, createCheckoutSession, creditFromEvent, verifyStripeSignature,
+  type StripeFetch,
+} from "./billing/stripe.js";
+import { createOAuthApp, oauthKeyLookup, type OAuthDeps } from "./oauth/app.js";
 import { DEFAULT_CAPS, capsFor, parseCapMicros, periodsOf, type CapSet } from "./caps.js";
 import type { LogFn } from "./logging.js";
 import { classifyCall, pricingDocument, quoteCost, usageOf, FREE_ALLOWANCE_MICROS, type MeterUnit } from "./pricing.js";
 import { DEFAULT_POW_BITS, MAX_POW_BITS, challengeHash, mintChallenge, verifyPow } from "./pow.js";
 import { WindowLimiter, type RateLimiter } from "./ratelimit.js";
-import { metered, type MeteringDeps } from "./metering.js";
+import { metered, priceCall, type MeteringDeps } from "./metering.js";
 import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
 
 /** Self-registration: at most this many per IP per hour (in-process default; production wires
@@ -61,6 +70,8 @@ export interface StripeDeps {
   /** Where Checkout sends the human afterwards. Defaults derive from `publicBaseUrl`. */
   successUrl?: string;
   cancelUrl?: string;
+  /** `STRIPE_COMMIT_OVERAGE_PRICE_ID` (E19): the metered price commit overage is billed on. */
+  overagePriceId?: string;
 }
 
 export interface AgentDeps extends MeteringDeps {
@@ -77,6 +88,11 @@ export interface AgentDeps extends MeteringDeps {
   /** The agent-readable documents (plan E10, `wellknown/app.ts`): the agent card's signing key,
    * the MCP URL when it is not `<publicBaseUrl>/mcp`, and test overrides. */
   wellknown?: Omit<WellknownDeps, "publicBaseUrl" | "now">;
+  /** The ShogunAI licence trust roots (E14-T3: `POST /v1/agents/me/licence`). */
+  licensePublicKey?: KeyObject | TrustedKeys;
+  /** OAuth 2.1 + Client ID Metadata Documents (E3-T2). Absent = OAuth is not served and `sat_`
+   * tokens are not accepted. */
+  oauth?: OAuthDeps;
 }
 
 /** The client IP as the edge reports it. Workers set `CF-Connecting-IP`; behind another proxy the
@@ -117,7 +133,16 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   const powBits = Math.min(MAX_POW_BITS, Math.max(0, deps.powBits ?? DEFAULT_POW_BITS));
   const registerLimiter = deps.registerLimiter ?? new WindowLimiter(REGISTER_PER_HOUR, REGISTER_WINDOW_MS);
   const bodyTooLarge = (c: Context): Response => agentError(c, 413, "body_too_large", "The body is too large for this route.");
-  const requireKey = (scopes: readonly AgentScope[]) => requireAgentKey(store, scopes, now);
+  // E3-T2: with OAuth on, every key-guarded route (and /mcp) also accepts `sat_` access tokens.
+  const lookup = deps.oauth ? oauthKeyLookup(store, deps.oauth.store) : store;
+  const base = deps.publicBaseUrl.replace(/\/+$/, "");
+  // E19: the pluggable notifier; the default keeps events in memory and never logs them.
+  const notifier = deps.notifier ?? new InMemoryNotifier();
+  const meteringDeps = {
+    ...deps, notifier, keyLookup: deps.keyLookup ?? lookup,
+    ...(deps.oauth ? { resourceMetadataUrl: `${base}/.well-known/oauth-protected-resource/mcp` } : {}),
+  };
+  const requireKey = (scopes: readonly AgentScope[]) => requireAgentKey(lookup, scopes, now);
   const principalOf = (c: Context<{ Variables: AgentVars }>): AgentPrincipal => {
     const p = agentPrincipalOf(c);
     if (!p) throw new Error("route registered without requireAgentKey");
@@ -134,10 +159,16 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
 
   // --- the other agent-readable documents (E10) and the status window over the agent routes ---
   const wellknown = createWellknown({ ...(deps.wellknown ?? {}), publicBaseUrl: deps.publicBaseUrl, now });
-  for (const path of ["/mcp", "/v1/agents", "/v1/agents/*", "/v1/keys/*", "/v1/wallet", "/v1/wallet/*", "/v1/quote", "/v1/receipts", "/v1/receipts/*"]) {
+  for (const path of ["/mcp", "/v1/agents", "/v1/agents/*", "/v1/keys/*", "/v1/wallet", "/v1/wallet/*", "/v1/quote", "/v1/receipts", "/v1/receipts/*",
+    "/v1/statements", "/v1/commit", "/oauth/*"]) {
     app.use(path, wellknown.observe);
   }
   app.route("/", wellknown.app);
+
+  // --- OAuth 2.1 + CIMD (E3-T2) ---
+  if (deps.oauth) {
+    app.route("/", createOAuthApp({ ...deps.oauth, agentStore: store, publicBaseUrl: deps.publicBaseUrl, ...(deps.wellknown?.mcpUrl ? { mcpUrl: deps.wellknown.mcpUrl } : {}), now }));
+  }
 
   // --- registration (E3-T3) ---
   app.get("/v1/agents/challenge", (c) => c.json(mintChallenge(deps.powSecret, powBits, now().getTime()), 200, { "cache-control": "no-store" }));
@@ -221,7 +252,14 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   });
 
   // --- keys ---
+  // Key management takes the key itself: an OAuth access token is a delegate of a key and may not
+  // revoke or re-cap it.
+  const keyOnly = (c: Context<{ Variables: AgentVars }>): Response | undefined =>
+    principalOf(c).via === "oauth" ? agentError(c, 403, "oauth_not_allowed", "Manage keys with an agent key, not an OAuth access token.") : undefined;
+
   app.post("/v1/keys/:id/revoke", requireKey([]), async (c) => {
+    const refused = keyOnly(c);
+    if (refused) return refused;
     const p = principalOf(c);
     const id = c.req.param("id");
     try {
@@ -236,6 +274,8 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   });
 
   app.patch("/v1/keys/:id", requireKey([]), bodyLimit({ maxSize: MAX_SMALL_BODY_BYTES, onError: bodyTooLarge }), async (c) => {
+    const refused = keyOnly(c);
+    if (refused) return refused;
     const p = principalOf(c);
     const id = c.req.param("id");
     const body = await readJson(c);
@@ -307,6 +347,9 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
         // Scoped to the principal so one agent's key cannot replay another's session.
         ...(idem ? { idempotencyKey: `${p.principalId}:${idem}` } : {}),
       });
+      // E19: the session is tracked so `checkout.session.expired` can close it. Best effort: the
+      // credit does not depend on this row (the webhook carries the principal).
+      await store.recordCheckoutSession(session.sessionId, p.principalId, amount, now().getTime()).catch(() => deps.log("checkout_session_record_failure"));
       c.set("relayLogEvent", "topup_session_created");
       return c.json({
         rail: "card", url: session.url, session_id: session.sessionId, amount_micro_usd: amount,
@@ -333,14 +376,36 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     }
     let event: unknown;
     try { event = JSON.parse(raw); } catch { return agentError(c, 400, "invalid_json", "The event must be JSON."); }
-    const credit = creditFromEvent(event);
-    if (!credit) return c.json({ received: true, credited: false }, 200, { "cache-control": "no-store" });
+    const nowMs = now().getTime();
+    const ack = (extra: Record<string, unknown>): Response => c.json({ received: true, credited: false, ...extra }, 200, { "cache-control": "no-store" });
     try {
-      const outcome = await store.credit(credit.principalId, credit.eventId, credit.micros, "stripe_checkout", now().getTime());
+      // E19: a refund (from the dashboard, the admin route or a dispute) debits the wallet by the
+      // increase of the charge's refunded total, once per charge high-water mark.
+      const refunded = chargeRefundedOf(event);
+      if (refunded) {
+        const principalId = (refunded.paymentIntentId ? await store.paymentPrincipal(refunded.paymentIntentId) : undefined) ?? refunded.principalIdHint;
+        if (!principalId) return ack({ refunded: false });
+        const out = await store.recordChargeRefund(principalId, refunded.chargeId, refunded.cumulativeMicros, nowMs);
+        if (out.debitedMicros > 0) c.set("relayLogEvent", "refund_debited");
+        return ack({ refunded: true, debited_micro_usd: out.debitedMicros });
+      }
+      const session = checkoutSessionEventOf(event);
+      if (session?.kind === "expired") {
+        const changed = await store.setCheckoutStatus(session.sessionId, "expired", nowMs);
+        if (changed) c.set("relayLogEvent", "topup_expired");
+        return ack({ expired: changed });
+      }
+      const credit = creditFromEvent(event);
+      if (!credit) return ack({});
+      const outcome = await store.credit(credit.principalId, credit.eventId, credit.micros, "stripe_checkout", nowMs);
+      if (session) {
+        await store.setCheckoutStatus(session.sessionId, "completed", nowMs);
+        if (session.paymentIntentId) await store.recordPayment(session.paymentIntentId, credit.principalId, session.sessionId, credit.micros, nowMs);
+      }
       c.set("relayLogEvent", outcome === "credited" ? "topup_credited" : "topup_duplicate");
       return c.json({ received: true, credited: outcome === "credited" }, 200, { "cache-control": "no-store" });
     } catch {
-      // 503 makes Stripe retry the delivery; the event id keeps the retry idempotent.
+      // 503 makes Stripe retry the delivery; the event and charge ids keep the retry idempotent.
       return storeFailure(c);
     }
   });
@@ -367,10 +432,14 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
       const wallet = await store.wallet(p.principalId);
       const available = Math.max(0, wallet.balanceMicros - wallet.reservedMicros);
       const effective = await effectiveCaps(p);
+      // E19: an active commit discounts the quote; the list price rides alongside.
+      const price = await priceCall(deps, p, quote, now().getTime());
+      const sufficient = price.terms?.funding === "commit" || available >= price.charged;
       return c.json({
-        quote: usageOf(quote), method, name: name ?? null,
-        balance_micro_usd: available, sufficient: available >= quote.cost_micro_usd, caps: capsBody(effective),
-        usage: { unit, quantity: 0, cost_micro_usd: 0 }, next_action: available >= quote.cost_micro_usd ? null : "top_up",
+        quote: { ...usageOf(quote), cost_micro_usd: price.charged, ...(price.terms ? { list_cost_micro_usd: quote.cost_micro_usd, commit_id: price.terms.commitId, discount_bps: price.terms.discountBps } : {}) },
+        method, name: name ?? null,
+        balance_micro_usd: available, sufficient, caps: capsBody(effective),
+        usage: { unit, quantity: 0, cost_micro_usd: 0 }, next_action: sufficient ? null : "top_up",
       }, 200, { "cache-control": "no-store" });
     } catch {
       return storeFailure(c);
@@ -420,8 +489,15 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     }
   });
 
+  // --- E19 billing: statements, commits, adjustments, disputes, the Pro bundle link ---
+  registerBillingRoutes(app, {
+    store, log: deps.log, now, publicBaseUrl: deps.publicBaseUrl, requireKey, principalOf, storeFailure,
+    ...(deps.stripe ? { stripe: { secretKey: deps.stripe.secretKey, ...(deps.stripe.fetch ? { fetch: deps.stripe.fetch } : {}), ...(deps.stripe.overagePriceId ? { overagePriceId: deps.stripe.overagePriceId } : {}) } } : {}),
+    ...(deps.licensePublicKey ? { licensePublicKey: deps.licensePublicKey } : {}),
+  });
+
   // --- the metered MCP proxy (E9-T5) ---
-  app.all("/mcp", metered(deps));
+  app.all("/mcp", metered(meteringDeps));
 
   return app;
 }

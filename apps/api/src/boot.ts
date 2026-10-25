@@ -108,6 +108,12 @@ import { FetchDeepgramGateway } from "./deepgram.js";
  *                              PEM, or the 32-byte seed as hex / base64. Unset = unsigned card.
  * - AGENT_MCP_URL            — optional: the MCP endpoint the agent-readable documents name when
  *                              it is not `<PUBLIC_BASE_URL>/mcp`.
+ * - STRIPE_COMMIT_OVERAGE_PRICE_ID — optional (E19): the metered Stripe price (one unit = one
+ *                              cent) commit overage is billed on. Needs STRIPE_SECRET_KEY.
+ * - AGENT_OAUTH_SECRET       — secret, optional (E3-T2): at least 32 characters. Set = OAuth 2.1 +
+ *                              Client ID Metadata Documents are served (`/oauth/*`, the two
+ *                              `.well-known` documents) and `sat_` access tokens are accepted.
+ *                              Needs sql/agent-oauth.sql applied.
  *
  * Node-only settings (PORT, RELAY_DATABASE_URL, METRICS_LOG_INTERVAL_SEC) are documented and
  * parsed in `index.ts`; the Worker's store comes from its `HYPERDRIVE` binding.
@@ -119,6 +125,9 @@ import { DEFAULT_PBKDF2_ITERATIONS, MAX_PBKDF2_ITERATIONS } from "./agent-keys.j
 import { parseSigningKey } from "./wellknown/agent-card.js";
 import { SqlAgentStore } from "./agent-pg-store.js";
 import type { AgentStore } from "./agent-store.js";
+import { grantProBundle, reportCommitOverage } from "./billing/jobs.js";
+import type { ResolveHost } from "./oauth/cimd.js";
+import { SqlOAuthStore, type OAuthStore } from "./oauth/store.js";
 import { createApp, parseResultLine, planSpendCapMicros, type RelayDeps, DEFAULT_TRIAL_SPEND_SHARE } from "./app.js";
 import { DEFAULT_CAPS, type CapSet } from "./caps.js";
 import { DEFAULT_POW_BITS, MAX_POW_BITS } from "./pow.js";
@@ -249,7 +258,9 @@ export interface AgentConfig {
   registerPerHour: number;
   keyIterations: number;
   caps: CapSet;
-  stripe?: { secretKey: string; webhookSecret: string };
+  stripe?: { secretKey: string; webhookSecret: string; overagePriceId?: string };
+  /** `AGENT_OAUTH_SECRET` (E3-T2). Absent = OAuth is not served. */
+  oauthSecret?: string;
   /** `AGENT_CARD_SIGNING_KEY` (E10-T3), parsed: the Ed25519 key the A2A agent card is signed
    * with. Absent = the card is served unsigned. */
   agentCardSigningKey?: KeyObject;
@@ -290,6 +301,11 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
   }
   const mcpUrl = env.AGENT_MCP_URL?.trim();
   if (mcpUrl !== undefined && mcpUrl !== "" && !/^https?:\/\/[^\s]+$/.test(mcpUrl)) throw new BootError("invalid AGENT_MCP_URL (an absolute http(s) URL)");
+  const overagePriceId = env.STRIPE_COMMIT_OVERAGE_PRICE_ID?.trim();
+  if (overagePriceId && !/^price_[A-Za-z0-9]{1,64}$/.test(overagePriceId)) throw new BootError("invalid STRIPE_COMMIT_OVERAGE_PRICE_ID (a Stripe price id, price_…)");
+  if (overagePriceId && !stripeKey) throw new BootError("STRIPE_COMMIT_OVERAGE_PRICE_ID needs STRIPE_SECRET_KEY");
+  const oauthSecret = env.AGENT_OAUTH_SECRET;
+  if (oauthSecret !== undefined && oauthSecret !== "" && oauthSecret.length < 32) throw new BootError("invalid AGENT_OAUTH_SECRET (at least 32 characters)");
   return {
     powSecret,
     powBits: intFromEnv(env, "AGENT_POW_BITS", DEFAULT_POW_BITS, 0, MAX_POW_BITS),
@@ -297,16 +313,32 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
     registerPerHour: intFromEnv(env, "AGENT_REGISTER_PER_HOUR", REGISTER_PER_HOUR, 1),
     keyIterations: intFromEnv(env, "AGENT_KEY_PBKDF2_ITERATIONS", DEFAULT_PBKDF2_ITERATIONS, 1_000, MAX_PBKDF2_ITERATIONS),
     caps,
-    ...(stripeKey && webhookSecret ? { stripe: { secretKey: stripeKey, webhookSecret } } : {}),
+    ...(stripeKey && webhookSecret ? { stripe: { secretKey: stripeKey, webhookSecret, ...(overagePriceId ? { overagePriceId } : {}) } } : {}),
+    ...(oauthSecret ? { oauthSecret } : {}),
     ...(agentCardSigningKey ? { agentCardSigningKey } : {}),
     ...(mcpUrl ? { mcpUrl } : {}),
   };
 }
 
+/** The periodic billing jobs (E19 / E14-T3, billing/jobs.ts) and OAuth retention, run from the
+ * sweep. Each is idempotent; failures are one fixed warning line and never stop the sweep. */
+export async function billingJobs(config: Pick<RelayConfig, "agent">, store: Pick<RelayStore, "agent" | "oauth">, nowMs: number): Promise<void> {
+  if (!config.agent || !store.agent) return;
+  const counts = await grantProBundle(store.agent, nowMs).catch(() => undefined);
+  if (!counts) operational.warn("pro bundle grant unavailable");
+  else if (counts.granted > 0) operational.info(`pro_bundle_granted ${counts.granted}`);
+  if (config.agent.stripe?.overagePriceId) {
+    const overage = await reportCommitOverage(store.agent, config.agent.stripe, nowMs).catch(() => undefined);
+    if (!overage) operational.warn("commit overage report unavailable");
+    else if (overage.claimed > 0) operational.info(`commit_overage_reports sent=${overage.sent} failed=${overage.failed}`);
+  }
+  if (config.agent.oauthSecret && store.oauth) await store.oauth.maintenance(nowMs).catch(() => operational.warn("oauth maintenance unavailable"));
+}
+
 /** Whether the agent API is served; one boot-log line, so a 404 on `/v1/agents` is not a mystery. */
 export function agentLaneLine(config: Pick<RelayConfig, "agent">): string {
   if (!config.agent) return "agent_api closed (AGENT_API_ENABLED unset)";
-  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"})`;
+  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"})`;
 }
 
 /** The Batch price table in force: the override, or the shipped defaults. */
@@ -446,6 +478,10 @@ export interface RelayStore {
   agent?: AgentStore;
   /** The per-IP registration limiter. Absent = the app's in-process default. */
   registerLimiter?: RateLimiter;
+  /** The OAuth store (E3-T2). Absent = OAuth is not served even when configured. */
+  oauth?: OAuthStore;
+  /** Resolves a CIMD host before it is fetched (the Node entry: `node:dns`). */
+  resolveHost?: ResolveHost;
   close(): Promise<void>;
 }
 
@@ -456,8 +492,9 @@ export interface RelayStore {
  * one fixed warning line. `checkSchema` is the caller's: Node runs it before listening, the
  * Worker on each sweep (a missing table is otherwise a 503 per request, fail-closed).
  */
-export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker" | "agent">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore; agent: SqlAgentStore } {
+export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker" | "agent">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore; agent: SqlAgentStore; oauth: SqlOAuthStore } {
   return {
+    oauth: new SqlOAuthStore(db),
     usage: new SqlUsageStore(db),
     asr: new SqlAsrStore(db, Date.now, config.spendBreaker?.capMicros ?? 0),
     rateLimit: new SqlRateLimiter(db, config.rateBurst, config.ratePerMin, () => warn("ratelimit_unavailable (failing open)")),
@@ -555,6 +592,10 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
         usage: store.usage,
         ...(store.registerLimiter ? { registerLimiter: store.registerLimiter } : {}),
         ...(config.agent.stripe ? { stripe: config.agent.stripe } : {}),
+        // E14-T3: linking a ShogunAI licence verifies its token against the same trust roots.
+        licensePublicKey: config.licensePublicKey,
+        // E3-T2: OAuth when the secret is set and the store exists.
+        ...(config.agent.oauthSecret && store.oauth ? { oauth: { store: store.oauth, secret: config.agent.oauthSecret, ...(store.resolveHost ? { resolveHost: store.resolveHost } : {}) } } : {}),
         ...(config.spendBreaker ? { spendBreaker: config.spendBreaker } : {}),
         // The agent-readable documents (E10): the card's key and the MCP URL, when configured.
         wellknown: {
@@ -598,6 +639,7 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
       if (config.asrEnabled && store.asr) await store.asr.maintenance().catch(() => operational.warn("speech maintenance unavailable"));
       // Expired PoW rows and settled receipts past their window (agent-store.ts). Counts nothing.
       if (config.agent && store.agent) await store.agent.maintenance((shared.now?.() ?? new Date()).getTime()).catch(() => operational.warn("agent maintenance unavailable"));
+      if (config.agent && store.agent) await billingJobs(config, store, (shared.now?.() ?? new Date()).getTime());
       return sweepOnce(settlementDeps);
     },
     settle: () => settleOnce(settlementDeps),

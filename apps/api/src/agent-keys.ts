@@ -129,6 +129,12 @@ export interface AgentPrincipal {
   ref?: string;
   capDayMicros?: number;
   capMonthMicros?: number;
+  /** How the bearer was presented: an agent key (default) or an OAuth access token minted from
+   * one (E3-T2). An OAuth principal carries the consenting key's id and caps and at most its
+   * scopes, never `admin`. */
+  via?: "oauth";
+  /** The OAuth client (its Client ID Metadata Document URL), when `via` is `oauth`. */
+  clientId?: string;
 }
 
 /** The metering subject of an agent principal, in the same string space as a licence's
@@ -147,7 +153,13 @@ export function hasScopes(granted: readonly AgentScope[], required: readonly Age
 /** The lookup half of the store the middleware needs: candidates for a prefix. */
 export interface AgentKeyLookup {
   keysByPrefix(prefix: string): Promise<AgentKeyRecord[]>;
+  /** OAuth access tokens (E3-T2, oauth/app.ts): resolve a presented `sat_…` token to the
+   * principal it is bound to, or the reason it is refused. Absent = OAuth tokens are not accepted. */
+  accessToken?(token: string, nowMs: number): Promise<{ ok: true; principal: AgentPrincipal } | { ok: false; code: "invalid_key" | "key_revoked" | "key_expired" }>;
 }
+
+/** An OAuth access token: `sat_` and 43 base64url characters (32 random bytes). */
+export const ACCESS_TOKEN_RE = /^sat_[A-Za-z0-9_-]{43}$/;
 
 /** Context vars the agent routes use: the log line's, plus the verified principal. */
 export interface AgentVars extends LogVars {
@@ -176,6 +188,7 @@ export async function resolveAgentKey(
 ): Promise<{ ok: true; principal: AgentPrincipal } | { ok: false; code: "missing_key" | "invalid_key" | "key_revoked" | "key_expired" }> {
   if (!authorization || !/^Bearer\s+/i.test(authorization)) return { ok: false, code: "missing_key" };
   const key = authorization.replace(/^Bearer\s+/i, "").trim();
+  if (ACCESS_TOKEN_RE.test(key)) return store.accessToken ? store.accessToken(key, nowMs) : { ok: false, code: "invalid_key" };
   const parsed = parseAgentKey(key);
   if (!parsed) return { ok: false, code: "invalid_key" };
   const candidates = await store.keysByPrefix(parsed.prefix);
