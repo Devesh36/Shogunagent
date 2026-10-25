@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shogunagent.dev/schemas/export-v2.schema.json",
+  "title": "ShogunAgent export v2 record",
+  "description": "One line of a ShogunAgent export v2 (JSON Lines). The first line is a manifest; every other line is an entity, a fact, a relation or a tombstone. Every v1 field keeps its name, type and meaning. Proposed to the W3C AI Agent Memory Interoperability Community Group; not adopted by it. See docs/api/export-v2.md.",
+  "oneOf": [
+    { "$ref": "#/$defs/manifest" },
+    { "$ref": "#/$defs/entity" },
+    { "$ref": "#/$defs/fact" },
+    { "$ref": "#/$defs/relation" },
+    { "$ref": "#/$defs/tombstone" }
+  ],
+  "$defs": {
+    "ms": { "type": "integer", "description": "Unix time in milliseconds" },
+    "msOrNull": { "type": ["integer", "null"] },
+    "intOrNull": { "type": ["integer", "null"] },
+    "stringOrNull": { "type": ["string", "null"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "band": { "type": "string", "enum": ["high", "medium", "low"] },
+    "namespace": { "type": "string", "pattern": "^(world|agent_scratch:.+)$" },
+    "uri": { "type": "string", "pattern": "^urn:shogunagent:[0-9a-z-]{1,64}:[a-z_]+:-?[0-9]+$", "description": "urn:shogunagent:<namespace id>:<kind>:<local id>" },
+    "uriOrNull": { "oneOf": [{ "$ref": "#/$defs/uri" }, { "type": "null" }] },
+    "hashOrNull": {
+      "oneOf": [
+        { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        { "type": "null" }
+      ]
+    },
+    "pointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "event_uri", "quote", "observed_at", "source", "content_hash"],
+      "properties": {
+        "event_id": { "type": "integer" },
+        "event_uri": { "$ref": "#/$defs/uri" },
+        "quote": { "$ref": "#/$defs/stringOrNull" },
+        "observed_at": { "$ref": "#/$defs/msOrNull" },
+        "source": { "$ref": "#/$defs/stringOrNull" },
+        "content_hash": { "$ref": "#/$defs/hashOrNull" }
+      }
+    },
+    "provenance": { "type": "array", "items": { "$ref": "#/$defs/pointer" } },
+    "capabilities": {
+      "type": "object",
+      "description": "What the producer models. Unknown keys are allowed and must be ignored.",
+      "required": ["record_types", "global_ids", "bitemporal", "relations", "supersession", "provenance", "confidence", "tombstones", "differential"],
+      "properties": {
+        "record_types": { "type": "array", "items": { "type": "string", "enum": ["entity", "fact", "relation", "tombstone"] } },
+        "entity_kinds": { "type": "array", "items": { "type": "string" } },
+        "fact_kinds": { "type": "array", "items": { "type": "string" } },
+        "global_ids": { "const": "urn" },
+        "bitemporal": {
+          "type": "object",
+          "required": ["valid_time", "transaction_time"],
+          "properties": { "valid_time": { "type": "boolean" }, "transaction_time": { "type": "boolean" } }
+        },
+        "relations": { "type": "boolean" },
+        "supersession": { "type": "boolean" },
+        "provenance": {
+          "type": "object",
+          "required": ["quotes", "content_hash"],
+          "properties": {
+            "quotes": { "type": "boolean" },
+            "content_hash": { "type": ["string", "null"], "enum": ["sha256", null] },
+            "observed_at": { "type": "boolean" }
+          }
+        },
+        "confidence": { "type": "object" },
+        "namespaces": { "type": "array", "items": { "type": "string" } },
+        "tombstones": { "type": "boolean" },
+        "differential": { "type": "boolean" },
+        "import_confidence_cap": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "format", "schema_version", "generated_at", "since_cursor", "cursor", "namespace", "capabilities", "counts"],
+      "properties": {
+        "type": { "const": "manifest" },
+        "format": { "const": "shogunagent-export/v2" },
+        "schema_version": { "type": "integer", "minimum": 1 },
+        "generated_at": { "$ref": "#/$defs/ms" },
+        "since_cursor": { "$ref": "#/$defs/msOrNull" },
+        "cursor": { "$ref": "#/$defs/ms" },
+        "namespace": { "type": "string", "pattern": "^urn:shogunagent:[0-9a-z-]{1,64}$" },
+        "capabilities": { "$ref": "#/$defs/capabilities" },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entities", "facts", "relations", "tombstones"],
+          "properties": {
+            "entities": { "type": "integer", "minimum": 0 },
+            "facts": { "type": "integer", "minimum": 0 },
+            "relations": { "type": "integer", "minimum": 0 },
+            "tombstones": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "kind", "id", "uri", "name", "aliases", "summary", "status", "confidence", "band", "valid_from", "valid_to", "recorded_at", "updated_at", "superseded_by", "actor", "namespace", "provenance"],
+      "properties": {
+        "type": { "const": "entity" },
+        "kind": { "type": "string", "enum": ["person", "project"] },
+        "id": { "type": "integer" },
+        "uri": { "$ref": "#/$defs/uri" },
+        "name": { "type": "string", "minLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "summary": { "$ref": "#/$defs/stringOrNull" },
+        "status": { "type": ["string", "null"], "enum": ["active", "waiting", "paused", "done", null] },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "band": { "$ref": "#/$defs/band" },
+        "valid_from": { "$ref": "#/$defs/ms" },
+        "valid_to": { "$ref": "#/$defs/msOrNull" },
+        "recorded_at": { "$ref": "#/$defs/ms" },
+        "updated_at": { "$ref": "#/$defs/ms" },
+        "superseded_by": { "$ref": "#/$defs/uriOrNull" },
+        "actor": { "$ref": "#/$defs/stringOrNull" },
+        "namespace": { "$ref": "#/$defs/namespace" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "kind", "id", "uri", "subtype", "text", "status", "due_at", "counterparty_id", "project_id", "counterparty", "project", "confidence", "band", "valid_from", "valid_to", "recorded_at", "updated_at", "superseded_by", "actor", "namespace", "provenance"],
+      "properties": {
+        "type": { "const": "fact" },
+        "kind": { "type": "string", "enum": ["commitment", "open_loop"] },
+        "id": { "type": "integer" },
+        "uri": { "$ref": "#/$defs/uri" },
+        "subtype": { "type": "string", "enum": ["mine", "theirs", "reply_needed", "waiting_on_them", "review_pending", "decision_pending", "follow_up", "other"] },
+        "text": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["open", "done", "overdue", "cancelled", "closed"] },
+        "due_at": { "$ref": "#/$defs/msOrNull" },
+        "counterparty_id": { "$ref": "#/$defs/intOrNull" },
+        "project_id": { "$ref": "#/$defs/intOrNull" },
+        "counterparty": { "$ref": "#/$defs/uriOrNull" },
+        "project": { "$ref": "#/$defs/uriOrNull" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "band": { "$ref": "#/$defs/band" },
+        "valid_from": { "$ref": "#/$defs/ms" },
+        "valid_to": { "$ref": "#/$defs/msOrNull" },
+        "recorded_at": { "$ref": "#/$defs/ms" },
+        "updated_at": { "$ref": "#/$defs/ms" },
+        "superseded_by": { "$ref": "#/$defs/uriOrNull" },
+        "actor": { "$ref": "#/$defs/stringOrNull" },
+        "namespace": { "$ref": "#/$defs/namespace" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "uri", "id", "subject", "predicate", "object", "confidence", "band", "valid_from", "valid_to", "recorded_at", "actor", "namespace", "provenance"],
+      "properties": {
+        "type": { "const": "relation" },
+        "uri": { "$ref": "#/$defs/uri" },
+        "id": { "type": "integer" },
+        "subject": { "$ref": "#/$defs/uri" },
+        "predicate": { "type": "string", "minLength": 1 },
+        "object": { "$ref": "#/$defs/uri" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "band": { "$ref": "#/$defs/band" },
+        "valid_from": { "$ref": "#/$defs/ms" },
+        "valid_to": { "$ref": "#/$defs/msOrNull" },
+        "recorded_at": { "$ref": "#/$defs/ms" },
+        "actor": { "$ref": "#/$defs/stringOrNull" },
+        "namespace": { "$ref": "#/$defs/namespace" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "tombstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "kind", "id", "uri", "deleted_at", "reason"],
+      "properties": {
+        "type": { "const": "tombstone" },
+        "kind": { "type": "string", "minLength": 1 },
+        "id": { "type": "integer" },
+        "uri": { "$ref": "#/$defs/uri" },
+        "deleted_at": { "$ref": "#/$defs/ms" },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

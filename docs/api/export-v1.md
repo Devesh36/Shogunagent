@@ -108,3 +108,6 @@ export v1 in the `package` slot, as its JSON Lines text. Preview reports what it
 - tombstones name ids of the exporting store; they are counted and not applied.
 
 Export → import into a fresh store gives the same row counts and the same quotes (tested).
+
+[Export v2](export-v2.md) keeps every field of this format and adds global ids, record times,
+relations, supersession links, source hashes and a capability manifest.

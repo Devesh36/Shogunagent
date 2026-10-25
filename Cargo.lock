@@ -2737,6 +2737,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "shogun-redact",
  "sqlite-vec",
  "thiserror 2.0.19",

@@ -14,7 +14,7 @@ fn schema() -> Value {
 
 /// A validator for exactly the JSON Schema keywords `export-v1.schema.json` uses. Any other
 /// keyword fails the test, so the schema cannot grow a rule this check silently ignores.
-fn validate(schema: &Value, root: &Value, value: &Value, at: &str) -> Result<(), String> {
+pub(super) fn validate(schema: &Value, root: &Value, value: &Value, at: &str) -> Result<(), String> {
     let Some(rules) = schema.as_object() else {
         return Err(format!("{at}: schema is not an object"));
     };
@@ -91,10 +91,27 @@ fn validate(schema: &Value, root: &Value, value: &Value, at: &str) -> Result<(),
             }
             "minLength" => {}
             "pattern" => {
-                assert_eq!(rule, "^(world|agent_scratch:.+)$", "the validator knows this one pattern only");
-                let ok = value.as_str().is_some_and(|s| s == "world" || s.strip_prefix("agent_scratch:").is_some_and(|id| !id.is_empty()));
-                if !ok {
-                    return Err(format!("{at}: {value} does not match the namespace pattern"));
+                let text = value.as_str().unwrap_or_default();
+                let ns_ok = |ns: &str| !ns.is_empty() && ns.len() <= 64 && ns.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() || b == b'-');
+                let ok = match rule.as_str() {
+                    Some("^(world|agent_scratch:.+)$") => text == "world" || text.strip_prefix("agent_scratch:").is_some_and(|id| !id.is_empty()),
+                    Some("^urn:shogunagent:[0-9a-z-]{1,64}$") => text.strip_prefix("urn:shogunagent:").is_some_and(ns_ok),
+                    Some("^urn:shogunagent:[0-9a-z-]{1,64}:[a-z_]+:-?[0-9]+$") => {
+                        let parts: Vec<&str> = text.strip_prefix("urn:shogunagent:").map(|r| r.split(':').collect()).unwrap_or_default();
+                        parts.len() == 3
+                            && ns_ok(parts[0])
+                            && !parts[1].is_empty()
+                            && parts[1].bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                            && parts[2].strip_prefix('-').unwrap_or(parts[2]).bytes().all(|b| b.is_ascii_digit())
+                            && !parts[2].trim_start_matches('-').is_empty()
+                    }
+                    Some("^sha256:[0-9a-f]{64}$") => {
+                        text.strip_prefix("sha256:").is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+                    }
+                    other => panic!("{at}: the validator does not know the pattern {other:?}; extend it with the schema"),
+                };
+                if !ok || !value.is_string() {
+                    return Err(format!("{at}: {value} does not match {rule}"));
                 }
             }
             other => panic!("{at}: the test validator does not implement `{other}`; extend it with the schema"),
@@ -103,11 +120,11 @@ fn validate(schema: &Value, root: &Value, value: &Value, at: &str) -> Result<(),
     Ok(())
 }
 
-fn ctx() -> WriteContext {
+pub(super) fn ctx() -> WriteContext {
     WriteContext::world(Actor::agent("exporter").unwrap())
 }
 
-fn event(conn: &Connection, text: &str, ts: i64) -> i64 {
+pub(super) fn event(conn: &Connection, text: &str, ts: i64) -> i64 {
     let hash = event_log::content_hash(text);
     event_log::insert(
         conn,
@@ -128,7 +145,7 @@ fn event(conn: &Connection, text: &str, ts: i64) -> i64 {
 }
 
 /// A small world: two people, a project, a commitment and an open loop with quotes.
-fn seed(conn: &mut Connection) -> (i64, i64, i64) {
+pub(super) fn seed(conn: &mut Connection) -> (i64, i64, i64) {
     let e1 = event(conn, "Oren Vale: I'll send the rollout plan by Friday.", 1_000);
     let e2 = event(conn, "Still waiting on Tamsin for the cost estimate.", 2_000);
     let oren = state::insert_person(
@@ -162,7 +179,7 @@ fn seed(conn: &mut Connection) -> (i64, i64, i64) {
     state::retain_quote(conn, StateTable::Commitments, commitment, e1, "I'll send the rollout plan by Friday.").unwrap();
     let open_loop = state::insert_open_loop(
         conn,
-        &NewOpenLoop { kind: OpenLoopKind::WaitingOnThem, description: "cost estimate from Tamsin", counterparty_id: None, project_id: None, opened_at: 2_000, confidence: 0.6, now: 2_000 },
+        &NewOpenLoop { kind: OpenLoopKind::WaitingOnThem, description: "cost estimate from Tamsin", counterparty_id: None, project_id: None, opened_at: 1_500, confidence: 0.6, now: 2_000 },
         &[Provenance::new(e2)],
     )
     .unwrap();
@@ -170,14 +187,14 @@ fn seed(conn: &mut Connection) -> (i64, i64, i64) {
     (oren, commitment, open_loop)
 }
 
-fn counts(conn: &Connection) -> Vec<i64> {
+pub(super) fn counts(conn: &Connection) -> Vec<i64> {
     ["people", "projects", "commitments", "open_loops"]
         .iter()
         .map(|t| conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap())
         .collect()
 }
 
-fn quotes(conn: &Connection) -> Vec<String> {
+pub(super) fn quotes(conn: &Connection) -> Vec<String> {
     let mut stmt = conn.prepare("SELECT quote FROM state_provenance WHERE quote IS NOT NULL ORDER BY quote").unwrap();
     let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
     rows

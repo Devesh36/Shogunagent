@@ -336,8 +336,9 @@ pub enum StateCommand {
     /// `state create <commitments|open-loops> --description T …` — the shared `state.create` body.
     Create { body: String },
     Export,
-    /// `state export --format export-v1 [--differential | --since-cursor <ms>]` — the portable
-    /// JSON Lines export (E7); `body` is the `state.export` arguments, validated at parse.
+    /// `state export --format export-v1|export-v2 [--differential | --since-cursor <ms>]` — the
+    /// portable JSON Lines export (E7, E27); `body` is the `state.export` arguments, validated at
+    /// parse.
     ExportV1 { body: String },
     /// `state split <table> <id> --name T --event N…` — the shared `state.split` body.
     Split { body: String },

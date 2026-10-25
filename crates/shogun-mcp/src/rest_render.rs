@@ -927,7 +927,8 @@ fn ingest_response<B: MemoryBackend + ?Sized>(
 }
 
 /// Export format v1 on REST (E7): `POST /v1/export` with the `state.export` arguments as the
-/// body (`format` defaults to `export-v1` here). `GET /v1/state/export` keeps the Markdown export.
+/// body (`format` defaults to `export-v1` here; `export-v2` selects v2, E27). `GET
+/// /v1/state/export` keeps the Markdown export.
 fn export_v1_response<B: MemoryBackend + ?Sized>(
     routed: &Routed,
     req: &RestRequest,
