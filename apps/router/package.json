@@ -1,0 +1,28 @@
+{
+  "name": "@shogunagent/router",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "description": "The ShogunAgent router (discover / inspect / run): a zero-retention tool proxy on Cloudflare Workers with Monid-compatible connector definitions. ADR: docs/decisions/0001-router-engine.md.",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build:catalog": "tsx scripts/build-catalog.ts",
+    "check:bundle": "rm -rf dist/dry-run && wrangler deploy --config wrangler.jsonc --dry-run --outdir dist/dry-run"
+  },
+  "dependencies": {
+    "hono": "^4.13.13",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7",
+    "wrangler": "^4.151.3"
+  }
+}
