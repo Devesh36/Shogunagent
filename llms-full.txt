@@ -1,6 +1,6 @@
 # ShogunAgent — full documentation for agents
 
-Generated from README.md, SKILL.md, apps/api/README-agent-api.md, docs/api/402.md, docs/api/agent-surfaces.md, docs/api/billing.md, docs/api/catalog.md, docs/api/core-tools.md, docs/api/deprecation-policy.md, docs/api/export-v1.md, docs/api/export-v2.md, docs/api/handoff.md, docs/api/oauth.md, docs/api/payouts.md, docs/api/tool-table.json.md by scripts/gen-llms-txt.mjs. The index is llms.txt. Each section below is one file, verbatim.
+Generated from README.md, SKILL.md, apps/api/README-agent-api.md, docs/api/402.md, docs/api/agent-surfaces.md, docs/api/billing.md, docs/api/catalog.md, docs/api/connector-tokens.md, docs/api/core-tools.md, docs/api/deprecation-policy.md, docs/api/export-v1.md, docs/api/export-v2.md, docs/api/handoff.md, docs/api/oauth.md, docs/api/payouts.md, docs/api/tool-table.json.md by scripts/gen-llms-txt.mjs. The index is llms.txt. Each section below is one file, verbatim.
 
 ---
 
@@ -1279,6 +1279,110 @@ An entry:
 - `data_handling` is `null` for passthrough entries (an imported marketplace catalog), which are handled under that marketplace's terms.
 - `ranking.formula` is the exact formula `router.discover` uses; `ranking.policy` states that first-party tools get no boost, no pinned slot and no hidden term (CLAUDE.md invariant 13).
 - Legal names, contacts and payout references from `provider.json` are never published: they are not in the compiled catalog at all.
+
+---
+
+<!-- file: docs/api/connector-tokens.md -->
+
+# Connector tokens for the router (E48 contract)
+
+The router's first-party connectors (Gmail, Google Calendar, GitHub, Linear, Slack) act as the
+**calling principal's own account** at the vendor. In production the router never holds a vendor
+token in its Worker environment: for each run it asks apps/api for the token of the principal behind
+the caller's agent key, uses it for that one vendor request, and drops it.
+
+This page is the contract between the two. The router side is built (`apps/router/src/transport.ts`,
+`caller_connector` auth; tests in `apps/router/test/hardening.test.ts`). **The apps/api side is not
+built yet**: until it is, apps/api answers 404 for the unknown path, which the router reports to
+every caller as `connector_not_connected` (see "Until the route exists" below).
+
+## Route
+
+```
+POST /v1/internal/router/connector-token
+Authorization: Bearer <ROUTER_SETTLEMENT_TOKEN>
+X-Caller-Authorization: Bearer <the calling agent's key: sa_… or an OAuth access token sat_…>
+Content-Type: application/json
+Accept: application/json
+
+{ "slot": "gmail-tokenset", "provider_id": "gmail", "run_id": "0b6f…" }
+```
+
+- **Base URL**: the router's `ROUTER_WALLET_URL` (apps/api's origin), the same as
+  `/v1/internal/router/reserve` and `/settlements`.
+- **Service authentication**: `Authorization` carries `ROUTER_SETTLEMENT_TOKEN`, the secret the
+  router already presents on its other internal routes. apps/api compares it in constant time and
+  answers `401` without reading the body when it does not match. The service token alone grants
+  nothing: it does not name a principal.
+- **Caller authentication**: `X-Caller-Authorization` carries the agent's own bearer exactly as the
+  agent sent it to the router. apps/api verifies it as on `/v1/internal/router/reserve` (hash
+  lookup, not revoked, not expired, the `run` scope) and resolves **the principal from the key**.
+  The request body never names a principal, so the router cannot ask for another principal's token.
+- **Body** (content-free, ≤ 1 KiB; apps/api rejects unknown fields with `400`):
+
+  | Field | Type | Meaning |
+  |---|---|---|
+  | `slot` | string, one of `gmail-tokenset`, `gcal-tokenset`, `github-tokenset`, `linear-tokenset`, `slack-tokenset` | the `connector_tokens.account` row to open (`shogun_integrations::token_store::CredentialSlot::Connector`) |
+  | `provider_id` | string | the router provider id (`gmail`, `calendar`, `github`, `linear`, `slack`); for audit and for checking that the slot belongs to the provider |
+  | `run_id` | string, optional | the router's run id, for correlating with the run's settlement; not a secret |
+
+  `provider_id` → `slot` is fixed: `gmail` → `gmail-tokenset`, `calendar` → `gcal-tokenset`,
+  `github` → `github-tokenset`, `linear` → `linear-tokenset`, `slack` → `slack-tokenset`. A pair
+  outside this table is `400`.
+
+## What apps/api does
+
+1. Verify the service token, then the caller's key; resolve `principal_id`.
+2. Read the row `(principal_id, slot)` from `connector_tokens` (`apps/api/sql/connector-tokens.sql`)
+   and open its KMS envelope with associated data `(principal_id, slot)` (the
+   `RemoteTokenStore` / `KmsSealer` contract). A row that fails to open is treated as absent and
+   logged `connector_token_unreadable` (fixed words, no ids).
+3. The stored value is the connector's tokenset (access token, refresh token, expiry). If the access
+   token expires within 60 seconds, refresh it with the vendor using the refresh token (through the
+   OAuth broker's refresh path, #1101 D6) and write the new tokenset back, sealed, before answering.
+4. Answer with the **access token only**. The refresh token never leaves apps/api.
+
+apps/api never logs the token, the tokenset, the request body or the caller's key; the route is
+metered as an internal call (no charge, invariant 10 does not apply: it is not an agent-facing read).
+
+## Responses
+
+| Status | Body | Router behaviour |
+|---|---|---|
+| `200` | `{ "access_token": "<vendor token>", "token_type": "Bearer", "expires_at": <unix ms> }` with `Cache-Control: no-store` | injects `Authorization: Bearer <access_token>` into the one vendor request. A token that is not 8–4096 visible ASCII characters, or whose `expires_at` has passed, is refused as unavailable (below). |
+| `404` | `{ "error": { "code": "connector_not_connected", "message": "…", "next_action": "authenticate" } }` | the principal has no row for the slot (never connected, disconnected, or unreadable). The agent gets `403 connector_not_connected`, `next_action: authenticate`, $0: the user must connect the account in ShogunAgent first. |
+| `401` / `403` | the agent-surface error body | the caller's key is invalid, revoked, lacks the `run` scope, or the principal may not use this connector (e.g. a plan or tenant policy). The agent gets `401 authentication_required`. |
+| `400` | the agent-surface error body | malformed request (a router bug). The agent gets `503 provider_unavailable`, `retry_after`. |
+| `5xx`, timeout (5 s), network error | anything | the agent gets `503 provider_unavailable` with `retry_after: 5`, $0. |
+
+Every refusal happens after the run's reservation and is settled at $0 (`transport_error`), so a
+caller is never charged for a connector it could not use; the run's idempotency key is released and
+can be retried.
+
+## Guarantees the router keeps
+
+- The access token exists only inside `src/transport.ts`, between the token response and the vendor
+  request. It is not cached across runs, not returned to the engine, not in a run record, a
+  settlement, an idempotency row, a log line, a metric or a span (`test/hardening.test.ts` drives a
+  sentinel token through and asserts none of those contain it).
+- The caller's key goes to apps/api in `X-Caller-Authorization` and never to the vendor.
+- With `ROUTER_WALLET_URL` set, the Worker env variables the connectors name
+  (`GOOGLE_OAUTH_ACCESS_TOKEN`, `GITHUB_TOKEN`, `LINEAR_OAUTH_TOKEN`, `SLACK_TOKEN`) are never read,
+  even if set, and `ROUTER_DEV_SHARED_CREDENTIALS` is ignored (logged
+  `dev_shared_credentials_ignored` at isolate start).
+
+## Development
+
+Without `ROUTER_WALLET_URL`, `ROUTER_DEV_SHARED_CREDENTIALS=1` makes the connectors read one shared
+token from the env variable each names. That is one account for every caller and is for a developer's
+own machine only. Without the flag (and without the wallet URL) the connectors answer
+`503 provider_unavailable` (`try_alternative`) before any network call.
+
+## Until the route exists
+
+Production must not list the first-party connectors before apps/api serves this route: a 404 from an
+unknown route would be read as "not connected" for every caller. The pre-launch checklist
+(`docs/deploy/production.md` §9) keeps them out of the hosted catalog until the route ships.
 
 ---
 

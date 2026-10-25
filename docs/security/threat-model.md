@@ -146,14 +146,14 @@ operator ──(9)──▶ /metrics, admin routes, OTLP collector
 | # | Risk | Severity | Next step |
 |---|---|---|---|
 | R1 | **Rate limiters and in-flight limiters fail open** when the shared store is unavailable (`ratelimit_unavailable (failing open)` in `boot.ts`). Spend caps and the breaker still hold, but request-rate protection vanishes during a Postgres incident. | Medium | Decide per route: fail closed for registration and the agent `/mcp`, keep open for the device Batch lane |
-| R2 | **Router stores are per-isolate stubs** (metering, idempotency, health) until E32/E33; no route is bound (`workers_dev: false`). Binding a route before E32 would let idempotency and caps reset per isolate. | High if deployed | Keep unbound until E32/E33 land; `docs/deploy` (E41) must gate on it |
+| R2 | **Router stores were per-isolate stubs.** Metering and settlement now go through apps/api's wallet with a durable Postgres outbox (E32/E33); run idempotency is a Postgres store keyed by caller and key hash (E48). The health and personal stores remain per-isolate. | Medium (health/personal only) | Mitigated by E32/E33/E48; the router still needs its Hyperdrive binding before a route is bound (runbook §3 step 8) |
 | R3 | **Sidecar port fallback**: `bind_local` silently moves to an ephemeral port when 7464 is taken. In a shared network namespace, a process that binds 7464 first would receive the gateway's bearer and bodies. | Medium | In multi-principal mode, fail to start instead of falling back; or authenticate the gateway→sidecar hop (mTLS or a shared admin token on every request) |
 | R4 | **`SHOGUN_PRINCIPAL_TOKENS` holds principal bearers in clear in the environment** of the sidecar. | Medium | Replace with the gateway's resolver (E3 seam) or hashed tokens, as agent keys already are |
 | R5 | **Invariant 1 exception**: `apps/api/src/handoff.ts` parses recall bodies. | Low | E35 moves handoff assembly into the Rust core |
 | R6 | **xml-crypto as a SAML trust anchor**: a large, complex library; its silent skip of an `Algorithm`-less transform is now refused by our own check, but future versions may change verification semantics. | Medium | Pin (already exact), keep the fuzz test, review release notes on every bump |
 | R7 | **Single-principal write throughput**: concurrent ingest to one principal serialises on its SQLCipher file (p95 ~200 ms at 8 concurrent writers locally, `docs/slo.md`). A noisy agent can raise latency for every agent of that principal. | Low | Per-principal write queue with back-pressure (429 with `Retry-After`) |
-| R8 | No secret scanner in CI (only fixtures today). | Low | Add gitleaks with a fixture allowlist |
-| R9 | Fuzzing runs as seeded property tests on stable; the libFuzzer targets (`fuzz/`) need nightly and are not in CI. | Low | A nightly scheduled job, time-boxed |
+| R8 | Secret scanning in CI. | Low | Mitigated (E48): `secret-scan.yml` runs gitleaks with `.gitleaks.toml`; the first CI run may need allowlist entries for test values |
+| R9 | Fuzzing: seeded property tests on stable; libFuzzer targets in `fuzz/` need nightly. | Low | Mitigated (E48): `fuzz-nightly.yml` runs both targets time-boxed on a schedule |
 
 ## 7. Fuzzing findings (E38)
 
