@@ -10,10 +10,15 @@
  * - 402        `payment_required` or `cap_exceeded` (`billing/402.ts`);
  * - 503        the store, the company's global breaker, or the upstream is unavailable.
  *
- * After the upstream answered: a 2xx settles the reservation at the quoted cost (the quote IS the
- * price for the flat units; a `run` settles at the router's figure); anything else settles at 0,
- * so a failed call costs nothing. The receipt id and the usage ride on response headers
- * (`X-Receipt-Id`, `X-Usage-Unit`, `X-Usage-Quantity`, `X-Usage-Cost-Micro-Usd`): the core owns
+ * After the upstream answered, the reservation settles once, from headers only (`settledQuantity`):
+ * a non-2xx settles at 0; a 2xx settles the quantity the core reports in its reply `Mcp-Quantity`
+ * (capped at the reserved quantity, priced at the quote's unit price). The core reports 0 for a
+ * JSON-RPC error, an `isError` result and an idempotent replay, which answer HTTP 200 with the
+ * error in the body; a billable reply without the header, or with a malformed one, settles at 0
+ * (the gateway never bills what the core did not confirm, and never reads the body to find out).
+ * Free units (reads, protocol) cost 0 whatever the reply says (invariant 10). The contract the core
+ * must meet is in docs/api/billing.md ("Hosted /mcp"). The receipt id and the usage ride on
+ * response headers (`X-Receipt-Id`, `X-Usage-Unit`, `X-Usage-Quantity`, `X-Usage-Cost-Micro-Usd`): the core owns
  * the body, this layer owns the metering, and the body is relayed untouched (invariant 2).
  *
  * Cost-bearing calls also book their quote against the licence ledger's global daily breaker
@@ -23,7 +28,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { randomUUID } from "node:crypto";
 
-import { admitPrincipal, admitRefusalResponse, agentError, agentMeterSubject, hasScopes, resolveAgentKey, type AgentKeyLookup, type AgentPrincipal, type AgentScope, type AgentVars } from "./agent-keys.js";
+import { admitPrincipal, admitRefusalResponse, agentError, type AdmitRefusal, agentMeterSubject, hasScopes, resolveAgentKey, type AgentKeyLookup, type AgentPrincipal, type AgentScope, type AgentVars } from "./agent-keys.js";
 import type { AgentStore, ReserveOutcome } from "./agent-store.js";
 import { paymentRequiredResponse } from "./billing/402.js";
 import { decodePaymentHeader, paymentResponseHeader, x402Requirement, type FacilitatorClient, type SettleResult, type X402Config, type X402Store } from "./billing/x402.js";
@@ -31,7 +36,7 @@ import { commitTerms, discounted, type CommitTerms } from "./billing/ledger.js";
 import { LOW_BALANCE_THRESHOLD_MICROS, capReachedEvent, crossedLowBalance, lowBalanceEvent, type Notifier } from "./billing/notify.js";
 import { DEFAULT_CAPS, capsFor, periodsOf, secsUntilPeriodReset, type CapSet } from "./caps.js";
 import type { LogFn } from "./logging.js";
-import { classifyCall, quoteCost, usageOf, type MeterUnit, type Quote } from "./pricing.js";
+import { TOOLS_CALL, classifyCall, quoteCost, usageOf, type MeterUnit, type Quote } from "./pricing.js";
 import type { SpendBreaker } from "./spend.js";
 import { utcDate, type UsageStore } from "./usage.js";
 
@@ -61,8 +66,12 @@ export interface MeteringDeps {
   caps?: CapSet;
   /** Absolute base URL of this gateway, for the 402's top-up link. */
   publicBaseUrl: string;
-  /** Where metered calls go: the core (E4). Absent = 503 `upstream_unavailable`, nothing reserved. */
+  /** Where metered calls go: the core (E4; the sidecar relay of `mcp-proxy.ts`, E34). Absent =
+   * 503 `upstream_unavailable`, nothing reserved. */
   mcpUpstream?: (request: Request, principal: AgentPrincipal) => Promise<Response>;
+  /** Whether `mcpUpstream` can serve this principal (its shard, its sidecar bearer), asked before
+   * anything is reserved. A refusal is answered as is. Absent = every principal is relayed. */
+  mcpAdmit?: (principal: AgentPrincipal) => AdmitRefusal | undefined;
   /** The router's price (µ$) for a `run` of `toolId`. Absent, or answering `undefined`, = the run
    * cannot be priced here and is refused (400 `run_price_unavailable`). */
   runPricer?: (toolId: string | undefined, principal: AgentPrincipal) => Promise<number | undefined>;
@@ -162,6 +171,30 @@ export function classifyRequest(c: Context): ClassifiedCall | { error: string } 
     dryRun,
     ...(toolId ? { toolId } : {}),
   };
+}
+
+/**
+ * The quantity a call settles at, from the core's reply headers alone (never its body):
+ *
+ * - a non-2xx reply: 0 (a failed call costs nothing);
+ * - a 2xx with `Mcp-Quantity: <n>` (whole number): `min(n, reserved)`. The core sends 0 for a
+ *   JSON-RPC error, an `isError` result and an idempotent replay, all of which travel as HTTP 200;
+ * - a 2xx without the header, or with anything but a whole number: 0.
+ *
+ * Only billable calls ask; free units never reach this. `reserved` is the quote's quantity.
+ */
+export function settledQuantity(reply: Pick<Response, "status" | "headers">, reserved: number): number {
+  if (reply.status < 200 || reply.status >= 300) return 0;
+  const raw = reply.headers.get(HEADER_QUANTITY)?.trim();
+  if (raw === undefined || !/^\d{1,16}$/.test(raw)) return 0;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) ? Math.min(n, reserved) : 0;
+}
+
+/** The settled list cost of `quote` at `quantity` units (the quote is linear in its quantity). */
+export function settledListCost(quote: Quote, quantity: number): number {
+  if (quote.quantity <= 0 || quote.cost_micro_usd <= 0) return 0;
+  return (quote.cost_micro_usd / quote.quantity) * quantity;
 }
 
 /** Quote a classified call. A `run` needs the router's price. */
@@ -295,17 +328,25 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
   const now = deps.now ?? (() => new Date());
   return async (c) => {
     const startedMs = now().getTime();
-    const classified = fixed
-      ? { ...classifyRequest(c), method: fixed.method, name: fixed.name, unit: classifyCall(fixed.method, fixed.name) }
-      : classifyRequest(c);
-    if ("error" in classified) return agentError(c, 400, "invalid_metering_header", classified.error);
-    const call: ClassifiedCall = classified;
+    // Authentication first: an unauthenticated call is a 401 with the resource metadata pointer
+    // whatever its other headers say, so an MCP client can always discover how to sign in.
     const resolved = await resolveAgentKey(c.req.header("authorization"), deps.keyLookup ?? deps.store, startedMs);
     if (!resolved.ok) {
       c.set("relayLogEvent", "agent_key_rejected");
       return agentError(c, 401, resolved.code, "Send a valid agent key as `Authorization: Bearer sa_live_…` (register with POST /v1/agents), or an OAuth access token.", "register", { "www-authenticate": wwwAuthenticate(deps) });
     }
     const principal = resolved.principal;
+    const classified = fixed
+      ? { ...classifyRequest(c), method: fixed.method, name: fixed.name, unit: classifyCall(fixed.method, fixed.name) }
+      : classifyRequest(c);
+    if ("error" in classified) return agentError(c, 400, "invalid_metering_header", classified.error);
+    // The MCP 2026-07-28 metering headers are required on a POST (the core refuses a body that
+    // disagrees with them, so a call cannot be billed as something cheaper than it is).
+    if (!fixed && c.req.method === "POST") {
+      if (!c.req.header(HEADER_METHOD)?.trim()) return agentError(c, 400, "missing_header", "Mcp-Method must name the JSON-RPC method of the body (MCP 2026-07-28).", "fix_request");
+      if (classified.method === TOOLS_CALL && !classified.name) return agentError(c, 400, "missing_header", "Mcp-Name must name the tool of a tools/call (MCP 2026-07-28).", "fix_request");
+    }
+    const call: ClassifiedCall = classified;
     c.set("relayLogAgentKey", principal.keyId);
     // E26: a principal homed in another region is sent to its endpoint before anything is booked.
     const refused = await admitPrincipal(deps.keyLookup ?? deps.store, principal, startedMs);
@@ -337,7 +378,12 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
     }
     if (!deps.mcpUpstream) {
       c.set("relayLogEvent", "upstream_unavailable");
-      return agentError(c, 503, "upstream_unavailable", "The core is not reachable from this gateway yet. Retry shortly.", "retry_after", { "retry-after": "30" });
+      return agentError(c, 503, "upstream_unavailable", "This gateway has no core behind /mcp (SHOGUN_SIDECAR_URL is not configured). Nothing was charged. Retry later, or use the REST and CLI faces of a self-hosted core.", "retry_after", { "retry-after": "30" });
+    }
+    const relayRefused = deps.mcpAdmit?.(principal);
+    if (relayRefused) {
+      c.set("relayLogEvent", relayRefused.code === "wrong_shard" ? "wrong_shard" : "upstream_unavailable");
+      return admitRefusalResponse(c, relayRefused);
     }
     // E30: a call paid per call over x402. Only with X402_ENABLED=1; otherwise the header is
     // ignored and the call is wallet-funded as usual (no payment is settled).
@@ -353,13 +399,17 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
       c.set("relayLogEvent", "upstream_failure");
       return agentError(c, 503, "upstream_unavailable", "The core did not answer. Nothing was charged. Retry shortly.", "retry_after", { "retry-after": "5" });
     }
-    const { charged, list } = settledPrice(reserved.price, upstream.status >= 200 && upstream.status < 300 ? quote.cost_micro_usd : 0);
+    // Free calls settle at 0 without asking; a billable one settles what the core reports.
+    const billable = quote.cost_micro_usd > 0;
+    const quantity = billable ? settledQuantity(upstream, quote.quantity) : quote.quantity;
+    if (billable && upstream.status >= 200 && upstream.status < 300 && upstream.headers.get(HEADER_QUANTITY) === null) c.set("relayLogEvent", "settle_quantity_missing");
+    const { charged, list } = settledPrice(reserved.price, billable ? settledListCost(quote, quantity) : 0);
     await settleCall(deps, reserved.receiptId, charged, list, principal, reserved.price.terms?.funding ?? "wallet");
     const headers = new Headers(upstream.headers);
     const approvalToken = headers.get("x-shogun-approval-token");
     headers.delete("x-shogun-approval-token");
     if (approvalToken && deps.onApprovalToken) deferWork(c, deps.onApprovalToken(approvalToken));
-    for (const [k, v] of Object.entries(usageHeaders(reserved.receiptId, { ...quote, cost_micro_usd: charged }))) headers.set(k, v);
+    for (const [k, v] of Object.entries(usageHeaders(reserved.receiptId, { ...quote, quantity, cost_micro_usd: charged }))) headers.set(k, v);
     if (reserved.price.terms) headers.set("x-usage-list-cost-micro-usd", String(list));
     headers.set("x-latency-ms", String(Math.max(0, now().getTime() - startedMs)));
     return new Response(upstream.body, { status: upstream.status, headers });
@@ -374,9 +424,9 @@ function reasonToken(r: string | undefined): string {
 
 /**
  * One metered call paid over x402 (E30): decode → replay guard → verify (facilitator) → reserve
- * against the caps with `funding: "x402"` (the wallet is not touched) → forward → on a 2xx,
- * settle the payment (facilitator) and the receipt at the quoted price; on anything else, settle
- * neither (a failed call costs nothing). `X-PAYMENT-RESPONSE` reports the settlement.
+ * against the caps with `funding: "x402"` (the wallet is not touched) → forward → when the core
+ * reports the whole quantity (`settledQuantity`), settle the payment (facilitator) and the receipt
+ * at the quoted price; on anything else, settle neither (a failed call costs nothing). `X-PAYMENT-RESPONSE` reports the settlement.
  */
 async function x402Call(
   c: Context<{ Variables: AgentVars }>,
@@ -449,7 +499,11 @@ async function x402Call(
     c.set("relayLogEvent", "upstream_failure");
     return agentError(c, 503, "upstream_unavailable", "The core did not answer. The payment was not settled; nothing was charged.", "retry_after", { "retry-after": "5" });
   }
-  const ok = upstream.status >= 200 && upstream.status < 300;
+  // An x402 payment is for exactly the quoted amount (scheme "exact"): it is captured only when the
+  // core reports the whole reserved quantity. A partial or zero quantity (an error, a replay) is not
+  // captured and the call costs nothing.
+  const quantity = settledQuantity(upstream, quote.quantity);
+  const ok = upstream.status >= 200 && upstream.status < 300 && quantity === quote.quantity;
   let settled: SettleResult;
   if (!ok) {
     settled = { success: false, errorReason: "call_failed_not_settled" };
@@ -468,7 +522,7 @@ async function x402Call(
   const approvalToken = headers.get("x-shogun-approval-token");
   headers.delete("x-shogun-approval-token");
   if (approvalToken && deps.onApprovalToken) deferWork(c, deps.onApprovalToken(approvalToken));
-  for (const [k, v] of Object.entries(usageHeaders(receiptId, { ...quote, cost_micro_usd: charged }))) headers.set(k, v);
+  for (const [k, v] of Object.entries(usageHeaders(receiptId, { ...quote, quantity: settled.success ? quote.quantity : 0, cost_micro_usd: charged }))) headers.set(k, v);
   headers.set("x-usage-funding", "x402");
   const paymentResponse = paymentResponseHeader(settled);
   headers.set("x-payment-response", paymentResponse);

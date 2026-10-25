@@ -50,6 +50,9 @@ export interface LogVars {
     // The agent routes (agent-app.ts / metering.ts): fixed words, never a value.
     | "agent_key_rejected" | "agent_registered" | "pow_rejected" | "register_rate_limited" | "payment_required" | "cap_exceeded"
     | "wallet_unavailable" | "capacity_exhausted" | "dry_run" | "run_price_unavailable" | "upstream_unavailable" | "upstream_failure"
+    // The hosted /mcp relay (E34, mcp-proxy.ts): a principal on another replica; a billable 2xx
+    // without the core's `Mcp-Quantity` (settled at 0 — a sidecar older than the contract).
+    | "wrong_shard" | "settle_quantity_missing"
     | "stripe_unavailable" | "stripe_failure" | "topup_session_created" | "topup_credited" | "topup_duplicate" | "webhook_rejected"
     // `POST /v1/handoff` (handoff.ts, plan E16).
     | "handoff_built"

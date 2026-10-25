@@ -21,8 +21,9 @@ export interface AgentRig {
   /** What the fake core saw: method, headers it cares about. Never bodies — the test observes
    * the passthrough, it does not retain content. */
   upstreamCalls: Array<{ method: string; principalId: string }>;
-  /** The fake core's next answer. */
-  upstream: { status: number; body: string };
+  /** The fake core's next answer. `quantity` is its reply `Mcp-Quantity`: `"echo"` (default)
+   * repeats the request's (a core that took everything), `null` sends none. */
+  upstream: { status: number; body: string; quantity: string | null };
   now: () => Date;
   setNow(d: Date): void;
 }
@@ -33,7 +34,7 @@ export type RigOverrides = Partial<Omit<AgentDeps, "mcpUpstream">> & { mcpUpstre
 export function makeAgentRig(overrides: RigOverrides = {}, store: AgentStore = new InMemoryAgentStore()): AgentRig {
   const logLines: string[] = [];
   const upstreamCalls: AgentRig["upstreamCalls"] = [];
-  const upstream = { status: 200, body: JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }) };
+  const upstream: AgentRig["upstream"] = { status: 200, body: JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } }), quantity: "echo" };
   let current = new Date("2026-10-25T12:00:00Z");
   const now = () => current;
   const log = (line: string) => logLines.push(line);
@@ -48,7 +49,8 @@ export function makeAgentRig(overrides: RigOverrides = {}, store: AgentStore = n
     ...("mcpUpstream" in overrides ? {} : {
       mcpUpstream: (req, principal) => {
         upstreamCalls.push({ method: req.method, principalId: principal.principalId });
-        return Promise.resolve(new Response(upstream.body, { status: upstream.status, headers: { "content-type": "application/json" } }));
+        const quantity = upstream.quantity === "echo" ? (req.headers.get("mcp-quantity") ?? "1") : upstream.quantity;
+        return Promise.resolve(new Response(upstream.body, { status: upstream.status, headers: { "content-type": "application/json", ...(quantity !== null ? { "mcp-quantity": quantity } : {}) } }));
       },
     }),
     ...Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== undefined)),

@@ -392,13 +392,14 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     {
       method: "all", path: "/mcp", tag: "mcp", security: "key", scope: "any",
       summary: "The metered MCP Streamable HTTP endpoint. Classified from headers, never from the body.",
-      description: `Sequence: key → classify → quote → reserve → forward → settle once (2xx: the quote; anything else: 0). Tool names today: ${toolNames.join(", ")}. Annotations per tool are in the server card (${links.server_card}).`,
+      description: `Sequence: key (401 with WWW-Authenticate first) → classify (Mcp-Method required on POST, Mcp-Name on tools/call) → quote → reserve → relay to the principal's core as a stream → settle once from the core's reply Mcp-Quantity (capped at the reservation; 0 for a JSON-RPC error, a refusal, an idempotent replay, a non-2xx or a reply without it; reads are always 0). Tool names today: ${toolNames.join(", ")}. Annotations per tool are in the server card (${links.server_card}).`,
       parameters: meteredHeaders,
       requestBody: jsonBody(ref("JsonRpc")),
       responses: {
         "200": { description: "The core's response, relayed untouched, with the usage headers; or a dry-run quote.", headers: usageHeaders, content: { "application/json": { schema: { oneOf: [ref("JsonRpc"), ref("DryRun")] } }, "text/event-stream": { schema: { type: "string" } } } },
-        "400": errorResponse("invalid_metering_header | run_price_unavailable"), "401": errorResponse("Invalid key — next_action register"), "402": errorResponse("payment_required | cap_exceeded, with payment (x402 shape) and PAYMENT-REQUIRED header"), "403": errorResponse("insufficient_scope"),
-        "503": errorResponse("upstream_unavailable | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After"),
+        "400": errorResponse("invalid_metering_header | missing_header | run_price_unavailable"), "401": errorResponse("Invalid key — next_action register; WWW-Authenticate names the protected-resource metadata"), "402": errorResponse("payment_required | cap_exceeded, with payment (x402 shape) and PAYMENT-REQUIRED header"), "403": errorResponse("insufficient_scope"),
+        "421": errorResponse("wrong_region | wrong_shard"),
+        "503": errorResponse("upstream_unavailable | principal_not_provisioned | core_rejected_gateway | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After"),
       },
     },
     // --- router verbs (apps/router, same base URL; plan §7.4 / §7.5) ---
