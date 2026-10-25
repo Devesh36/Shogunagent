@@ -1,0 +1,34 @@
+// The ShogunAgent router on Cloudflare Workers (docs/decisions/0001-router-engine.md). Same
+// runtime as apps/api so the two share one deploy story, one Workers Logs retention setting and
+// the same `Mcp-Method` / `Mcp-Name` metering headers.
+//
+// E8 skeleton: NO route is bound and NO workers.dev hostname is served. The router goes live
+// behind api.shogunaios.com only once E9 (wallet / 402 / caps) wires the real MeteringClient and
+// E4 replaces the thin `/mcp` stub with the conformant Streamable HTTP transport.
+//
+// Secrets — `wrangler secret put <NAME> --config apps/router/wrangler.jsonc`, NEVER here. They are
+// read by src/transport.ts only (invariant 7: provider keys are injected at the transport layer
+// and never reach the engine or a connector hook):
+//   MONID_API_KEY             Monid hosted-catalog passthrough (src/passthrough/monid.ts)
+//   SHOGUNAGENT_API_BASE_URL  base URL of the ShogunAgent REST face the first-party connector calls
+// Every name is documented in src/env.ts.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shogunagent-router",
+  "main": "src/worker.ts",
+  // ≥ 2024-09-23 so `nodejs_compat` is the v2 shim that gives `node:crypto` (catalog hashing).
+  "compatibility_date": "2026-03-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  // Workers Logs. Only src/logging.ts writes to the console, with a closed set of typed fields:
+  // route template, status, latency, tool id, outcome, counts. Never a body, header or value.
+  // Invocation logs are OFF because the runtime's own record carries request headers, and every
+  // metered request's `Authorization` is an agent key.
+  "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "enabled": true, "invocation_logs": false } },
+  "vars": {
+    // Non-secret defaults; override per environment.
+    "SHOGUNAGENT_API_BASE_URL": "https://api.shogunaios.com",
+    "APPROVAL_BASE_URL": "https://api.shogunaios.com/approve"
+  }
+}

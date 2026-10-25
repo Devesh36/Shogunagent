@@ -1,0 +1,21 @@
+/** Public surface of @shogunagent/router for apps/api (E9 wires the wallet behind `MeteringClient`). */
+export { createApp } from "./app.js";
+export { compileCatalog, CatalogCompileError, type CatalogEntry, type CatalogManifest, type CompiledCatalog } from "./catalog.js";
+export { discover, RANKING_FORMULA, RANKING_WEIGHTS, type DiscoverCandidate, type ScoreBreakdown } from "./discover.js";
+export { inspect } from "./inspect.js";
+export { run, type RunBody, type RunDeps } from "./run.js";
+export { callVerb, type RouterDeps } from "./engine.js";
+export { handleMcp, mcpTools } from "./mcp.js";
+export { authorize, buildScopeTable, levelFor, isExternalSend, type Level, type ScopeTable } from "./scope.js";
+export { createFetchTransport, createReplayTransport, TransportError, type Transport, type TransportCall } from "./transport.js";
+export { InMemoryMeteringClient, type MeteringClient, type PaymentRequired, type Quote } from "./metering.js";
+export { InMemoryRunLogSink, noopRunLogSink, TOOL_RUN_RECORD_KEYS, type RunLogSink, type ToolRunRecord } from "./runlog.js";
+export { InMemoryIdempotencyStore, type IdempotencyStore } from "./idempotency.js";
+export { InMemoryHealthStore, noopHealthStore, type HealthStore } from "./health.js";
+export { consoleLogger, silentLogger, type Logger, type LogEvent } from "./logging.js";
+export { Secret } from "./secret.js";
+export { importMonidCatalog, type MonidCatalog } from "./passthrough/monid.js";
+export { allProviders } from "../connectors/index.js";
+export { CATEGORIES, type Category } from "../connectors/categories.js";
+export { defineEndpoint, defineProvider, zodInput } from "../connectors/define.js";
+export type { EndpointDefinition, ProviderDefinition, OpClass, UsageModel, Fixture } from "../connectors/types.js";
