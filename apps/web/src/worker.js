@@ -82,6 +82,9 @@ function withHeaders(response, origin, { negotiated, assetPath }) {
   headers.set("Access-Control-Allow-Origin", "*");
   const ext = extOf(assetPath);
   if (TEXT_TYPES[ext]) headers.set("Content-Type", TEXT_TYPES[ext]);
+  if (headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() === "text/html") {
+    headers.set("Content-Type", "text/html; charset=utf-8");
+  }
   headers.append("Vary", "Accept");
   if (negotiated) headers.set("Content-Location", `${origin}/index.md`);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
@@ -89,8 +92,13 @@ function withHeaders(response, origin, { negotiated, assetPath }) {
 
 export default {
   async fetch(request, env) {
-    const r = route(request);
     const url = new URL(request.url);
+    if (url.hostname === "www.shogunagent.com") {
+      url.hostname = "shogunagent.com";
+      url.protocol = "https:";
+      return Response.redirect(url.href, 301);
+    }
+    const r = route(request);
     const assetUrl = new URL(r.assetPath, url.origin);
     const assetRequest = new Request(assetUrl, { method: request.method === "HEAD" ? "HEAD" : "GET", headers: request.headers });
     const response = await env.ASSETS.fetch(assetRequest);

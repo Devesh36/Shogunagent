@@ -24,7 +24,7 @@ Reserved and out of scope here: `api.shogunagent.com` belongs to `apps/api` (Pha
 pnpm install
 pnpm --filter @shogun-ai/web test        # must print "# fail 0"
 pnpm --filter @shogun-ai/web build       # writes apps/web/dist
-pnpm --filter @shogun-ai/web deploy      # builds again, then `wrangler deploy --config apps/web/wrangler.jsonc`
+pnpm --filter @shogun-ai/web run deploy  # builds again, then `wrangler deploy --config apps/web/wrangler.jsonc`
 ```
 
 On the first deploy Wrangler creates the Worker, uploads `dist/` as static assets, and attaches the two custom domains in `wrangler.jsonc` (`shogunagent.com` and `www.shogunagent.com`). Custom domains create their own DNS records and TLS certificates; do not add A/AAAA/CNAME records for these two names by hand. If a record already exists for the apex or `www`, delete it first or Wrangler reports a conflict.

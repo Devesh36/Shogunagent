@@ -37,7 +37,7 @@ function fakeAssets(files) {
       const key = url.pathname === "/" ? "/index.html" : url.pathname;
       const body = files[key];
       if (body === undefined) return new Response("not found", { status: 404 });
-      const type = key.endsWith(".html") ? "text/html; charset=utf-8" : "application/octet-stream";
+      const type = key.endsWith(".html") ? "text/html" : "application/octet-stream";
       return new Response(request.method === "HEAD" ? null : body, { status: 200, headers: { "content-type": type } });
     },
   };
@@ -70,6 +70,15 @@ test("worker: text files get a charset-bearing text type whatever the asset stor
   const res = await worker.fetch(new Request(ORIGIN + "/llms.txt"), env);
   assert.equal(res.headers.get("content-type"), "text/plain; charset=utf-8");
   assert.equal(await res.text(), "# llms");
+});
+
+test("worker: www redirects to HTTPS apex and preserves path and query before reading assets", async () => {
+  const unusedEnv = { ASSETS: { fetch() { throw new Error("redirect must not fetch assets"); } } };
+  for (const scheme of ["http", "https"]) {
+    const res = await worker.fetch(new Request(`${scheme}://www.shogunagent.com/index.md?agent=1&x=2`), unusedEnv);
+    assert.equal(res.status, 301);
+    assert.equal(res.headers.get("location"), `${ORIGIN}/index.md?agent=1&x=2`);
+  }
 });
 
 test("worker: a missing path stays 404 and HEAD has no body", async () => {
