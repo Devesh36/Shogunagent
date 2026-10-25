@@ -90,4 +90,9 @@ pub enum TenancyError {
     /// A request still holds the principal's store open; a purge waits for it (E39).
     #[error("the principal's store is in use by a request in flight; retry shortly")]
     Busy,
+    /// The principal was purged (E39): a tombstone under the root keeps a still-mapped token from
+    /// silently recreating an empty store. The operator lifts it on purpose
+    /// (`shogun-api --reinstate-principal <id>`).
+    #[error("this principal was deleted; an operator must reinstate it before it can be used again")]
+    Purged,
 }

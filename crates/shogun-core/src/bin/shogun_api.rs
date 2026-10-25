@@ -275,8 +275,13 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
     let store = Arc::new(
         PrincipalStore::new(root.clone(), keys.clone(), clock.clone(), max_open).with_embedder(embedder),
     );
-    let executor = approval_executor(&root, keys, store.clone());
-    let state = shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), clock).with_approval_executor(executor);
+    // One connector token store (`SHOGUN_TOKEN_STORE_DIR`, else `<root>/.tokens`) for the
+    // executor's sends and the operator's purge (E39), which removes a principal's entries with
+    // its store.
+    let credentials = principal_credentials(&root, keys.clone());
+    let executor = approval_executor(credentials.clone(), store.clone());
+    let state = shogun_core::tenancy::multi::app_state_with_credentials(store, Arc::new(resolver), clock, Some(credentials))
+        .with_approval_executor(executor);
     let port = std::env::var("SHOGUN_API_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -309,23 +314,29 @@ async fn bind_exact_or_exit(port: u16) -> tokio::net::TcpListener {
     }
 }
 
-/// The executor of remotely approved actions in multi-principal mode (E15 follow-up): each
-/// principal's connector grants from the local token store (`SHOGUN_TOKEN_STORE_DIR`, else
-/// `<root>/.tokens`, sealed with the principal's key), the action traced into the principal's own
-/// store before it leaves. A principal with no grant for the action's service gets
-/// `send_failed` / `not_connected`, and nothing is sent.
-fn approval_executor(
+/// The principals' connector token store in multi-principal mode: `SHOGUN_TOKEN_STORE_DIR`, else
+/// `<root>/.tokens`, each file sealed with its principal's key.
+fn principal_credentials(
     root: &std::path::Path,
     keys: Arc<dyn shogun_core::tenancy::KeyProvider>,
+) -> Arc<dyn shogun_integrations::TokenStore> {
+    use shogun_core::tenancy::credentials::{local_store, token_dir, TOKEN_STORE_DIR_VAR};
+    Arc::new(local_store(
+        token_dir(root, std::env::var_os(TOKEN_STORE_DIR_VAR).map(std::path::PathBuf::from)),
+        keys,
+    ))
+}
+
+/// The executor of remotely approved actions in multi-principal mode (E15 follow-up): each
+/// principal's connector grants from the local token store ([`principal_credentials`]), the action
+/// traced into the principal's own store before it leaves. A principal with no grant for the
+/// action's service gets `send_failed` / `not_connected`, and nothing is sent.
+fn approval_executor(
+    tokens: Arc<dyn shogun_integrations::TokenStore>,
     store: Arc<shogun_core::tenancy::PrincipalStore>,
 ) -> Arc<dyn shogun_mcp::approval_exec::ApprovalExecutor> {
     use shogun_core::approval_exec::{ConnectorTransports, SendExecExecutor, SinkFor};
-    use shogun_core::tenancy::credentials::{local_store, token_dir, TOKEN_STORE_DIR_VAR};
     use shogun_core::tenancy::PrincipalId;
-    let tokens: Arc<dyn shogun_integrations::TokenStore> = Arc::new(local_store(
-        token_dir(root, std::env::var_os(TOKEN_STORE_DIR_VAR).map(std::path::PathBuf::from)),
-        keys,
-    ));
     let sinks: SinkFor = Arc::new(move |principal: Option<&str>| {
         let id = PrincipalId::parse(principal?).ok()?;
         let open = store.open(&id).ok()?;
@@ -442,8 +453,36 @@ fn store_relay_credential(root: std::path::PathBuf, principal: &str) -> std::io:
     Ok(())
 }
 
+/// `shogun-api --reinstate-principal <id> [--multi <root>]` (E39): lift the tombstone a purge
+/// left, the operator's deliberate step before a deleted principal id is provisioned again. The
+/// principal's next request starts an empty store under a fresh key; nothing of the purged store,
+/// its key or its connector credentials comes back. Needs no key and opens no store.
+fn reinstate_principal(root: std::path::PathBuf, principal: &str) -> std::io::Result<()> {
+    use shogun_core::tenancy::{EnvKeyProvider, PrincipalId, PrincipalStore};
+    let principal = PrincipalId::parse(principal).unwrap_or_else(|e| {
+        eprintln!("{FACE}: {e}");
+        std::process::exit(2);
+    });
+    let store = PrincipalStore::new(root, Arc::new(EnvKeyProvider::default()), wall_clock(), 1);
+    match store.reinstate(&principal) {
+        Ok(true) => println!("{FACE}: principal {} reinstated; its next request starts an empty store", principal.as_str()),
+        Ok(false) => println!("{FACE}: principal {} was not purged; nothing to do", principal.as_str()),
+        Err(e) => {
+            eprintln!("{FACE}: {e}");
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    if let Some(principal) =
+        std::env::args().skip(1).skip_while(|arg| arg != "--reinstate-principal").nth(1)
+    {
+        let root = multi_root(std::env::args().skip(1)).unwrap_or_else(|| std::path::PathBuf::from("./principals"));
+        return reinstate_principal(root, &principal);
+    }
     if let Some(principal) =
         std::env::args().skip(1).skip_while(|arg| arg != "--store-relay-credential").nth(1)
     {

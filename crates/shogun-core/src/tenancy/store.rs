@@ -18,6 +18,36 @@ use super::{KeyProvider, PrincipalId, TenancyError};
 /// The file name inside a principal's directory, the same the desktop app uses.
 pub const STORE_FILE: &str = "memory.db";
 
+/// The directory under the root that holds one tombstone per purged principal (E39). The leading
+/// dot keeps it from ever being read as a principal (it is not a valid principal id).
+pub const TOMBSTONE_DIR: &str = ".purged";
+
+/// `<root>/.purged/<principal>`: present while `principal` is purged.
+pub fn tombstone_path(root: &Path, principal: &PrincipalId) -> PathBuf {
+    root.join(TOMBSTONE_DIR).join(principal.as_str())
+}
+
+/// Whether `principal` under `root` was purged and not reinstated.
+pub fn is_tombstoned(root: &Path, principal: &PrincipalId) -> bool {
+    tombstone_path(root, principal).exists()
+}
+
+/// Write the tombstone (`{"purged_at_ms":…}`, no content of the store) and sync it before
+/// anything is removed, so a crash mid-purge never leaves a principal that a request recreates.
+fn write_tombstone(root: &Path, principal: &PrincipalId, now_ms: i64) -> Result<(), TenancyError> {
+    use std::io::Write as _;
+    let dir = root.join(TOMBSTONE_DIR);
+    std::fs::create_dir_all(&dir)?;
+    let path = tombstone_path(root, principal);
+    let mut file = std::fs::File::create(&path)?;
+    file.write_all(format!("{{\"purged_at_ms\":{now_ms}}}\n").as_bytes())?;
+    file.sync_all()?;
+    if let Ok(dir) = std::fs::File::open(&dir) {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
 /// What a purge removed (E39). Both `false`: there was nothing to remove (an earlier purge, or a
 /// principal that never had a store) — a purge is idempotent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +195,20 @@ impl PrincipalStore {
         self.path_for(principal).is_file()
     }
 
+    /// Whether `principal` was purged and not reinstated (E39): every open is refused with
+    /// [`TenancyError::Purged`], whatever token still names it.
+    pub fn is_purged(&self, principal: &PrincipalId) -> bool {
+        is_tombstoned(&self.root, principal)
+    }
+
+    /// Lift `principal`'s tombstone so it can be provisioned again (the operator's deliberate
+    /// step, `shogun-api --reinstate-principal <id>`). Its next open starts an empty store under
+    /// a fresh key; nothing of the purged one comes back. `true` when a tombstone was removed.
+    pub fn reinstate(&self, principal: &PrincipalId) -> Result<bool, TenancyError> {
+        let _lru = self.lru.lock().unwrap_or_else(PoisonError::into_inner);
+        remove_file_if_exists(&tombstone_path(&self.root, principal))
+    }
+
     /// The handle for `principal`, opening the file when it is not already open and evicting the
     /// least recently used handle past the cap. Opens are serialised through the store's lock so
     /// two requests for one principal never open the file twice.
@@ -189,6 +233,10 @@ impl PrincipalStore {
     }
 
     fn open_fresh(&self, principal: &PrincipalId) -> Result<OpenPrincipal, TenancyError> {
+        // Before the key provider: a KMS provider would otherwise mint a fresh data key for it.
+        if self.is_purged(principal) {
+            return Err(TenancyError::Purged);
+        }
         let path = self.path_for(principal);
         let key = self.keys.key_for(principal)?;
         let db = match self.policy {
@@ -238,8 +286,9 @@ impl PrincipalStore {
     }
 
     /// Remove `principal`'s store for good (E39, after a SCIM delete's grace period): close its
-    /// handle, then — holding the store's lock so no request can reopen it meanwhile — remove the
-    /// key file first (a KMS-wrapped data key: the store is unreadable from here on, even if
+    /// handle, then — holding the store's lock so no request can reopen it meanwhile — write the
+    /// principal's tombstone (from here on every open is refused with [`TenancyError::Purged`],
+    /// so a token still mapped to it never recreates an empty store), remove the key file first (a KMS-wrapped data key: the store is unreadable from here on, even if
     /// removing the rest fails), then the database and its write-ahead files, then the directory.
     /// A request still holding the store refuses the purge with [`TenancyError::Busy`] (retry);
     /// a principal with nothing on disk answers an empty report (idempotent). Never reads a row.
@@ -253,6 +302,7 @@ impl PrincipalStore {
         }
         lru.order.retain(|p| p != principal);
         drop(lru.open.remove(principal));
+        write_tombstone(&self.root, principal, (self.clock)())?;
         self.keys.forget(principal);
         let dir = self.root.join(principal.as_str());
         let key_removed = match self.keys.key_file(principal) {
@@ -460,6 +510,18 @@ mod tests {
         // Again: nothing left, still a success.
         assert_eq!(store.purge(&alice).unwrap(), PurgeReport { store_removed: false, key_removed: false });
         assert!(store.exists(&bob), "another principal's store is untouched");
+
+        // The tombstone: a request naming alice is refused, never handed a fresh empty store.
+        assert!(store.is_purged(&alice));
+        assert!(matches!(store.open(&alice), Err(TenancyError::Purged)));
+        assert!(!root.0.join("alice").exists(), "the refused open created nothing");
+        assert!(!store.is_purged(&bob));
+        // A store under the same root built later (a restart) sees it too.
+        assert!(matches!(self::store(&root.0, 4).open(&alice), Err(TenancyError::Purged)));
+        // The operator reinstates on purpose: an empty store under the same id.
+        assert!(store.reinstate(&alice).unwrap());
+        assert!(!store.reinstate(&alice).unwrap(), "idempotent");
+        assert_eq!(store.open(&alice).unwrap().db().people().len(), 0);
     }
 
     #[test]

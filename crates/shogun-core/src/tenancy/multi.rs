@@ -9,6 +9,7 @@ use shogun_agents::approval::ApprovalQueue;
 use shogun_mcp::backend::{MemoryBackend, ReadItem, ReadParams};
 use shogun_mcp::memory_api::{Tool, TokenRegistry};
 use shogun_mcp::server::{AppState, BackendResolver, ResolvedBackend};
+use shogun_integrations::TokenStore;
 
 use crate::daemon::Clock;
 
@@ -19,9 +20,19 @@ pub struct MultiBackends {
     store: Arc<PrincipalStore>,
     resolver: Arc<dyn PrincipalResolver>,
     teams: Arc<TeamRegistry>,
+    /// The principals' connector credentials (`<root>/.tokens` or `SHOGUN_TOKEN_STORE_DIR`), so a
+    /// purge removes them with the store (E39). `None`: this composition keeps no credentials.
+    credentials: Option<Arc<dyn TokenStore>>,
 }
 
+/// The refusal for a purged principal (E39): `410 principal_purged`, the same for every token
+/// that still names it, and nothing is created. Re-provisioning is the operator's deliberate step.
+pub const PRINCIPAL_PURGED: &str = r#"{"error":"principal_purged","message":"This principal was deleted. An operator must reinstate it (shogun-api --reinstate-principal <id>) before it can be used again; nothing of the deleted store comes back.","next_action":"ask_human"}"#;
+
 fn unavailable(error: &super::TenancyError) -> (u16, String) {
+    if matches!(error, super::TenancyError::Purged) {
+        return (410, PRINCIPAL_PURGED.to_string());
+    }
     (
         503,
         serde_json::json!({
@@ -42,7 +53,14 @@ impl MultiBackends {
     }
 
     pub fn with_teams(store: Arc<PrincipalStore>, resolver: Arc<dyn PrincipalResolver>, teams: Arc<TeamRegistry>) -> Self {
-        Self { store, resolver, teams }
+        Self { store, resolver, teams, credentials: None }
+    }
+
+    /// Remove each purged principal's credentials from `credentials` too (E39).
+    #[must_use]
+    pub fn with_credentials(mut self, credentials: Option<Arc<dyn TokenStore>>) -> Self {
+        self.credentials = credentials;
+        self
     }
 
     pub fn store(&self) -> &Arc<PrincipalStore> {
@@ -119,22 +137,42 @@ impl BackendResolver for MultiBackends {
             }
             Err(e) => return Err(unavailable(&e)),
         };
+        // After the store (a busy store refuses before anything is removed) and under its
+        // tombstone, so no request can recreate the principal meanwhile. A failure here answers
+        // 503 and the operator's retry finishes it: the store side is idempotent.
+        let credentials_removed = match &self.credentials {
+            Some(credentials) => credentials.purge_principal(id.as_str()).map_err(|e| {
+                (
+                    503,
+                    serde_json::json!({
+                        "error": "credentials_unavailable",
+                        "message": format!("The principal's store is gone, but its connector credentials could not be removed ({}). Retry the purge.", e.code()),
+                        "next_action": "retry_after",
+                    })
+                    .to_string(),
+                )
+            })?,
+            None => false,
+        };
         let left_teams = self.teams.remove_member(&id).map_err(|e| unavailable(&e))?;
         let record = serde_json::json!({
             "ts_ms": now_ms,
             "principal": id.as_str(),
             "store_removed": report.store_removed,
             "key_removed": report.key_removed,
+            "credentials_removed": credentials_removed,
             "left_teams": left_teams,
             "request_id": request_id,
         });
         append_purge_log(self.store.root(), &record).map_err(|e| unavailable(&super::TenancyError::Io(e)))?;
         Ok(serde_json::json!({
             "principal": id.as_str(),
-            "purged": report.store_removed || report.key_removed,
+            "purged": report.store_removed || report.key_removed || credentials_removed,
             "store_removed": report.store_removed,
             "key_removed": report.key_removed,
+            "credentials_removed": credentials_removed,
             "left_teams": left_teams,
+            "tombstoned": true,
         }))
     }
 
@@ -191,6 +229,17 @@ pub fn token_registry(resolver: &dyn PrincipalResolver) -> TokenRegistry {
 /// The server state for `--multi`: per-request backends, a full-plan entitlement (the hosted
 /// gates are the wallet and the caps, not a plan), the in-process approval queue, no desktop gates.
 pub fn app_state(store: Arc<PrincipalStore>, resolver: Arc<dyn PrincipalResolver>, clock: Clock) -> AppState {
+    app_state_with_credentials(store, resolver, clock, None)
+}
+
+/// [`app_state`] whose purge (E39) also removes each principal's entries from `credentials` (the
+/// connector token store `shogun-api --multi` uses).
+pub fn app_state_with_credentials(
+    store: Arc<PrincipalStore>,
+    resolver: Arc<dyn PrincipalResolver>,
+    clock: Clock,
+    credentials: Option<Arc<dyn TokenStore>>,
+) -> AppState {
     let mut registry = token_registry(resolver.as_ref());
     // E34: derived `sgw1` bearers are not listed; the registry asks the resolver about them.
     if resolver.verifies_unlisted() {
@@ -207,5 +256,5 @@ pub fn app_state(store: Arc<PrincipalStore>, resolver: Arc<dyn PrincipalResolver
         .with_entitlements(Arc::new(|| {
             shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0)
         }))
-        .with_backend_resolver(Arc::new(MultiBackends::new(store, resolver)))
+        .with_backend_resolver(Arc::new(MultiBackends::new(store, resolver).with_credentials(credentials)))
 }

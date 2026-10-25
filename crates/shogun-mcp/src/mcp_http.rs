@@ -93,8 +93,9 @@ pub struct HttpReply {
 const JSON: &str = "application/json";
 const SSE: &str = "text/event-stream";
 
+/// A transport refusal, with its `next_action` (E34; the same table as every face).
 fn error_body(id: Value, code: i64, message: &str) -> String {
-    json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
+    crate::envelope::rpc_error(id, code, message)
 }
 
 fn wants_sse_only(accept: Option<&str>) -> bool {
@@ -203,7 +204,7 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
         return HttpReply {
             status: 405,
             content_type: JSON,
-            body: json!({ "error": "method_not_allowed", "message": message }).to_string(),
+            body: json!({ "error": "method_not_allowed", "message": message, "next_action": "fix_input" }).to_string(),
             mcp_method: request.method.to_ascii_uppercase(),
             mcp_name: None,
             mcp_quantity: None,

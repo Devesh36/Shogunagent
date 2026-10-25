@@ -39,6 +39,10 @@ pub fn import_single_user_store(
     if wal.metadata().is_ok_and(|meta| meta.len() > 0) {
         return Err(TenancyError::SourceInUse);
     }
+    // A purged principal (E39) is reinstated on purpose first, never by an import.
+    if super::store::is_tombstoned(root, principal) {
+        return Err(TenancyError::Purged);
+    }
     let dir = root.join(principal.as_str());
     let dest = dir.join(STORE_FILE);
     if dest.exists() {

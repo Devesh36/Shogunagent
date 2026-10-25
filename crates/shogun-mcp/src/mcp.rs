@@ -1995,34 +1995,9 @@ fn normalize_core_response(tool: Tool, response: String) -> String {
     v.to_string()
 }
 
-/// What a refusal tells the caller to do next (`next_action`, CLAUDE.md "Every metered response
-/// returns … on error `next_action`"), from its JSON-RPC code. Agents branch on it, never on the
-/// message; an unknown value means "stop and tell the human" (`docs/api/deprecation-policy.md`).
-fn next_action_for_code(code: i64) -> &'static str {
-    match code {
-        -32700 | -32600 | -32601 | -32602 => "fix_input",
-        TOKEN_INVALID_CODE => "reauthenticate",
-        -32003 => "upgrade_plan",
-        SCOPE_INSUFFICIENT_CODE => "request_scope",
-        SOURCE_NOT_ALLOWED_CODE => "ask_human",
-        MEMORY_UNAVAILABLE_CODE | RATE_LIMITED_CODE => "retry_after",
-        _ => "retry_after",
-    }
-}
-
-/// What an `isError` result tells the caller to do next, from its `error` code.
-fn next_action_for_refusal(code: &str) -> &'static str {
-    match code {
-        "not_found" => "fix_input",
-        "revision_changed" => "reread",
-        code if ["invalid_", "missing_", "bad_"].iter().any(|prefix| code.starts_with(prefix)) => "fix_input",
-        "unavailable" | "memory_unavailable" | "upstream_error" => "retry_after",
-        _ => "ask_human",
-    }
-}
-
 /// The metered envelope of one `tools/call` reply (E34 conformance; three faces, one result: the
-/// `result` itself is untouched, only envelope keys are added, and only when absent):
+/// `result` itself is untouched, only envelope keys are added, and only when absent). The values
+/// come from [`crate::envelope`], the module REST uses too:
 ///
 /// - a JSON-RPC error gets `error.data.next_action`;
 /// - an `isError` result whose text is a JSON object gets `next_action`;
@@ -2034,15 +2009,8 @@ fn with_envelope(response: String, core: Option<Tool>, latency_ms: u64) -> Strin
         return response;
     };
     if let Some(error) = value.get_mut("error").and_then(Value::as_object_mut) {
-        let code = error.get("code").and_then(Value::as_i64).unwrap_or(-32000);
-        match error.get_mut("data") {
-            Some(Value::Object(data)) => {
-                data.entry("next_action").or_insert_with(|| Value::String(next_action_for_code(code).into()));
-            }
-            Some(_) => return response,
-            None => {
-                error.insert("data".into(), json!({ "next_action": next_action_for_code(code) }));
-            }
+        if !crate::envelope::add_rpc_next_action(error) {
+            return response;
         }
         return value.to_string();
     }
@@ -2050,10 +2018,7 @@ fn with_envelope(response: String, core: Option<Tool>, latency_ms: u64) -> Strin
     // The state reads and `profile.whoami` (the core reads whose answers carried no envelope);
     // the other core reads render their own (`memory.recall`) or are compared byte for byte
     // across the three faces (`memory.search`, `memory.get_events`), so they are left as they are.
-    let read = core.is_some_and(|tool| {
-        tool_level(tool) == ApiLevel::Read
-            && (tool.wire_name().starts_with("state.") || tool == Tool::ProfileWhoami)
-    });
+    let read = core.is_some_and(crate::envelope::carries_read_envelope);
     if (!failed && !read) || value["result"].get("resultType").is_some_and(|kind| !kind.is_null()) {
         return response;
     }
@@ -2068,14 +2033,9 @@ fn with_envelope(response: String, core: Option<Tool>, latency_ms: u64) -> Strin
             return response;
         }
         let code = payload.get("error").and_then(Value::as_str).unwrap_or_default().to_string();
-        payload.insert("next_action".into(), Value::String(next_action_for_refusal(&code).into()));
-    } else {
-        if payload.contains_key("usage") {
-            return response;
-        }
-        payload.insert("usage".into(), json!({ "unit": "read", "quantity": 1, "cost_micro_usd": 0 }));
-        payload.entry("latency_ms").or_insert_with(|| Value::from(latency_ms));
-        payload.entry("next_action").or_insert(Value::Null);
+        payload.insert("next_action".into(), Value::String(crate::envelope::next_action_for_tool_error(&code).into()));
+    } else if !crate::envelope::add_read_envelope(&mut payload, latency_ms) {
+        return response;
     }
     value["result"]["content"][0]["text"] = Value::String(Value::Object(payload).to_string());
     value.to_string()

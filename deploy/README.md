@@ -186,7 +186,7 @@ is one replica.
 A principal lives on exactly one replica: `shard = fnv1a64(principal_id) mod replicaCount` (64-bit
 FNV-1a over the id's bytes), served by pod `<release>-<shard>` (stable names through the headless
 Service). The chart and the sidecar do not route: a sidecar serves whatever principals are on its
-volume, and creates a store for any principal it is asked about. Whatever routes agent traffic
+volume, and creates a store for any principal it is asked about (except a purged one, §6.6). Whatever routes agent traffic
 (an ingress with consistent hashing on a principal header, or the control plane that resolves agent
 keys) must send a principal's requests to that pod. The chart refuses `replicaCount > 1` until
 `sharding.acknowledged=true`. Changing `replicaCount` moves principals: stop traffic, copy each moved
@@ -304,3 +304,27 @@ with `shogun models fetch` into that volume. Without them search stays lexical.
 - Procedure: take a backup (§6.3), roll the StatefulSet (`helm upgrade`; one replica at a time),
   watch for `memory_unavailable` in the gateway's responses, and keep the backup until the new
   version has served every active principal.
+
+### 6.6 Deleting a principal (purge) and re-provisioning
+
+- **Purge** (after a SCIM delete's grace period; apps/api's sweep calls it, or the operator does):
+  `DELETE /v1/principals/<id>` on the sidecar with `SHOGUN_ADMIN_TOKEN`. In one call, holding the
+  store's lock: it writes a tombstone `<root>/.purged/<id>`, removes the wrapped key file, the
+  database and its `-wal`/`-shm`, the principal's directory, **and its connector credentials** in
+  the token store (`SHOGUN_TOKEN_STORE_DIR`, default `<root>/.tokens/<id>/`: every connector grant
+  and the Batch relay bearer, whichever key sealed them), then drops it from every team and appends a
+  content-free line to `<root>/principal-purges.jsonl`. The answer names what was removed
+  (`store_removed`, `key_removed`, `credentials_removed`, `left_teams`, `tombstoned`). A store still
+  held by a request answers `409 principal_busy` and nothing is removed; a credential store that
+  cannot be written answers `503 credentials_unavailable` after the store is gone. Both are safe to
+  retry: a repeat removes what is left and answers `purged: false` when nothing was.
+- **A purged principal stays purged.** Any token or derived `sgw1` bearer that still names it is
+  refused `410 principal_purged` (`next_action: ask_human`; on `/mcp` a JSON-RPC error with the same
+  `next_action`) and no empty store, key or directory is created. `shogun principal import` into
+  that id is refused too. Remove the principal from `SHOGUN_PRINCIPAL_TOKENS` and revoke its gateway
+  keys as part of the deletion.
+- **Re-provisioning is deliberate.** To use the id again, run
+  `shogun-api --reinstate-principal <id> --multi <root>` on the replica that owns it (it needs no key
+  and opens no store; it only removes `<root>/.purged/<id>`). The next request creates an empty store
+  under a fresh key; nothing of the purged store, key or credentials comes back. Removing the
+  tombstone file by hand is equivalent.

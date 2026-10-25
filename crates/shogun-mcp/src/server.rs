@@ -462,11 +462,8 @@ impl crate::mcp_http::McpHandler for PrincipalMcp {
     fn handle_line_as(&self, line: &str, token: Option<&str>) -> Option<String> {
         use shogun_memory::actor::{CallScope, Namespace, ReadScope, WriteContext};
         let id = serde_json::from_str::<serde_json::Value>(line).ok().and_then(|v| v.get("id").cloned());
-        let refuse = |code: i64, message: &str| {
-            id.clone().map(|id| {
-                serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
-            })
-        };
+        // Refused before a tool runs: still the face's envelope (`next_action`, E34).
+        let refuse = |code: i64, message: &str| id.clone().map(|id| crate::envelope::rpc_error(id, code, message));
         let state = &self.state;
         let Some(resolver) = &state.principals else {
             return refuse(-32000, "internal: no principal resolver");
@@ -474,6 +471,21 @@ impl crate::mcp_http::McpHandler for PrincipalMcp {
         let resolved = match token.map(|token| resolver.resolve(token)) {
             Some(Ok(resolved)) => resolved,
             Some(Err((503, _))) => return refuse(-32000, "memory_unavailable: the principal's store cannot be opened right now; retry."),
+            // E39: a purged principal stays purged; the operator reinstates it on purpose.
+            Some(Err((410, _))) => {
+                return id.clone().map(|id| {
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32000,
+                            "message": "principal_purged: this principal was deleted; an operator must reinstate it before it can be used again.",
+                            "data": { "reason": "principal_purged", "next_action": "ask_human" },
+                        },
+                    })
+                    .to_string()
+                })
+            }
             _ => {
                 return refuse(
                     crate::mcp::TOKEN_INVALID_CODE,
@@ -676,6 +688,18 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         }
     }
 
+    // E34, invariant 4: the REST face's envelope (`next_action` on a refusal, `usage` and
+    // `latency_ms` on a state read or `profile.whoami`) comes from the module MCP uses, and the
+    // CLI prints this body as it receives it.
+    let started = std::time::Instant::now();
+    let refuse = |status: u16, body: String, request_id: Option<&str>| {
+        let body = crate::envelope::rest_body(status, body, None, 0);
+        match request_id {
+            Some(id) => render_with(status, body, id, None),
+            None => render(status, body),
+        }
+    };
+    let mut read_tool = None;
     let (status, resp_body, approval_header) = match method {
         None => (405, r#"{"error":"method_not_allowed"}"#.to_string(), None),
         Some(method) => {
@@ -718,14 +742,14 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             };
             if tool.is_some_and(crate::memory_readiness::tool_needs_store) {
                 if let Some(why) = state.memory_gate.as_ref().and_then(|gate| gate()) {
-                    return render(503, why.rest_body());
+                    return refuse(503, why.rest_body(), None);
                 }
             }
             // Per-client limit on model-starting calls (2026-10-20 cost audit). `route` has
             // already answered 401/403 for anything unauthenticated, unentitled or out of scope.
             if let Some(tool) = tool {
                 if let Some(body) = rate_limited(&state, &tokens, &rreq, tool) {
-                    return render(429, body);
+                    return refuse(429, body, None);
                 }
             }
             // The store this request reads and writes, and the writer it records (E2-T2 / E2-T4).
@@ -734,13 +758,16 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             // A cross-principal read (E18 Team) reaches world-state reads only: no write, no
             // scratch file, no other principal's approvals, audit log or grants.
             if cross.is_some() && !governance::cross_allowed(&routed) {
-                return render_with(403, governance::CROSS_READ_ONLY.to_string(), &request_id, None);
+                return refuse(403, governance::CROSS_READ_ONLY.to_string(), Some(request_id.as_str()));
             }
             let (backend, scope, principal) = match state.backend_for(rreq.token.as_deref(), include_scratch, cross.as_deref()) {
                 Ok(resolved) => resolved,
-                Err((status, body)) if tool.is_some() => return render_with(status, body, &request_id, None),
+                Err((status, body)) if tool.is_some() => return refuse(status, body, Some(request_id.as_str())),
                 Err(_) => (state.backend.clone(), shogun_memory::actor::CallScope::default(), None),
             };
+            if let Routed::Read { tool, .. } = &routed {
+                read_tool = Some(*tool);
+            }
             let write_info = governance::write_info(&routed);
             let actor = scope.write.actor.as_str().to_string();
             let answered = shogun_memory::actor::with_call_scope(scope, || match routed {
@@ -942,6 +969,8 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         }
     };
 
+    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let resp_body = crate::envelope::rest_body(status, resp_body, read_tool, latency_ms);
     render_with(status, resp_body, &request_id, approval_header.as_deref())
 }
 

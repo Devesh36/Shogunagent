@@ -193,6 +193,25 @@ impl<K: SealKeySource> TokenStore for FileSealedTokenStore<K> {
             Err(_) => Err(TokenStoreError::Write),
         }
     }
+
+    /// `<root>/<principal>/` as a whole: every slot, whichever key sealed it (derived from an
+    /// environment key or a KMS-wrapped one), and any temporary a crashed write left. Never opens
+    /// a file.
+    fn purge_principal(&self, principal: &str) -> Result<bool, TokenStoreError> {
+        if !valid_principal(principal) {
+            return Err(TokenStoreError::InvalidPrincipal);
+        }
+        match std::fs::remove_dir_all(self.root.join(principal)) {
+            Ok(()) => {
+                if let Ok(root) = std::fs::File::open(&self.root) {
+                    let _ = root.sync_all();
+                }
+                Ok(true)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(TokenStoreError::Write),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +269,26 @@ mod tests {
         // No temporary is left behind.
         let leftovers: Vec<_> = std::fs::read_dir(dir.0.join("alice")).unwrap().flatten().collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[test]
+    fn a_purge_removes_every_slot_of_one_principal_and_is_idempotent() {
+        let dir = TempDir::new("purge");
+        let store = FileSealedTokenStore::new(&dir.0, keys(7));
+        let gmail = CredentialSlot::Connector(Service::Gmail);
+        store.put("alice", RELAY, &Secret::new("v1.a")).unwrap();
+        store.put("alice", gmail, &Secret::new("{}")).unwrap();
+        store.put("bob", gmail, &Secret::new("{}")).unwrap();
+        // A temporary a crashed write left behind goes too.
+        std::fs::write(dir.0.join("alice").join(".tmp-crashed"), "v1.x").unwrap();
+        assert!(store.purge_principal("alice").unwrap());
+        assert!(!dir.0.join("alice").exists());
+        assert_eq!(store.get("alice", RELAY).unwrap(), None);
+        assert_eq!(store.get("alice", gmail).unwrap(), None);
+        assert!(store.get("bob", gmail).unwrap().is_some(), "another principal is untouched");
+        assert!(!store.purge_principal("alice").unwrap(), "nothing left: still a success");
+        assert_eq!(store.purge_principal("../bob"), Err(TokenStoreError::InvalidPrincipal));
+        assert!(dir.0.join("bob").exists());
     }
 
     #[cfg(unix)]

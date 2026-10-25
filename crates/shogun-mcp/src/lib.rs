@@ -61,6 +61,7 @@ pub mod onboarding_state_api;
 pub mod account_status_api;
 pub mod dictionary_autoadd_api;
 pub mod dispatch;
+pub mod envelope;
 pub mod export_folders;
 pub mod gmail_policy;
 // `launcher_check` is the pure policy table (which app must have started `shogun-mcp`); the
