@@ -203,6 +203,145 @@ fixes, not noise to ignore: at 4.4% of the budget it is acceptable, and `query_p
 `benchmarks.json` (6.68 ms at 20k, ten seeds) is the regression signal for anything that moves it
 further.
 
+## Multilingual retrieval (E43)
+
+`memory-bench multilingual` (`crates/memory-bench/src/multilingual.rs`) is one fixed corpus of 18
+facts, three per language in English, Japanese, Spanish, German, French and Chinese, plus 30 rows
+of everyday chatter, five per language. Every fact states two topics (cost + contract,
+launch + bug …), no topic pair repeats, and each names an invented project. 70 questions ask about
+it on the federated path (the daemon's), k = 10, abstaining below the relevance floor:
+
+| kind | n | what it asks |
+|---|---:|---|
+| `lexical` | 18 | the fact's own words, in the fact's language |
+| `paraphrase` | 7 | same language, synonyms instead of the fact's words (the project name may stay) |
+| `cross_lingual` | 18 | asked in one language about a fact written in another; three per language |
+| `cjk_short` | 12 | two- and three-character Japanese and Chinese words (定例, 請求, 发票, 服务器) |
+| `cjk_sentence` | 3 | a CJK question with no particles or spaces (发票费用是多少, 請求書支払期限) |
+| `abstention` | 12 | two per language: a topic pair nothing states, about a project the corpus names |
+
+It reports **R@5** and **MRR** over the answerable questions and **false-answerable** (the share
+of unanswerable questions that still returned a row) per query language and per kind. The corpus
+has no seed, so a run is exact rather than a sample. CI runs it lexical and with the test
+embedder (`crates/memory-bench/tests/multilingual_eval.rs`, which asserts the numbers below); a
+real model runs the same cases with `--embedder <model>`.
+
+```bash
+cargo run -p memory-bench --release -- multilingual                     # lexical
+cargo run -p memory-bench --release -- multilingual --embedder test     # deterministic concept embedder
+cargo run -p memory-bench --release --features embed-local -- multilingual \
+  --embedder multilingual-e5-small --out /tmp/e5-multilingual.json      # the real model (see below)
+```
+
+### Numbers (2026-10-25, this container)
+
+By query language:
+
+| language | answerable | R@5 lexical | MRR lexical | R@5 `test` | MRR `test` | false-answerable (both) |
+|---|---:|---:|---:|---:|---:|---:|
+| en | 8 | 0.375 | 0.375 | 1.000 | 1.000 | 0.000 |
+| ja | 15 | 0.933 | 0.856 | 1.000 | 0.967 | **1.000** |
+| es | 7 | 0.429 | 0.429 | 1.000 | 0.821 | 0.000 |
+| de | 7 | 0.571 | 0.571 | 0.857 | 0.667 | 0.000 |
+| fr | 7 | 0.429 | 0.429 | 0.857 | 0.594 | 0.000 |
+| zh | 14 | 0.857 | 0.857 | 0.929 | 0.929 | **1.000** |
+| overall | 58 | 0.672 | 0.652 | 0.948 | 0.863 | 0.333 |
+
+By kind:
+
+| kind | R@5 lexical | MRR lexical | R@5 `test` | MRR `test` |
+|---|---:|---:|---:|---:|
+| lexical | 1.000 | 1.000 | 1.000 | 1.000 |
+| paraphrase | 0.429 | 0.429 | 1.000 | 0.929 |
+| cross_lingual | 0.333 | 0.269 | 0.889 | 0.643 |
+| cjk_short | 1.000 | 1.000 | 1.000 | 1.000 |
+| cjk_sentence | 0.000 | 0.000 | 0.667 | 0.667 |
+| abstention (false-answerable) | 0.333 | | 0.333 | |
+
+`embedding` for the `test` columns is `shogun-test/concept-v2@384`: its concept axes carry the
+words of all six languages, so these columns prove the cross-lingual path end to end (store,
+embed job, active space, cutoff, fusion, relevance floor); they are not a model's quality. The
+real-model column is the owner's run below.
+
+What the numbers say:
+
+- **Same-language lexical retrieval works in every language** (lexical kind 1.000), and so do
+  two- and three-character CJK words.
+- **Cross-lingual questions are a vector-lane job.** Lexically only the project name is shared,
+  and the relevance floor rightly refuses a row that covers one word of four; the 0.333 that is
+  found comes from the Japanese and Chinese questions, whose particles and Han runs leave the name
+  as half of the question's concepts. With the vector lane on, 16 of 18 are found; the two misses
+  are a German question whose many hashed function words push it just past the test embedder's
+  cutoff, and a French one ranked 8th.
+- **The vector lane adds no false evidence** (`the_vector_lane_adds_answers_and_no_false_evidence`
+  pins this): false-answerable is identical with it on and off.
+- **Japanese and Chinese abstention is broken lexically, not semantically: false-answerable 1.000
+  in both, with or without an embedder.** The relevance floor passes a row that covers half of a
+  question's concepts while missing only one. A CJK question loses its particles (の, は) and
+  Chinese keeps a whole Han run as one concept, so "Heron の会議の費用はいくら?" is two content
+  concepts (Heron, 費用; 会議 is a source cue) and "Plover 的合同有错误吗" is two (Plover and one
+  long Han compound): the project name alone reaches 50%, and the rows the name matches are
+  returned. "Wren のリリースの期限は?" returns the Wren row because it shares 期限 (two of three).
+  English, Spanish, German and French questions keep three or more content words and abstain.
+  A fix belongs to the floor (`search/federated.rs::relevance_floor`, e.g. not letting a proper
+  name alone carry half of a CJK question), and must keep the golden eval's false-answerable at
+  0.000; it is not part of E43.
+
+### The FTS5 trigram path on CJK (measured)
+
+Lexical search has two indexes (`crates/shogun-memory/src/search/terms.rs`): the V1 trigram index
+matches any substring of three or more characters, and the V81 gram index matches two-character
+units as whole tokens. What the suite and the golden eval show for CJK:
+
+| query shape | example | result | why |
+|---|---|---|---|
+| Japanese 2-character word | 定例, 請求, 期限, 採用, 休暇, 出張 | found, rank 1 (6/6) | V81 gram index (kanji bigrams, okurigana folded) |
+| Japanese 3-character word | 請求書 | found, rank 1 | trigram index |
+| Chinese 2-character word | 发票, 招聘, 故障, 出差 | found, rank 1 (4/4) | V81 gram index (Han bigrams) |
+| Chinese 3-character word | 服务器 | found, rank 1 | trigram index |
+| Japanese phrase with particles | Wren の請求書の支払い期限 | found, rank 1 | particles split it into concepts |
+| Japanese compound with no particles | 請求書支払期限 | **not found** | one compound; matches only when every bigram is in a row, and 書支 is not (の stood between them) |
+| Chinese sentence | 发票费用是多少, 服务器出现故障了吗 | **not found** | Chinese has no particles: the whole Han run is one compound term, and no row contains all of its bigrams (是多, 多少) |
+| mixed script, Han run contiguous in the row | Merlin 发票费用 | found, rank 1 | split at the script boundary; the row contains 发票费用 |
+| mixed script, Han run not contiguous in the row | Kite 招聘会议, Plover 服务器故障 | found, rank 1, **through the name only** | the Han run is one compound the row does not contain (聘会, 器故 are missing); the name covers half the question, which the floor accepts. Without the name it would be the `cjk_sentence` case |
+
+The golden search eval (`crates/shogun-core/tests/search_golden_eval.rs`, Japanese-heavy:
+two-character words, surnames, particles, okurigana variants) holds at R@5 0.985, MRR 0.948,
+false-answerable 0.000 lexical, unchanged by E43. Chinese segmentation (splitting a Han run into
+words) is not implemented; the gap is the `cjk_sentence` row, and a vector lane with a
+multilingual model is the shipped answer to it (2 of 3 found with the test embedder).
+
+### Calibrating `multilingual-e5-small` on a machine with the model
+
+The owner's run, once the model is pinned and fetched (`docs/embedding-model-setup.md`):
+
+```bash
+export SHOGUN_MODELS_DIR=…            # where `shogun models fetch` wrote multilingual-e5-small/
+export ORT_DYLIB_PATH=…/libonnxruntime.so   # ONNX Runtime 1.22.x
+cargo build --release -p memory-bench --features embed-local
+B=target/release/memory-bench
+# 1. The suite at the spec's cutoff (0.63), then a sweep around it.
+$B multilingual --embedder multilingual-e5-small --out /tmp/e5-ml.json
+for f in 0.55 0.60 0.63 0.66 0.70 0.75 0.80; do
+  $B multilingual --embedder multilingual-e5-small --vector-cutoff "$f" --out "/tmp/e5-ml-$f.json"
+  $B harness --embedder multilingual-e5-small --vector-cutoff "$f" \
+    --seeds 3 --events 20000 --out "/tmp/e5-harness-$f.json"
+done
+```
+
+Keep the largest cutoff at which, together:
+
+1. `abstention_false_evidence` (harness) is 0.000 on every seed;
+2. no language's false-answerable in the multilingual suite is higher than the lexical baseline
+   above (ja and zh are 1.000 lexically for the floor reason above; the others must stay 0.000);
+3. `temporal_recall_at_1` and `multi_session_coverage_at_5` hold.
+
+Set `MULTILINGUAL_E5_MAX_L2_DISTANCE` in `crates/shogun-memory/src/embed.rs` to it, record the
+real-model columns (per-language R@5, MRR, false-answerable, and the cross-lingual row) in the
+tables above with the model's space id, and only then consider making it the default for
+non-English principals. Every arm of a comparison uses this one model: never put an e5 number
+next to a nomic or `test` number as if they measured the same system.
+
 ## What is not in this file yet
 
 - **OmniMemEval and the Mem0 harness are not run.** The rows exist with `status: "not_run"` and
@@ -256,13 +395,16 @@ evidence, and below it the lane's quality falls linearly to 0 at the cutoff.
 
 | space | cutoff (L2) | cosine | how it was set |
 |---|---:|---:|---|
-| `multilingual-e5-small@384` | 1.00 | ≥ 0.50 | the value the lane was tuned with; unchanged |
+| `multilingual-e5-small@384` | **0.63** | ≥ 0.80 | E43: conservative, below e5's compressed score band (was 1.00 before E43); not measured here, see "Multilingual retrieval (E43)" |
 | `nomic-embed-text-v1.5@384` | **0.70** | ≥ 0.755 | conservative, favouring abstention; not measured here (the model cannot be fetched in CI) |
-| `shogun-test/concept-v1@384` (`--embedder test`) | **0.58** | ≥ 0.83 | calibrated below; CI's regression guard |
+| `shogun-test/concept-v2@384` (`--embedder test`) | **0.58** | ≥ 0.83 | calibrated below; CI's regression guard |
 | anything else (`unspecified`, the hashing mock) | 1.00 | ≥ 0.50 | default |
 
 Calibration of the test embedder (`--path federated --embedder test --vector-cutoff F`, release,
-in memory, 500 abstention questions, 12 temporal, 48 multi-session):
+in memory, 500 abstention questions, 12 temporal, 48 multi-session). It was measured on `concept-v1`;
+E43's `concept-v2` only adds the Spanish, German, French and Chinese words of each concept axis,
+none of which occurs in these English corpora, so the vectors and the numbers below are unchanged
+(`bench_smoke::the_vector_lane_abstains_at_its_models_cutoff` still holds):
 
 | cutoff | abstention false evidence | temporal recall@1 | multi-session coverage@5 |
 |---:|---|---:|---:|
