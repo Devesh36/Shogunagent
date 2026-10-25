@@ -141,9 +141,18 @@ The rule, per candidate among the `limit` best by score:
 - coverage = idf-weighted share of the question's **content** words the row contains. Source cues
   ("meeting", "standup", 会議 …) are never required but count when matched; a word no row in scope
   contains weighs like an average present word (its idf would otherwise be extreme, and it says
-  nothing about the archive — "decide" in "what did we decide"); a question in two scripts
-  (Orchid のローンチ延期) is covered when either script's words are;
-- pass when coverage > 0.5, or coverage = 0.5 with a single word missing (one of two words found
+  nothing about the archive — "decide" in "what did we decide");
+- CJK content counts in the gram index's units (`terms::floor_units`): a two-character word is one
+  unit, a longer compound or katakana word its bigrams (請求書 = 請求 + 求書, リリース = リリ + リー +
+  ース), each weighing what its word weighs, and a unit matches when the row holds that gram
+  (招聘会议 against 「招聘 … 的会议」 matches 招聘 and 会议). Before this, a particle-less CJK clause
+  was one word, and the project name typed beside it made half the question;
+- a question in two scripts is covered by its CJK part alone (the archive holds each item in one
+  language), never by its Latin part alone: beside CJK content the Latin words are usually a
+  project or product name, so a row must match at least one CJK unit. 「Orchid のローンチ延期」
+  against an English row is a cross-lingual question, the vector lane's job, as in every other
+  language;
+- pass when coverage > 0.5, or coverage = 0.5 with a single unit missing (one of two words found
   is a plausible answer; two of four is a question more specific than the row);
 - a row a vector lane found passes outright (it shares meaning, not words); a question with no
   content words (dates and cues only) is not judged.
@@ -156,7 +165,13 @@ search eval (`docs/shogunai-origin/search-eval.md`, 132 cases, `cargo test -p sh
 floor folded into answerability as described above, re-measured 2026-10-25: R@5 0.985, R@10
 0.989, MRR 0.948, zero-result 0.000, answerable 0.873, false-answerable 0.000. An earlier draft
 of the floor (plain coverage ≥ 0.5, cues excluded) blanked two positives there ("Orchid の
-ローンチ延期", "standup notes yesterday"); the cue and script rules above are what fixed them. A
+ローンチ延期", "standup notes yesterday"); the cue rule above fixed the second, and a rule that let
+the Latin words of a mixed question stand alone fixed the first. That rule was also what made every
+Japanese and Chinese unanswerable question in the multilingual suite answer (below), and it was
+replaced by the CJK-unit and mixed-script rules above on 2026-10-25; the golden eval is unchanged
+to the third decimal by the replacement (R@5 0.985, MRR 0.948, answerable 0.873, false-answerable
+0.000 lexical; R@5 0.981, MRR 0.948, false-answerable 0.000 with the test embedder), because
+"Orchid のローンチ延期" was already `missing_anchor` in the daemon's answerability. A
 first version of the floor emptied the result on every path; that broke the daemon's suggestion
 contract (generic and over-long questions must still return candidates) and was replaced by the
 opt-in the same day.
@@ -235,28 +250,51 @@ cargo run -p memory-bench --release --features embed-local -- multilingual \
 
 ### Numbers (2026-10-25, this container)
 
-By query language:
+Two measurements: **E43** as shipped, and **after** the CJK floor fix (CJK content counted in gram
+units, a mixed-script question not carried by its Latin words alone; see the rule above).
+
+By query language, after:
 
 | language | answerable | R@5 lexical | MRR lexical | R@5 `test` | MRR `test` | false-answerable (both) |
 |---|---:|---:|---:|---:|---:|---:|
 | en | 8 | 0.375 | 0.375 | 1.000 | 1.000 | 0.000 |
-| ja | 15 | 0.933 | 0.856 | 1.000 | 0.967 | **1.000** |
+| ja | 15 | 0.867 | 0.789 | 1.000 | 0.967 | 0.000 |
 | es | 7 | 0.429 | 0.429 | 1.000 | 0.821 | 0.000 |
 | de | 7 | 0.571 | 0.571 | 0.857 | 0.667 | 0.000 |
 | fr | 7 | 0.429 | 0.429 | 0.857 | 0.594 | 0.000 |
-| zh | 14 | 0.857 | 0.857 | 0.929 | 0.929 | **1.000** |
-| overall | 58 | 0.672 | 0.652 | 0.948 | 0.863 | 0.333 |
+| zh | 14 | 0.571 | 0.571 | 0.929 | 0.929 | 0.000 |
+| overall | 58 | 0.586 | 0.566 | 0.948 | 0.863 | 0.000 |
 
-By kind:
+By kind, after:
 
 | kind | R@5 lexical | MRR lexical | R@5 `test` | MRR `test` |
 |---|---:|---:|---:|---:|
 | lexical | 1.000 | 1.000 | 1.000 | 1.000 |
-| paraphrase | 0.429 | 0.429 | 1.000 | 0.929 |
-| cross_lingual | 0.333 | 0.269 | 0.889 | 0.643 |
+| paraphrase | 0.286 | 0.286 | 1.000 | 0.929 |
+| cross_lingual | 0.111 | 0.046 | 0.889 | 0.643 |
 | cjk_short | 1.000 | 1.000 | 1.000 | 1.000 |
 | cjk_sentence | 0.000 | 0.000 | 0.667 | 0.667 |
-| abstention (false-answerable) | 0.333 | | 0.333 | |
+| abstention (false-answerable) | 0.000 | | 0.000 | |
+
+What moved, before → after (every other cell is identical):
+
+| cell | E43 | after | why |
+|---|---:|---:|---|
+| ja false-answerable (lexical and `test`) | 1.000 | **0.000** | Heron の会議の費用 and Wren のリリースの期限 abstain |
+| zh false-answerable (lexical and `test`) | 1.000 | **0.000** | Merlin 团队的休假预算 and Plover 的合同有错误吗 abstain |
+| abstention false-answerable (lexical and `test`) | 0.333 | **0.000** | |
+| ja R@5 / MRR lexical | 0.933 / 0.856 | 0.867 / 0.789 | "Kestrel の契約更新の費用は?" (English fact) was found through the name alone |
+| zh R@5 / MRR lexical | 0.857 / 0.857 | 0.571 / 0.571 | the three zh cross-lingual questions and "Kite 团队的候选人什么时候开会" (name + 团队, 2 of 12 units) |
+| overall R@5 / MRR lexical | 0.672 / 0.652 | 0.586 / 0.566 | the five above |
+| cross_lingual R@5 / MRR lexical | 0.333 / 0.269 | 0.111 / 0.046 | four name-only finds; the two left (Robin, Tern) are returned because another row passes the floor on the question's CJK part alone (休暇 in the Lark row, 出張 in the Falcon row: one of two CJK words), and the name-matched answer comes back with it |
+| paraphrase R@5 / MRR lexical | 0.429 / 0.429 | 0.286 / 0.286 | the Kite question above |
+
+The lexical recall given up is not separable from the false answers: "Kestrel の契約更新の費用は?"
+(answerable) and "Heron の会議の費用はいくら?" (not) share exactly the same evidence with their
+rows — the project name and nothing else — and the English, Spanish, German and French
+cross-lingual questions were already refused for it. With the vector lane on, every one of them is
+found again: the `test` columns are unchanged except that false-answerable is now 0.000 in every
+language.
 
 `embedding` for the `test` columns is `shogun-test/concept-v2@384`: its concept axes carry the
 words of all six languages, so these columns prove the cross-lingual path end to end (store,
@@ -268,24 +306,26 @@ What the numbers say:
 - **Same-language lexical retrieval works in every language** (lexical kind 1.000), and so do
   two- and three-character CJK words.
 - **Cross-lingual questions are a vector-lane job.** Lexically only the project name is shared,
-  and the relevance floor rightly refuses a row that covers one word of four; the 0.333 that is
-  found comes from the Japanese and Chinese questions, whose particles and Han runs leave the name
-  as half of the question's concepts. With the vector lane on, 16 of 18 are found; the two misses
+  and the relevance floor rightly refuses a row that covers one word of four. Until the
+  2026-10-25 floor fix the Japanese and Chinese ones were found anyway (0.333), because their
+  particles and Han runs left the name as half of the question's concepts; the 0.111 left is two
+  Japanese questions returned beside another row that passes on their CJK part. With the vector lane on, 16 of 18 are found; the two misses
   are a German question whose many hashed function words push it just past the test embedder's
   cutoff, and a French one ranked 8th.
 - **The vector lane adds no false evidence** (`the_vector_lane_adds_answers_and_no_false_evidence`
   pins this): false-answerable is identical with it on and off.
-- **Japanese and Chinese abstention is broken lexically, not semantically: false-answerable 1.000
-  in both, with or without an embedder.** The relevance floor passes a row that covers half of a
-  question's concepts while missing only one. A CJK question loses its particles (の, は) and
-  Chinese keeps a whole Han run as one concept, so "Heron の会議の費用はいくら?" is two content
-  concepts (Heron, 費用; 会議 is a source cue) and "Plover 的合同有错误吗" is two (Plover and one
-  long Han compound): the project name alone reaches 50%, and the rows the name matches are
-  returned. "Wren のリリースの期限は?" returns the Wren row because it shares 期限 (two of three).
-  English, Spanish, German and French questions keep three or more content words and abstain.
-  A fix belongs to the floor (`search/federated.rs::relevance_floor`, e.g. not letting a proper
-  name alone carry half of a CJK question), and must keep the golden eval's false-answerable at
-  0.000; it is not part of E43.
+- **Japanese and Chinese abstention (fixed 2026-10-25; was false-answerable 1.000 in both, with or
+  without an embedder).** The relevance floor passed a row that covers half of a question's
+  concepts while missing only one, and let the Latin words of a mixed-script question carry it on
+  their own. A CJK question loses its particles (の, は) and Chinese keeps a whole Han run as one
+  concept, so "Heron の会議の費用はいくら?" was two content concepts (Heron, 費用; 会議 is a source
+  cue) and "Plover 的合同有错误吗" two (Plover and one long Han compound): the project name alone
+  reached 50% (and 100% of the Latin part), and the rows the name matches were returned. "Wren の
+  リリースの期限は?" returned the Wren row because it shares 期限 (two of three concepts). The floor
+  now counts CJK content in gram units (Plover 的合同有错误吗 is Plover + six units; Wren のリリースの
+  期限 is Wren + リリ + リー + ース + 期限, of which the row holds two of five) and requires a mixed
+  question's row to match some of its CJK content (`search/federated.rs::relevance_floor`,
+  `search/terms.rs::floor_units`). The golden eval is unchanged (see "Relevance floor" above).
 
 ### The FTS5 trigram path on CJK (measured)
 
@@ -303,7 +343,7 @@ units as whole tokens. What the suite and the golden eval show for CJK:
 | Japanese compound with no particles | 請求書支払期限 | **not found** | one compound; matches only when every bigram is in a row, and 書支 is not (の stood between them) |
 | Chinese sentence | 发票费用是多少, 服务器出现故障了吗 | **not found** | Chinese has no particles: the whole Han run is one compound term, and no row contains all of its bigrams (是多, 多少) |
 | mixed script, Han run contiguous in the row | Merlin 发票费用 | found, rank 1 | split at the script boundary; the row contains 发票费用 |
-| mixed script, Han run not contiguous in the row | Kite 招聘会议, Plover 服务器故障 | found, rank 1, **through the name only** | the Han run is one compound the row does not contain (聘会, 器故 are missing); the name covers half the question, which the floor accepts. Without the name it would be the `cjk_sentence` case |
+| mixed script, Han run not contiguous in the row | Kite 招聘会议, Plover 服务器故障 | found, rank 1 | the Han run is one compound the row does not contain (聘会, 器故 are missing) and is retrieved through the name; the floor counts the compound in gram units and the row holds most of them (招聘, 会议; 服务, 务器, 故障). Until 2026-10-25 the floor accepted it on the name alone. Without the name it is the `cjk_sentence` case |
 
 The golden search eval (`crates/shogun-core/tests/search_golden_eval.rs`, Japanese-heavy:
 two-character words, surnames, particles, okurigana variants) holds at R@5 0.985, MRR 0.948,
@@ -333,7 +373,7 @@ Keep the largest cutoff at which, together:
 
 1. `abstention_false_evidence` (harness) is 0.000 on every seed;
 2. no language's false-answerable in the multilingual suite is higher than the lexical baseline
-   above (ja and zh are 1.000 lexically for the floor reason above; the others must stay 0.000);
+   above (0.000 in every language since the 2026-10-25 floor fix);
 3. `temporal_recall_at_1` and `multi_session_coverage_at_5` hold.
 
 Set `MULTILINGUAL_E5_MAX_L2_DISTANCE` in `crates/shogun-memory/src/embed.rs` to it, record the

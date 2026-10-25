@@ -1176,6 +1176,55 @@ fn relevance_floor_keeps_an_answer_that_covers_most_of_the_question() {
     assert_eq!(result.hits[0].source_id, FederatedSourceId::Event(answer));
 }
 
+fn cjk_floor(conn: &rusqlite::Connection, question: &str) -> RelevanceFloor {
+    search_federated(conn, question, None, 10_000, &FederatedSearchOptions::default(), 10)
+        .unwrap()
+        .relevance
+}
+
+fn cjk_floor_log(conn: &rusqlite::Connection) {
+    for (index, text) in [
+        "Heron launch slips a week because of the login crash.",
+        "Wren の請求書の支払い期限は今月末。",
+        "招聘 Kite 团队前端工程师的会议定在周二。",
+        "出差期间 Plover 的服务器出现故障。",
+        "今日のランチは駅前のカレー屋に行った。",
+        "办公室的无线网络又断了。",
+    ]
+    .iter()
+    .enumerate()
+    {
+        capture(conn, 1_000 + index as i64 * 10, "Notes", text);
+    }
+}
+
+#[test]
+fn relevance_floor_does_not_let_a_project_name_alone_carry_a_cjk_question() {
+    let conn = crate::open_in_memory().unwrap();
+    cjk_floor_log(&conn);
+    // The name is the only thing the Heron and Plover rows share with these questions: before
+    // CJK content was counted in gram units, each was two concepts and the name made half.
+    for question in ["Heron の会議の費用はいくら?", "Plover 的合同有错误吗", "Merlin 团队的休假预算是多少"] {
+        let floor = cjk_floor(&conn, question);
+        assert!(!floor.passed, "{question}: {floor:?}");
+    }
+    // Two of three concepts, but リリース is three units the row lacks: 2 of 5.
+    let floor = cjk_floor(&conn, "Wren のリリースの期限は?");
+    assert!(!floor.passed, "{floor:?}");
+}
+
+#[test]
+fn relevance_floor_counts_a_cjk_compound_the_row_splits_differently_by_its_grams() {
+    let conn = crate::open_in_memory().unwrap();
+    cjk_floor_log(&conn);
+    // 招聘会议 and 服务器故障 are one compound each that no row holds contiguously; the rows hold
+    // most of their grams (招聘 … 会议, 服务器 … 故障).
+    for question in ["Kite 招聘会议", "Plover 服务器故障", "Wren の請求書の支払い期限", "期限"] {
+        let floor = cjk_floor(&conn, question);
+        assert!(floor.passed, "{question}: {floor:?}");
+    }
+}
+
 #[test]
 fn relevance_floor_reports_no_candidates_when_nothing_matches_at_all() {
     let conn = crate::open_in_memory().unwrap();

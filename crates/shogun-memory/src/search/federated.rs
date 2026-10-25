@@ -877,12 +877,21 @@ fn apply_latest_ordering(candidates: &mut BTreeMap<CandidateKey, Candidate>) {
 /// contains weighs like an average present one: it says nothing about the archive, and its
 /// extreme idf would otherwise blank every question that uses a verb the log never wrote down
 /// ("decide"). Without lexical weights (no raw-event lane) every concept weighs the same. A
-/// question written in two scripts (Orchid のローンチ延期) is covered when either script's words
-/// are, since the archive holds each item in one language. A candidate a vector lane found counts
-/// as full coverage: it shares meaning, not words.
+/// candidate a vector lane found counts as full coverage: it shares meaning, not words.
+///
+/// CJK content is counted in the units the gram index holds (`terms::floor_units`): a
+/// 2-character word is one unit, a longer compound or katakana word its bigrams, each weighing
+/// what its concept weighs, and a unit matches when the candidate holds that gram. A Japanese or
+/// Chinese question loses its particles to tokenisation, so counted as whole concepts
+/// 「Plover 的合同有错误吗」 was two words and its project name alone made half of it. A question
+/// written in two scripts is also covered by its CJK part alone (the archive holds each item in
+/// one language), but never by its Latin part alone: beside CJK content the Latin words are
+/// usually a project or product name, which says which thing is asked about, not what, so a
+/// candidate must match at least one CJK unit (「Orchid のローンチ延期」 against an English row is
+/// the vector lane's job, as for any cross-lingual question).
 ///
 /// A candidate passes when it covers more than half of the question's weight, or exactly half
-/// while missing a single word (one of two words found is a plausible answer; two of four is a
+/// while missing a single unit (one of two words found is a plausible answer; two of four is a
 /// question more specific than the row). The candidates considered are the `limit` best by score
 /// among those the source constraint accepts; the floor passes if any of them does.
 fn relevance_floor(
@@ -925,21 +934,31 @@ fn relevance_floor(
         }
     };
 
-    // Scopes: the whole question, and each script on its own when both are present.
-    let mut scopes: Vec<Vec<usize>> = vec![content.clone()];
-    let latin = content
+    // The question's content as the floor counts it: a Latin concept is one unit, a CJK concept
+    // the grams the gram index holds for it, each weighing what its concept weighs.
+    let units = content
         .iter()
-        .copied()
-        .filter(|&index| !concepts[index].cjk)
+        .flat_map(|&index| {
+            let grams = super::terms::floor_units(&concepts[index]);
+            let cjk = concepts[index].cjk;
+            if grams.is_empty() {
+                vec![FloorUnit { concept: index, gram: None, cjk }]
+            } else {
+                grams
+                    .into_iter()
+                    .map(|gram| FloorUnit { concept: index, gram: Some(gram), cjk })
+                    .collect()
+            }
+        })
         .collect::<Vec<_>>();
-    if !latin.is_empty() && latin.len() < content.len() {
-        let cjk = content
-            .iter()
-            .copied()
-            .filter(|&index| concepts[index].cjk)
-            .collect::<Vec<_>>();
-        scopes.push(latin);
-        scopes.push(cjk);
+    let cjk_units = (0..units.len()).filter(|&unit| units[unit].cjk).collect::<Vec<_>>();
+    // Scopes: the whole question, and its CJK part on its own when it has a Latin part too. The
+    // Latin part never stands alone beside CJK content: in a Japanese or Chinese question it is
+    // usually a project or product name, which says which thing the question is about, not what.
+    let mut scopes: Vec<Vec<usize>> = vec![(0..units.len()).collect()];
+    let mixed = !cjk_units.is_empty() && cjk_units.len() < units.len();
+    if mixed {
+        scopes.push(cjk_units.clone());
     }
 
     let mut considered = candidates
@@ -975,18 +994,38 @@ fn relevance_floor(
             passed = true;
             break;
         }
+        // A unit matches when its concept does, or when the candidate holds that gram (a
+        // compound the row splits differently: 招聘会议 against 招聘…的会议).
+        let mut grams = None;
+        let unit_hits = units
+            .iter()
+            .map(|unit| {
+                hit(candidate, unit.concept)
+                    || unit.gram.as_ref().is_some_and(|gram| {
+                        grams
+                            .get_or_insert_with(|| {
+                                super::terms::text_grams(&candidate.title, &candidate.body)
+                            })
+                            .contains(gram)
+                    })
+            })
+            .collect::<Vec<_>>();
+        // A mixed-script question needs some of its CJK content in the row, not only its name.
+        if mixed && !cjk_units.iter().any(|&unit| unit_hits[unit]) {
+            continue;
+        }
         let cues = matched_cue_weight(candidate);
         for scope in &scopes {
-            let total = scope.iter().map(|&index| weight_of(index)).sum::<f64>();
+            let total = scope.iter().map(|&unit| weight_of(units[unit].concept)).sum::<f64>();
             if total <= 0.0 {
                 continue;
             }
             let matched = scope
                 .iter()
-                .filter(|&&index| hit(candidate, index))
-                .map(|&index| weight_of(index))
+                .filter(|&&unit| unit_hits[unit])
+                .map(|&unit| weight_of(units[unit].concept))
                 .sum::<f64>();
-            let unmatched = scope.iter().filter(|&&index| !hit(candidate, index)).count();
+            let unmatched = scope.iter().filter(|&&unit| !unit_hits[unit]).count();
             let coverage = ((matched + cues) / total).clamp(0.0, 1.0);
             best_coverage = best_coverage.max(coverage);
             if coverage > RELEVANCE_FLOOR_COVERAGE + 1e-9
@@ -1009,6 +1048,15 @@ fn relevance_floor(
         coverage: Some(best_coverage),
         threshold: RELEVANCE_FLOOR_COVERAGE,
     }
+}
+
+/// One unit of a question's content as [`relevance_floor`] counts it.
+struct FloorUnit {
+    /// Index into the question's concepts; the unit weighs what this concept weighs.
+    concept: usize,
+    /// The gram this unit is, for a CJK concept (`terms::floor_units`); `None` for a Latin one.
+    gram: Option<String>,
+    cjk: bool,
 }
 
 /// Weight of distilled memory (meetings, derived facts, the user's own notes) against raw capture.

@@ -52,24 +52,32 @@ fn multilingual_suite_lexical_baseline() {
         &report,
         &[
             (Lang::En, 0.375, 0.0),
-            (Lang::Ja, 0.933, 1.0),
+            // Japanese and Chinese abstain (were 1.000 before the floor counted CJK content in
+            // gram units and stopped letting a project name alone carry a CJK question). The R@5
+            // they gave up (ja 0.933, zh 0.857) is the name-only cross-lingual and paraphrase
+            // finds: the same evidence the false answers rested on.
+            (Lang::Ja, 0.867, 0.0),
             (Lang::Es, 0.429, 0.0),
             (Lang::De, 0.571, 0.0),
             (Lang::Fr, 0.429, 0.0),
-            (Lang::Zh, 0.857, 1.0),
+            (Lang::Zh, 0.571, 0.0),
         ],
         &[
             // Every same-language question with the fact's words, and every 2-3 character CJK
             // word (the gram index), is found at rank 1.
             (Kind::Lexical, 1.0),
             (Kind::CjkShort, 1.0),
-            (Kind::Paraphrase, 0.429),
-            // Only the project name is shared; the relevance floor refuses a one-word-of-four row.
-            (Kind::CrossLingual, 0.333),
+            // Was 0.429: "Kite 团队的候选人什么时候开会" shares the name and 团队 with its fact, 2 of
+            // 12 units.
+            (Kind::Paraphrase, 0.286),
+            // Only the project name is shared; the relevance floor refuses a row that holds the
+            // name and none of the question's other words, in every language (was 0.333: the
+            // Japanese and Chinese questions passed on the name alone).
+            (Kind::CrossLingual, 0.111),
             // An unbroken CJK sentence is one compound term no row contains.
             (Kind::CjkSentence, 0.0),
         ],
-        0.333,
+        0.0,
     );
 }
 
@@ -83,11 +91,11 @@ fn multilingual_suite_with_the_test_embedder() {
         &report,
         &[
             (Lang::En, 1.0, 0.0),
-            (Lang::Ja, 1.0, 1.0),
+            (Lang::Ja, 1.0, 0.0),
             (Lang::Es, 1.0, 0.0),
             (Lang::De, 0.857, 0.0),
             (Lang::Fr, 0.857, 0.0),
-            (Lang::Zh, 0.929, 1.0),
+            (Lang::Zh, 0.929, 0.0),
         ],
         &[
             (Kind::Lexical, 1.0),
@@ -96,13 +104,13 @@ fn multilingual_suite_with_the_test_embedder() {
             (Kind::CrossLingual, 0.889),
             (Kind::CjkSentence, 0.667),
         ],
-        0.333,
+        0.0,
     );
 }
 
 /// What the vector lane must never do, whatever the model: lose an answer the lexical lanes found,
-/// or turn an abstention into evidence. The CJK abstentions it does not fix come from the lexical
-/// floor (a question of two concepts, one of them the project name, passes at half coverage).
+/// or turn an abstention into evidence. With the vector lane on, every answer the name-only CJK
+/// floor used to give is found again, and no unanswerable question in any language is answered.
 #[test]
 fn the_vector_lane_adds_answers_and_no_false_evidence() {
     let lexical = run(None);
