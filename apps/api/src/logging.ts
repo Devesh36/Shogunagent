@@ -60,7 +60,11 @@ export interface LogVars {
     | "oauth_code_reuse" | "oauth_invalid_request" | "oauth_client_rejected" | "oauth_revoked"
 
     // Remote approvals (approvals/app.ts, plan E15): fixed words, never a token or a summary.
-    | "approval_page" | "approval_decided" | "approval_refused" | "approval_notified" | "slack_rejected" | "webhook_registered";
+    | "approval_page" | "approval_decided" | "approval_refused" | "approval_notified" | "slack_rejected" | "webhook_registered"
+    // E29 provider payouts (payouts-app.ts): fixed words, never an amount, a provider id or a reference.
+    | "payout_store_unavailable" | "settlement_rejected" | "settlements_recorded" | "connect_link_created" | "payouts_run"
+    // E30 x402 (billing/x402.ts): fixed words, never a payment payload.
+    | "x402_rejected" | "x402_replayed" | "x402_verified" | "x402_settled" | "x402_settle_failed";
   /** Server-chosen provider and model of the accepted batch (ids, not content). */
   relayLogModel?: string;
   /** License id (an opaque token id, not user content). */

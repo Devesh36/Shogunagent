@@ -60,7 +60,7 @@ describe("GET /v1/receipts and disputes", () => {
     expect(all.receipts).toHaveLength(3);
     expect(all.receipts[1]).toEqual({
       id: expect.stringMatching(/^rcpt_/), key_id: keyId, method: "tools/call", name: "memory.ingest", unit: "ingest", quantity: 3,
-      cost_micro_usd: 3 * RATE_MICROS.ingest, reserved_micro_usd: null, settled: true, ts: "2026-10-25T12:00:05.000Z",
+      cost_micro_usd: 3 * RATE_MICROS.ingest, reserved_micro_usd: null, settled: true, funding: "wallet", ts: "2026-10-25T12:00:05.000Z",
     });
     expect(all.next_since).toBe("2026-10-25T12:00:10.001Z");
     const since = (await (await authed(rig, key, "/v1/receipts?since=2026-10-25T12:00:05Z")).json()) as { receipts: Array<{ name: string }> };

@@ -23,8 +23,9 @@ import { createHash } from "node:crypto";
 import { canonicalJson } from "../wellknown/agent-card.js";
 import type { MeterUnit } from "../pricing.js";
 
-/** How a call was paid for. */
-export type Funding = "wallet" | "commit";
+/** How a call was paid for. `x402`: by a per-call x402 payment (E30, behind `X402_ENABLED`); the
+ * wallet is not touched. */
+export type Funding = "wallet" | "commit" | "x402";
 
 /** The bounds of a commit discount, in basis points (README §7: "10–25% off with annual commit"). */
 export const MIN_COMMIT_DISCOUNT_BPS = 1_000;
@@ -141,6 +142,8 @@ export interface UnitUsage {
   listMicros: number;
   chargedMicros: number;
   commitFundedMicros: number;
+  /** Paid per call over x402 (E30). Absent or 0 = none; the statement then has no x402 field. */
+  x402FundedMicros?: number;
 }
 
 /** Everything a statement is built from; the stores produce it, `buildStatement` renders it. */
@@ -202,7 +205,8 @@ export function buildStatement(principalId: string, month: string, inputs: State
   const usage = [...inputs.usage].sort((a, b) => a.unit.localeCompare(b.unit)).map((u) => ({
     unit: u.unit, calls: u.calls, quantity: u.quantity,
     list_micro_usd: u.listMicros, charged_micro_usd: u.chargedMicros, discount_micro_usd: Math.max(0, u.listMicros - u.chargedMicros),
-    commit_funded_micro_usd: u.commitFundedMicros, wallet_funded_micro_usd: Math.max(0, u.chargedMicros - u.commitFundedMicros),
+    commit_funded_micro_usd: u.commitFundedMicros, wallet_funded_micro_usd: Math.max(0, u.chargedMicros - u.commitFundedMicros - (u.x402FundedMicros ?? 0)),
+    ...(u.x402FundedMicros ? { x402_funded_micro_usd: u.x402FundedMicros } : {}),
     free: u.listMicros === 0,
   }));
   const credits = [...inputs.credits].sort((a, b) => a.ts - b.ts || a.topupId.localeCompare(b.topupId))

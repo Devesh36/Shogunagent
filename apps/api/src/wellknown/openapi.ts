@@ -75,7 +75,23 @@ const components: Json = {
       properties: {
         amount_micro_usd: micro("The amount the refused call needs"),
         unit: { type: "string" },
-        accepts: { type: "array", items: { type: "object", required: ["rail", "url"], properties: { rail: { type: "string", enum: ["card"] }, url: { type: "string", format: "uri" }, method: { type: "string" } } } },
+        accepts: {
+          type: "array", description: "Ordered by preference. The x402 entry appears only where X402_ENABLED (docs/decisions/0002-x402.md).",
+          items: {
+            oneOf: [
+              { type: "object", required: ["rail", "url"], properties: { rail: { type: "string", enum: ["card"] }, url: { type: "string", format: "uri" }, method: { type: "string" } } },
+              {
+                type: "object", required: ["rail", "scheme", "network", "asset", "payTo", "amount", "maxAmountRequired", "maxTimeoutSeconds", "resource"],
+                description: "x402 PaymentRequirements: pay this call in USDC and resend it with X-PAYMENT. 1 atomic unit = 1 micro-USD.",
+                properties: {
+                  rail: { type: "string", enum: ["x402"] }, scheme: { type: "string", enum: ["exact"] }, network: { type: "string" }, asset: { type: "string" }, payTo: { type: "string" },
+                  amount: { type: "string", pattern: "^[0-9]+$" }, maxAmountRequired: { type: "string", pattern: "^[0-9]+$" }, maxTimeoutSeconds: { type: "integer" },
+                  resource: { type: "string", format: "uri" }, description: { type: "string" }, mimeType: { type: "string" }, extra: { type: "object" },
+                },
+              },
+            ],
+          },
+        },
         retry_after: { type: "integer" },
         balance_micro_usd: micro("Spendable balance at the time of refusal"),
         cap: { type: "object", properties: { scope: { type: "string", enum: ["key", "principal"] }, period: { type: "string", enum: ["day", "month"] }, limit_micro_usd: micro("The cap"), spent_micro_usd: micro("Spent in the period") } },
@@ -128,7 +144,7 @@ const components: Json = {
       },
     },
     QuoteResponse: { type: "object", required: ["quote", "method", "name", "balance_micro_usd", "sufficient", "caps", "usage", "next_action"], properties: { quote: ref("Usage"), method: { type: "string" }, name: { type: ["string", "null"] }, balance_micro_usd: micro("Spendable now"), sufficient: { type: "boolean" }, caps: ref("Caps"), usage: ref("Usage"), next_action: { type: ["string", "null"], enum: ["top_up", null] } } },
-    Receipt: { type: "object", required: ["id", "key_id", "method", "name", "unit", "quantity", "cost_micro_usd", "reserved_micro_usd", "settled", "ts"], properties: { id: { type: "string", pattern: "^rcpt_" }, key_id: { type: "string" }, method: { type: "string" }, name: { type: ["string", "null"] }, unit: { type: "string" }, quantity: { type: "integer" }, cost_micro_usd: micro("Settled cost"), reserved_micro_usd: { oneOf: [micro("Held while in flight"), { type: "null" }] }, settled: { type: "boolean" }, ts: { type: "string", format: "date-time" } } },
+    Receipt: { type: "object", required: ["id", "key_id", "method", "name", "unit", "quantity", "cost_micro_usd", "reserved_micro_usd", "settled", "ts"], properties: { id: { type: "string", pattern: "^rcpt_" }, key_id: { type: "string" }, method: { type: "string" }, name: { type: ["string", "null"] }, unit: { type: "string" }, quantity: { type: "integer" }, cost_micro_usd: micro("Settled cost"), reserved_micro_usd: { oneOf: [micro("Held while in flight"), { type: "null" }] }, settled: { type: "boolean" }, funding: { type: "string", enum: ["wallet", "commit", "x402"], description: "How the call was paid: the wallet, an annual commit, or one x402 payment (only where X402_ENABLED)." }, ts: { type: "string", format: "date-time" } } },
     HandoffRequest: {
       type: "object", required: ["task", "to_agent"],
       properties: {
@@ -213,7 +229,7 @@ interface Route {
   tag: string;
   summary: string;
   description?: string;
-  security: "none" | "key" | "stripe" | "pow";
+  security: "none" | "key" | "stripe" | "pow" | "service";
   scope?: "read" | "write" | "run" | "admin" | "any";
   /** Takes the agent key itself, never an OAuth access token. */
   keyOnly?: boolean;
@@ -315,6 +331,20 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     { method: "post", path: "/v1/router/inspect", tag: "router", security: "none", servedBy: "apps/router", summary: "One tool: schemas, price, live health, permission level, examples, cheaper alternatives. Free.", requestBody: jsonBody(ref("RouterInspectRequest")), responses: { "200": jsonBody(ref("RouterEnvelope")), "404": errorResponse("tool_not_found") } },
     { method: "post", path: "/v1/router/run", tag: "router", security: "key", scope: "run", servedBy: "apps/router", summary: "Run a tool: L1 runs, L2 asks once (input_required), L3 returns an approval URL. Failures and empty results cost 0.", requestBody: jsonBody(ref("RouterRunRequest")), responses: { "200": jsonBody(ref("RouterEnvelope")), "400": errorResponse("invalid_input"), "401": errorResponse("authentication_required"), "402": errorResponse("payment_required"), "403": errorResponse("operation_denied"), "404": errorResponse("tool_not_found"), "409": errorResponse("idempotency_conflict"), "502": errorResponse("upstream_error ($0)"), "503": errorResponse("provider_unavailable") } },
     { method: "get", path: "/v1/router/catalog", tag: "router", security: "none", servedBy: "apps/router", summary: "The content-hashed catalog manifest.", responses: { "200": jsonBody({ type: "object" }) } },
+    // --- E29: the open catalog (apps/router) and provider payouts ---
+    { method: "get", path: "/v1/catalog", tag: "catalog", security: "none", servedBy: "apps/router", summary: "Every listed endpoint: price, live health and p50/p95, categories, first-party label, permission level, data-handling statement, and the published score formula. Free, no key.", parameters: [{ name: "category", in: "query", schema: { type: "string" } }, { name: "provider", in: "query", schema: { type: "string" } }, { name: "first_party", in: "query", schema: { type: "string", enum: ["true", "false"] } }], responses: { "200": jsonBody({ type: "object", properties: { format: { type: "string", enum: ["shogunagent-open-catalog/1"] }, catalog_hash: { type: "string" }, entry_count: { type: "integer" }, ranking: { type: "object" }, entries: { type: "array", items: { type: "object" } } } }) } },
+    { method: "get", path: "/v1/catalog/{tool_id}", tag: "catalog", security: "none", servedBy: "apps/router", summary: "One listed endpoint with its description, exclusions, input/output JSON Schema and the score formula.", parameters: [{ name: "tool_id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": jsonBody({ type: "object" }), "404": errorResponse("tool_not_found") } },
+    { method: "get", path: "/catalog", tag: "catalog", security: "none", servedBy: "apps/router", summary: "The open catalog as a server-rendered HTML page (no JavaScript).", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
+    { method: "post", path: "/v1/internal/router/settlements", tag: "providers", security: "service", summary: "The router's run settlements (content-free; idempotent by run_id) → the provider's daily accrual. Not for agents.", requestBody: jsonBody({ type: "object", required: ["settlements"], properties: { settlements: { type: "array", minItems: 1, maxItems: 100, items: { type: "object", required: ["format", "run_id", "ts", "tool_id", "provider_id", "first_party", "payout_account_ref", "outcome", "quantity", "provider_micro_usd"], properties: { format: { type: "string", enum: ["shogunagent-run-settlement/1"] }, run_id: { type: "string" }, ts: { type: "integer" }, tool_id: { type: "string" }, provider_id: { type: "string" }, first_party: { type: "boolean" }, payout_account_ref: { type: ["string", "null"] }, outcome: { type: "string", enum: ["ok", "empty", "provider_error", "transport_error"] }, quantity: { type: "integer", minimum: 0 }, provider_micro_usd: micro("The provider's price; 0 unless ok") } } } } }), responses: { "200": jsonBody({ type: "object", properties: { recorded: { type: "integer" }, duplicates: { type: "integer" } } }), "400": errorResponse("invalid_settlements | invalid_settlement"), "401": errorResponse("invalid_token"), "503": errorResponse("settlements_unavailable | store_unavailable") } },
+    { method: "get", path: "/v1/providers/me", tag: "providers", security: "key", scope: "read", summary: "The provider this key's principal owns: payout account status, this month's runs and earnings, the minimum payout.", parameters: [{ name: "provider_id", in: "query", schema: { type: "string" }, description: "Required when the principal owns several providers." }], responses: { "200": jsonBody({ type: "object" }), "404": errorResponse("provider_not_found") } },
+    { method: "post", path: "/v1/providers/me/connect", tag: "providers", security: "key", scope: "write", keyOnly: true, summary: "A Stripe Connect Express onboarding link for the provider's payout account. Hand the URL to a human at the provider once.", responses: { "201": jsonBody({ type: "object", properties: { provider_id: { type: "string" }, url: { type: "string", format: "uri" }, expires_at: { type: ["string", "null"] }, next_action: { type: "string", enum: ["approve_at_url"] } } }), "404": errorResponse("provider_not_found"), "503": errorResponse("connect_unavailable") } },
+    { method: "get", path: "/v1/providers/connect/return", tag: "providers", security: "none", summary: "Where Stripe returns the provider after onboarding (signed state). Binds payout_account_ref once payouts are enabled. HTML, no JavaScript. Not for agents.", parameters: [{ name: "state", in: "query", required: true, schema: { type: "string" } }], responses: { "200": { content: { "text/html": { schema: { type: "string" } } } }, "400": { description: "Invalid or expired state" } } },
+    { method: "get", path: "/v1/providers/connect/refresh", tag: "providers", security: "none", summary: "A fresh onboarding link when Stripe's has expired (signed state) → 302. Not for agents.", parameters: [{ name: "state", in: "query", required: true, schema: { type: "string" } }], responses: { "302": { description: "To Stripe's hosted onboarding" }, "400": { description: "Invalid or expired state" } } },
+    { method: "get", path: "/v1/providers/me/statements", tag: "providers", security: "key", scope: "read", summary: "The provider's monthly statement: runs and earnings per day (failures and empty results at $0), our take, refunds, disputes and the payout decision.", parameters: [{ name: "month", in: "query", schema: { type: "string", pattern: "^\\d{4}-(0[1-9]|1[0-2])$" } }, { name: "provider_id", in: "query", schema: { type: "string" } }], responses: { "200": jsonBody({ type: "object", properties: { schema: { type: "string", enum: ["shogunagent/provider-statement/v1"] }, hash: { type: "string" } } }), "400": errorResponse("invalid_month | provider_id_required"), "404": errorResponse("provider_not_found") } },
+    { method: "post", path: "/v1/admin/providers", tag: "admin", security: "key", scope: "admin", summary: "Bind a listed provider to the principal whose keys act for it (after the listing PR is merged).", requestBody: jsonBody({ type: "object", required: ["provider_id", "owner_principal_id"], properties: { provider_id: { type: "string" }, owner_principal_id: { type: "string" } } }), responses: { "200": jsonBody({ type: "object" }), "400": errorResponse("invalid_provider | invalid_owner") } },
+    { method: "post", path: "/v1/admin/providers/{id}/adjustments", tag: "admin", security: "key", scope: "admin", summary: "A refund (deducted) or a dispute (holds the provider's payout while open) against a provider. One per Idempotency-Key.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { $ref: "#/components/parameters/IdempotencyKey" }], requestBody: jsonBody({ type: "object", required: ["kind", "amount_micro_usd", "reason"], properties: { kind: { type: "string", enum: ["refund", "dispute"] }, amount_micro_usd: micro("Amount"), reason: { type: "string", enum: ["refund", "chargeback", "dispute", "correction", "fraud"] }, run_id: { type: "string" } } }), responses: { "201": jsonBody({ type: "object" }), "200": jsonBody({ type: "object" }), "400": errorResponse("idempotency_key_required | invalid_kind | invalid_amount | invalid_reason"), "404": errorResponse("provider_not_found") } },
+    { method: "post", path: "/v1/admin/providers/{id}/disputes/{entry}/resolve", tag: "admin", security: "key", scope: "admin", summary: "Resolve a provider dispute: provider_won (nothing deducted) or provider_lost (deducted). Once.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { name: "entry", in: "path", required: true, schema: { type: "string" } }], requestBody: jsonBody({ type: "object", required: ["outcome"], properties: { outcome: { type: "string", enum: ["provider_won", "provider_lost"] } } }), responses: { "200": jsonBody({ type: "object" }), "404": errorResponse("dispute_not_found") } },
+    { method: "post", path: "/v1/admin/payouts/run", tag: "admin", security: "key", scope: "admin", summary: "Run the monthly provider payout for a closed month. Idempotent per provider-month (Stripe Idempotency-Key payout:<provider>:<month>).", requestBody: jsonBody({ type: "object", required: ["month"], properties: { month: { type: "string" } } }), responses: { "200": jsonBody({ type: "object", properties: { month: { type: "string" }, providers: { type: "integer" }, paid: { type: "integer" }, held: { type: "integer" }, below_minimum: { type: "integer" }, already_paid: { type: "integer" }, failed: { type: "integer" } } }), "409": errorResponse("month_open") } },
   ];
   return r;
 }
@@ -339,6 +369,7 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       ...(route.security === "none" ? { "x-anonymous": true } : {}),
       ...(route.security === "pow" ? { "x-proof-of-work": true } : {}),
       ...(route.security === "stripe" ? { "x-webhook-signature": "Stripe-Signature" } : {}),
+      ...(route.security === "service" ? { "x-service-token": "ROUTER_SETTLEMENT_TOKEN" } : {}),
       ...(route.servedBy ? { "x-served-by": route.servedBy } : {}),
     };
     const methods = route.method === "all" ? ["get", "post", "delete"] : [route.method];
@@ -372,6 +403,8 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       { name: "mcp", description: "The metered MCP Streamable HTTP proxy." },
       { name: "router", description: "discover / inspect / run (apps/router)." },
       { name: "approvals", description: "Remote L2/L3 approvals: webhooks for the principal, the approval page and Slack for humans." },
+      { name: "catalog", description: "The open public tool catalog (apps/router): prices, health, data handling and the score formula. No auth." },
+      { name: "providers", description: "Tool providers: run settlements, Stripe Connect onboarding, monthly statements and payouts (docs/api/payouts.md)." },
     ],
     paths,
     components,

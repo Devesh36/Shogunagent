@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import { agentError, agentMeterSubject, hasScopes, resolveAgentKey, type AgentKeyLookup, type AgentPrincipal, type AgentScope, type AgentVars } from "./agent-keys.js";
 import type { AgentStore, ReserveOutcome } from "./agent-store.js";
 import { paymentRequiredResponse } from "./billing/402.js";
+import { decodePaymentHeader, paymentResponseHeader, x402Requirement, type FacilitatorClient, type SettleResult, type X402Config, type X402Store } from "./billing/x402.js";
 import { commitTerms, discounted, type CommitTerms } from "./billing/ledger.js";
 import { LOW_BALANCE_THRESHOLD_MICROS, capReachedEvent, crossedLowBalance, lowBalanceEvent, type Notifier } from "./billing/notify.js";
 import { DEFAULT_CAPS, capsFor, periodsOf, secsUntilPeriodReset, type CapSet } from "./caps.js";
@@ -83,6 +84,13 @@ export interface MeteringDeps {
    * `X-Shogun-Approval-Token` (an approval was queued). The header is read, never the body, and
    * is not passed on to the agent (the body already carries the URL). */
   onApprovalToken?: (token: string) => Promise<unknown>;
+  /** x402 acceptance (E30, billing/x402.ts). Present only with `X402_ENABLED=1`. */
+  x402?: { config: X402Config; facilitator: FacilitatorClient; store: X402Store };
+}
+
+/** The absolute URL of the resource a request is for (the x402 requirement's `resource`). */
+export function resourceUrl(deps: Pick<MeteringDeps, "publicBaseUrl">, c: Context): string {
+  return `${deps.publicBaseUrl.replace(/\/+$/, "")}${c.req.path}`;
 }
 
 
@@ -180,7 +188,11 @@ export function usageHeaders(receiptId: string, quote: Quote): Record<string, st
 export function refusalResponse(c: Context<{ Variables: AgentVars }>, outcome: Exclude<ReserveOutcome, { kind: "ok" } | { kind: "unavailable" }>, quote: Quote, deps: MeteringDeps, nowMs: number, startedMs: number): Response {
   if (outcome.kind === "insufficient_funds") {
     c.set("relayLogEvent", "payment_required");
-    return paymentRequiredResponse({ reason: "payment_required", amountMicros: quote.cost_micro_usd, unit: quote.unit, balanceMicros: outcome.availableMicros, topupUrl: topupUrl(deps) }, nowMs - startedMs);
+    return paymentRequiredResponse({
+      reason: "payment_required", amountMicros: quote.cost_micro_usd, unit: quote.unit, balanceMicros: outcome.availableMicros, topupUrl: topupUrl(deps),
+      // E30: only with X402_ENABLED=1 — the x402 entry for exactly this amount.
+      ...(deps.x402 ? { x402: x402Requirement(deps.x402.config, quote.cost_micro_usd, resourceUrl(deps, c)) } : {}),
+    }, nowMs - startedMs);
   }
   c.set("relayLogEvent", "cap_exceeded");
   return paymentRequiredResponse({
@@ -201,11 +213,12 @@ export async function reserveCall(
   call: Pick<ClassifiedCall, "method" | "name">,
   quote: Quote,
   startedMs: number,
+  opts: { funding?: "x402"; receiptId?: string } = {},
 ): Promise<{ ok: true; receiptId: string; price: CallPrice } | { ok: false; response: Response }> {
   const now = (deps.now ?? (() => new Date()))();
   const nowMs = now.getTime();
   const { day, month } = periodsOf(nowMs);
-  const receiptId = `rcpt_${randomUUID()}`;
+  const receiptId = opts.receiptId ?? `rcpt_${randomUUID()}`;
   const unavailable = (): { ok: false; response: Response } => {
     c.set("relayLogEvent", "wallet_unavailable");
     return { ok: false, response: agentError(c, 503, "wallet_unavailable", "The wallet store is unavailable. Retry shortly.", "retry_after", { "retry-after": "1" }) };
@@ -223,6 +236,7 @@ export async function reserveCall(
     ...(call.name !== undefined ? { name: call.name } : {}),
     unit: quote.unit, quantity: quote.quantity, micros: price.charged, ts: nowMs, day, month, caps,
     ...(price.terms ? { listMicros: quote.cost_micro_usd, commit: price.terms } : {}),
+    ...(opts.funding ? { funding: opts.funding } : {}),
   });
   if (outcome.kind === "unavailable") return unavailable();
   if (outcome.kind !== "ok") {
@@ -252,7 +266,7 @@ export async function reserveCall(
 
 /** Settle a reservation at `actualMicros` (`listMicros` at list price), once, on both ledgers,
  * and emit `wallet.low_balance` when this charge took the wallet under the threshold. Never throws. */
-export async function settleCall(deps: MeteringDeps, receiptId: string, actualMicros: number, listMicros: number = actualMicros, principal?: Pick<AgentPrincipal, "principalId">, funding: "wallet" | "commit" = "wallet"): Promise<void> {
+export async function settleCall(deps: MeteringDeps, receiptId: string, actualMicros: number, listMicros: number = actualMicros, principal?: Pick<AgentPrincipal, "principalId">, funding: "wallet" | "commit" | "x402" = "wallet"): Promise<void> {
   await deps.store.settle(receiptId, actualMicros, listMicros).catch(() => deps.log("agent_settle_failure"));
   if (deps.usage && deps.spendBreaker) await deps.usage.settleSpend(receiptId, actualMicros).catch(() => deps.log("spend_settle_failure"));
   if (deps.notifier && principal && funding === "wallet" && actualMicros > 0) {
@@ -319,6 +333,10 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
       c.set("relayLogEvent", "upstream_unavailable");
       return agentError(c, 503, "upstream_unavailable", "The core is not reachable from this gateway yet. Retry shortly.", "retry_after", { "retry-after": "30" });
     }
+    // E30: a call paid per call over x402. Only with X402_ENABLED=1; otherwise the header is
+    // ignored and the call is wallet-funded as usual (no payment is settled).
+    const presented = c.req.header("x-payment") ?? c.req.header("payment-signature");
+    if (deps.x402 && presented !== undefined && quote.cost_micro_usd > 0) return x402Call(c, deps, deps.x402, principal, call, quote, startedMs, presented);
     const reserved = await reserveCall(c, deps, principal, call, quote, startedMs);
     if (!reserved.ok) return reserved.response;
     let upstream: Response;
@@ -340,4 +358,115 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
     headers.set("x-latency-ms", String(Math.max(0, now().getTime() - startedMs)));
     return new Response(upstream.body, { status: upstream.status, headers });
   };
+}
+
+/** A facilitator reason, reduced to a token we can repeat to the agent. */
+function reasonToken(r: string | undefined): string {
+  const t = (r ?? "").toLowerCase().replace(/[^a-z0-9_]+/g, "_").slice(0, 64);
+  return t || "rejected";
+}
+
+/**
+ * One metered call paid over x402 (E30): decode → replay guard → verify (facilitator) → reserve
+ * against the caps with `funding: "x402"` (the wallet is not touched) → forward → on a 2xx,
+ * settle the payment (facilitator) and the receipt at the quoted price; on anything else, settle
+ * neither (a failed call costs nothing). `X-PAYMENT-RESPONSE` reports the settlement.
+ */
+async function x402Call(
+  c: Context<{ Variables: AgentVars }>,
+  deps: MeteringDeps,
+  x402: NonNullable<MeteringDeps["x402"]>,
+  principal: AgentPrincipal,
+  call: ClassifiedCall,
+  quote: Quote,
+  startedMs: number,
+  presented: string,
+): Promise<Response> {
+  const now = deps.now ?? (() => new Date());
+  let price: CallPrice;
+  try {
+    price = await priceCall(deps, principal, quote, startedMs);
+  } catch {
+    c.set("relayLogEvent", "wallet_unavailable");
+    return agentError(c, 503, "wallet_unavailable", "The wallet store is unavailable. Retry shortly.", "retry_after", { "retry-after": "1" });
+  }
+  const requirement = x402Requirement(x402.config, price.charged, resourceUrl(deps, c));
+  const refuse = (code: "payment_invalid" | "payment_replayed", message: string): Response => {
+    c.set("relayLogEvent", code === "payment_replayed" ? "x402_replayed" : "x402_rejected");
+    return paymentRequiredResponse({
+      reason: "payment_required", amountMicros: price.charged, unit: quote.unit, balanceMicros: 0, topupUrl: topupUrl(deps), x402: requirement,
+      refused: { code, message },
+    }, now().getTime() - startedMs);
+  };
+  const decoded = decodePaymentHeader(presented);
+  if (!decoded.ok) return refuse("payment_invalid", `The X-PAYMENT header could not be read (${decoded.reason}). Send base64 JSON of an x402 PaymentPayload for the x402 entry in payment.accepts.`);
+  if (decoded.payload.scheme !== "exact" || decoded.payload.network !== x402.config.network) {
+    return refuse("payment_invalid", `This gateway accepts x402 scheme "exact" on network "${x402.config.network}" only.`);
+  }
+  const receiptId = `rcpt_${randomUUID()}`;
+  const claimed = await x402.store.claim(decoded.hash, receiptId, startedMs).catch(() => undefined);
+  if (claimed === undefined) {
+    c.set("relayLogEvent", "wallet_unavailable");
+    return agentError(c, 503, "wallet_unavailable", "The payment ledger is unavailable. Retry shortly with the same payment.", "retry_after", { "retry-after": "1" });
+  }
+  if (!claimed) return refuse("payment_replayed", "This payment was already presented. Sign a new x402 payment for this call; a payment pays for one call only.");
+  let verified;
+  try {
+    verified = await x402.facilitator.verify(decoded.payload, requirement);
+  } catch {
+    // Nothing happened on-chain: let the same payment be presented again.
+    await x402.store.mark(decoded.hash, "retryable", now().getTime()).catch(() => undefined);
+    return agentError(c, 503, "payment_unavailable", "The x402 facilitator did not answer. Nothing was charged; retry shortly with the same payment.", "retry_after", { "retry-after": "5" });
+  }
+  if (!verified.isValid) {
+    await x402.store.mark(decoded.hash, "failed", now().getTime()).catch(() => undefined);
+    return refuse("payment_invalid", `The facilitator rejected this payment (${reasonToken(verified.invalidReason)}). Sign a new x402 payment for exactly payment.amount_micro_usd atomic units of USDC.`);
+  }
+  c.set("relayLogEvent", "x402_verified");
+  if (!deps.mcpUpstream) {
+    await x402.store.mark(decoded.hash, "retryable", now().getTime()).catch(() => undefined);
+    c.set("relayLogEvent", "upstream_unavailable");
+    return agentError(c, 503, "upstream_unavailable", "The core is not reachable from this gateway yet. Retry shortly.", "retry_after", { "retry-after": "30" });
+  }
+  const reserved = await reserveCall(c, deps, principal, call, quote, startedMs, { funding: "x402", receiptId });
+  if (!reserved.ok) {
+    // A cap or the store refused before anything ran: the payment is unused.
+    await x402.store.mark(decoded.hash, "retryable", now().getTime()).catch(() => undefined);
+    return reserved.response;
+  }
+  let upstream: Response;
+  try {
+    upstream = await deps.mcpUpstream(c.req.raw, principal);
+  } catch {
+    await settleCall(deps, receiptId, 0);
+    await x402.store.mark(decoded.hash, "unsettled", now().getTime()).catch(() => undefined);
+    c.set("relayLogEvent", "upstream_failure");
+    return agentError(c, 503, "upstream_unavailable", "The core did not answer. The payment was not settled; nothing was charged.", "retry_after", { "retry-after": "5" });
+  }
+  const ok = upstream.status >= 200 && upstream.status < 300;
+  let settled: SettleResult;
+  if (!ok) {
+    settled = { success: false, errorReason: "call_failed_not_settled" };
+  } else {
+    try {
+      settled = await x402.facilitator.settle(decoded.payload, requirement);
+    } catch {
+      settled = { success: false, errorReason: "facilitator_unavailable" };
+    }
+  }
+  const charged = settled.success ? price.charged : 0;
+  await settleCall(deps, receiptId, charged, settled.success ? quote.cost_micro_usd : 0, principal, "x402");
+  await x402.store.mark(decoded.hash, settled.success ? "settled" : ok ? "failed" : "unsettled", now().getTime()).catch(() => undefined);
+  c.set("relayLogEvent", settled.success ? "x402_settled" : ok ? "x402_settle_failed" : "upstream_failure");
+  const headers = new Headers(upstream.headers);
+  const approvalToken = headers.get("x-shogun-approval-token");
+  headers.delete("x-shogun-approval-token");
+  if (approvalToken && deps.onApprovalToken) deferWork(c, deps.onApprovalToken(approvalToken));
+  for (const [k, v] of Object.entries(usageHeaders(receiptId, { ...quote, cost_micro_usd: charged }))) headers.set(k, v);
+  headers.set("x-usage-funding", "x402");
+  const paymentResponse = paymentResponseHeader(settled);
+  headers.set("x-payment-response", paymentResponse);
+  headers.set("payment-response", paymentResponse);
+  headers.set("x-latency-ms", String(Math.max(0, now().getTime() - startedMs)));
+  return new Response(upstream.body, { status: upstream.status, headers });
 }

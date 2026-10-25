@@ -55,6 +55,20 @@ Conventions:
 | GET / POST | `/approve/{token}` | the link (+ CSRF on POST) | The human approval page (E15) |
 | POST | `/v1/slack/interactions` | Slack signature | Slack button presses on approval messages (E15) |
 | POST | `/v1/approvals/notify` | the signed token | An approval was queued: post to Slack, deliver webhooks |
+| POST | `/v1/internal/router/settlements` | `ROUTER_SETTLEMENT_TOKEN` | The router's run settlements → the provider's daily accrual (E29; [payouts](../../docs/api/payouts.md)); only with `PAYOUTS_STATE_SECRET` |
+| GET | `/v1/providers/me` | `read` | The provider this principal owns: payout account status, this month's runs and earnings |
+| POST | `/v1/providers/me/connect` | `write` (key only) | A Stripe Connect Express onboarding link |
+| GET | `/v1/providers/connect/return`, `/v1/providers/connect/refresh` | signed `state` | Stripe's return page (binds `payout_account_ref`) and a fresh link (302) |
+| GET | `/v1/providers/me/statements?month=` | `read` | The provider's monthly statement and payout decision |
+| POST | `/v1/admin/providers` | `admin` key | Bind a listed provider to its owner principal |
+| POST | `/v1/admin/providers/{id}/adjustments` | `admin` key, Idempotency-Key | A refund or a dispute against a provider |
+| POST | `/v1/admin/providers/{id}/disputes/{entry}/resolve` | `admin` key | `provider_won` / `provider_lost` |
+| POST | `/v1/admin/payouts/run` | `admin` key | Pay a closed month (idempotent per provider-month) |
+
+The open tool catalog (`GET /v1/catalog`, `GET /v1/catalog/{tool_id}`, `GET /catalog`) is served by
+the router (`apps/router`, [catalog](../../docs/api/catalog.md)). With `X402_ENABLED=1` (off by
+default; [ADR 0002](../../docs/decisions/0002-x402.md)) a `/mcp` 402 also offers the x402 rail and
+`X-PAYMENT` pays one call ([402](../../docs/api/402.md)).
 
 Everywhere a key is accepted, an OAuth access token (`sat_…`) is accepted too, as the consenting
 key with at most its scopes — except key management, licence linking and admin routes.

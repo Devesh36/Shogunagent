@@ -323,6 +323,14 @@
     {
       "name": "approvals",
       "description": "Remote L2/L3 approvals: webhooks for the principal, the approval page and Slack for humans."
+    },
+    {
+      "name": "catalog",
+      "description": "The open public tool catalog (apps/router): prices, health, data handling and the score formula. No auth."
+    },
+    {
+      "name": "providers",
+      "description": "Tool providers: run settlements, Stripe Connect onboarding, monthly statements and payouts (docs/api/payouts.md)."
     }
   ],
   "paths": {
@@ -2751,6 +2759,871 @@
         "x-anonymous": true,
         "x-served-by": "apps/router"
       }
+    },
+    "/v1/catalog": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "Every listed endpoint: price, live health and p50/p95, categories, first-party label, permission level, data-handling statement, and the published score formula. Free, no key.",
+        "operationId": "get_v1_catalog",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "first_party",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "enum": [
+                        "shogunagent-open-catalog/1"
+                      ]
+                    },
+                    "catalog_hash": {
+                      "type": "string"
+                    },
+                    "entry_count": {
+                      "type": "integer"
+                    },
+                    "ranking": {
+                      "type": "object"
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true,
+        "x-served-by": "apps/router"
+      }
+    },
+    "/v1/catalog/{tool_id}": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "One listed endpoint with its description, exclusions, input/output JSON Schema and the score formula.",
+        "operationId": "get_v1_catalog_tool_id",
+        "parameters": [
+          {
+            "name": "tool_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "tool_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true,
+        "x-served-by": "apps/router"
+      }
+    },
+    "/catalog": {
+      "get": {
+        "tags": [
+          "catalog"
+        ],
+        "summary": "The open catalog as a server-rendered HTML page (no JavaScript).",
+        "operationId": "get_catalog",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true,
+        "x-served-by": "apps/router"
+      }
+    },
+    "/v1/internal/router/settlements": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "The router's run settlements (content-free; idempotent by run_id) → the provider's daily accrual. Not for agents.",
+        "operationId": "post_v1_internal_router_settlements",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "settlements"
+                ],
+                "properties": {
+                  "settlements": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "format",
+                        "run_id",
+                        "ts",
+                        "tool_id",
+                        "provider_id",
+                        "first_party",
+                        "payout_account_ref",
+                        "outcome",
+                        "quantity",
+                        "provider_micro_usd"
+                      ],
+                      "properties": {
+                        "format": {
+                          "type": "string",
+                          "enum": [
+                            "shogunagent-run-settlement/1"
+                          ]
+                        },
+                        "run_id": {
+                          "type": "string"
+                        },
+                        "ts": {
+                          "type": "integer"
+                        },
+                        "tool_id": {
+                          "type": "string"
+                        },
+                        "provider_id": {
+                          "type": "string"
+                        },
+                        "first_party": {
+                          "type": "boolean"
+                        },
+                        "payout_account_ref": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "ok",
+                            "empty",
+                            "provider_error",
+                            "transport_error"
+                          ]
+                        },
+                        "quantity": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "provider_micro_usd": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "description": "The provider's price; 0 unless ok (integer micro-USD; 1 USD = 1000000)."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recorded": {
+                      "type": "integer"
+                    },
+                    "duplicates": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_settlements | invalid_settlement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "settlements_unavailable | store_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-service-token": "ROUTER_SETTLEMENT_TOKEN"
+      }
+    },
+    "/v1/providers/me": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "The provider this key's principal owns: payout account status, this month's runs and earnings, the minimum payout.",
+        "operationId": "get_v1_providers_me",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required when the principal owns several providers."
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "provider_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/providers/me/connect": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "A Stripe Connect Express onboarding link for the provider's payout account. Hand the URL to a human at the provider once.",
+        "operationId": "post_v1_providers_me_connect",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "provider_id": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "expires_at": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "next_action": {
+                      "type": "string",
+                      "enum": [
+                        "approve_at_url"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "provider_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "connect_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/providers/connect/return": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Where Stripe returns the provider after onboarding (signed state). Binds payout_account_ref once payouts are enabled. HTML, no JavaScript. Not for agents.",
+        "operationId": "get_v1_providers_connect_return",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or expired state"
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/providers/connect/refresh": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "A fresh onboarding link when Stripe's has expired (signed state) → 302. Not for agents.",
+        "operationId": "get_v1_providers_connect_refresh",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "To Stripe's hosted onboarding"
+          },
+          "400": {
+            "description": "Invalid or expired state"
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/providers/me/statements": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "The provider's monthly statement: runs and earnings per day (failures and empty results at $0), our take, refunds, disputes and the payout decision.",
+        "operationId": "get_v1_providers_me_statements",
+        "parameters": [
+          {
+            "name": "month",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+            }
+          },
+          {
+            "name": "provider_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "schema": {
+                      "type": "string",
+                      "enum": [
+                        "shogunagent/provider-statement/v1"
+                      ]
+                    },
+                    "hash": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_month | provider_id_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "provider_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/providers": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Bind a listed provider to the principal whose keys act for it (after the listing PR is merged).",
+        "operationId": "post_v1_admin_providers",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "provider_id",
+                  "owner_principal_id"
+                ],
+                "properties": {
+                  "provider_id": {
+                    "type": "string"
+                  },
+                  "owner_principal_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_provider | invalid_owner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/providers/{id}/adjustments": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "A refund (deducted) or a dispute (holds the provider's payout while open) against a provider. One per Idempotency-Key.",
+        "operationId": "post_v1_admin_providers_id_adjustments",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "amount_micro_usd",
+                  "reason"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "refund",
+                      "dispute"
+                    ]
+                  },
+                  "amount_micro_usd": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Amount (integer micro-USD; 1 USD = 1000000)."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "refund",
+                      "chargeback",
+                      "dispute",
+                      "correction",
+                      "fraud"
+                    ]
+                  },
+                  "run_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "idempotency_key_required | invalid_kind | invalid_amount | invalid_reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "provider_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/providers/{id}/disputes/{entry}/resolve": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Resolve a provider dispute: provider_won (nothing deducted) or provider_lost (deducted). Once.",
+        "operationId": "post_v1_admin_providers_id_disputes_entry_resolve",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entry",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "outcome"
+                ],
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "provider_won",
+                      "provider_lost"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "dispute_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/payouts/run": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Run the monthly provider payout for a closed month. Idempotent per provider-month (Stripe Idempotency-Key payout:<provider>:<month>).",
+        "operationId": "post_v1_admin_payouts_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "month"
+                ],
+                "properties": {
+                  "month": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "month": {
+                      "type": "string"
+                    },
+                    "providers": {
+                      "type": "integer"
+                    },
+                    "paid": {
+                      "type": "integer"
+                    },
+                    "held": {
+                      "type": "integer"
+                    },
+                    "below_minimum": {
+                      "type": "integer"
+                    },
+                    "already_paid": {
+                      "type": "integer"
+                    },
+                    "failed": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "month_open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2995,27 +3868,94 @@
           },
           "accepts": {
             "type": "array",
+            "description": "Ordered by preference. The x402 entry appears only where X402_ENABLED (docs/decisions/0002-x402.md).",
             "items": {
-              "type": "object",
-              "required": [
-                "rail",
-                "url"
-              ],
-              "properties": {
-                "rail": {
-                  "type": "string",
-                  "enum": [
-                    "card"
-                  ]
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": [
+                    "rail",
+                    "url"
+                  ],
+                  "properties": {
+                    "rail": {
+                      "type": "string",
+                      "enum": [
+                        "card"
+                      ]
+                    },
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "method": {
+                      "type": "string"
+                    }
+                  }
                 },
-                "url": {
-                  "type": "string",
-                  "format": "uri"
-                },
-                "method": {
-                  "type": "string"
+                {
+                  "type": "object",
+                  "required": [
+                    "rail",
+                    "scheme",
+                    "network",
+                    "asset",
+                    "payTo",
+                    "amount",
+                    "maxAmountRequired",
+                    "maxTimeoutSeconds",
+                    "resource"
+                  ],
+                  "description": "x402 PaymentRequirements: pay this call in USDC and resend it with X-PAYMENT. 1 atomic unit = 1 micro-USD.",
+                  "properties": {
+                    "rail": {
+                      "type": "string",
+                      "enum": [
+                        "x402"
+                      ]
+                    },
+                    "scheme": {
+                      "type": "string",
+                      "enum": [
+                        "exact"
+                      ]
+                    },
+                    "network": {
+                      "type": "string"
+                    },
+                    "asset": {
+                      "type": "string"
+                    },
+                    "payTo": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "string",
+                      "pattern": "^[0-9]+$"
+                    },
+                    "maxAmountRequired": {
+                      "type": "string",
+                      "pattern": "^[0-9]+$"
+                    },
+                    "maxTimeoutSeconds": {
+                      "type": "integer"
+                    },
+                    "resource": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "mimeType": {
+                      "type": "string"
+                    },
+                    "extra": {
+                      "type": "object"
+                    }
+                  }
                 }
-              }
+              ]
             }
           },
           "retry_after": {
@@ -3546,6 +4486,15 @@
           },
           "settled": {
             "type": "boolean"
+          },
+          "funding": {
+            "type": "string",
+            "enum": [
+              "wallet",
+              "commit",
+              "x402"
+            ],
+            "description": "How the call was paid: the wallet, an annual commit, or one x402 payment (only where X402_ENABLED)."
           },
           "ts": {
             "type": "string",

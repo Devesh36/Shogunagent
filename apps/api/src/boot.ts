@@ -114,6 +114,19 @@ import { FetchDeepgramGateway } from "./deepgram.js";
  *                              Client ID Metadata Documents are served (`/oauth/*`, the two
  *                              `.well-known` documents) and `sat_` access tokens are accepted.
  *                              Needs sql/agent-oauth.sql applied.
+ * - PAYOUTS_STATE_SECRET     — secret, optional (E29): at least 32 characters. Set = provider
+ *                              payouts are served (settlement seam, Connect onboarding,
+ *                              statements, the monthly payout in the sweep). Needs
+ *                              sql/provider-payouts.sql applied; Connect calls use STRIPE_SECRET_KEY.
+ * - ROUTER_SETTLEMENT_TOKEN  — secret, optional (E29): the bearer the router presents to
+ *                              POST /v1/internal/router/settlements (same value as the router's).
+ *                              Unset = that route answers 503.
+ * - PAYOUT_MIN_USD           — optional (E29): the minimum transfer (default 10).
+ * - X402_ENABLED             — optional (E30), default off (docs/decisions/0002-x402.md). `1` adds
+ *                              the x402 rail to 402s and accepts X-PAYMENT; then X402_NETWORK,
+ *                              X402_PAY_TO, X402_ASSET (USDC), X402_FACILITATOR_URL (https) are
+ *                              required and X402_MAX_TIMEOUT_SECONDS is optional (60). Needs
+ *                              sql/x402-payments.sql applied.
  *
  * Node-only settings (PORT, RELAY_DATABASE_URL, METRICS_LOG_INTERVAL_SEC) are documented and
  * parsed in `index.ts`; the Worker's store comes from its `HYPERDRIVE` binding.
@@ -128,6 +141,10 @@ import { httpSidecarClient } from "./approvals/sidecar-client.js";
 import { InMemoryWebhookStore, SqlWebhookStore, type WebhookStore } from "./approvals/webhooks.js";
 import type { AgentStore } from "./agent-store.js";
 import { grantProBundle, reportCommitOverage } from "./billing/jobs.js";
+import { SqlX402Store, httpFacilitator, x402ConfigFromEnv, type X402Config, type X402Store } from "./billing/x402.js";
+import { DEFAULT_MIN_PAYOUT_MICROS, previousMonth, runProviderPayouts, type PayoutStore } from "./payouts.js";
+import { SqlPayoutStore } from "./payouts-pg-store.js";
+import { transferFor } from "./payouts-app.js";
 import type { ResolveHost } from "./oauth/cimd.js";
 import { SqlOAuthStore, type OAuthStore } from "./oauth/store.js";
 import { createApp, parseResultLine, planSpendCapMicros, type RelayDeps, DEFAULT_TRIAL_SPEND_SHARE } from "./app.js";
@@ -279,6 +296,29 @@ export interface AgentConfig {
     webhookSecret: string;
     slack?: { botToken: string; signingSecret: string; channel: string };
   };
+  /** Provider payouts (E29): `PAYOUTS_STATE_SECRET` turns them on; `ROUTER_SETTLEMENT_TOKEN`
+   * accepts the router's settlements; `PAYOUT_MIN_USD` is the minimum transfer. Connect calls use
+   * `STRIPE_SECRET_KEY`. Absent = the provider routes are not served. */
+  payouts?: { stateSecret: string; settlementToken?: string; minPayoutMicros: number };
+  /** x402 acceptance (E30, billing/x402.ts): only with `X402_ENABLED=1`. Absent = off. */
+  x402?: X402Config;
+}
+
+/** Parse the payout settings, or `undefined` when `PAYOUTS_STATE_SECRET` is unset. */
+export function payoutsConfigFromEnv(env: EnvRecord): AgentConfig["payouts"] {
+  const stateSecret = env.PAYOUTS_STATE_SECRET?.trim();
+  if (!stateSecret) return undefined;
+  if (stateSecret.length < 32) throw new BootError("invalid PAYOUTS_STATE_SECRET (at least 32 characters)");
+  const token = env.ROUTER_SETTLEMENT_TOKEN?.trim();
+  if (token !== undefined && token !== "" && token.length < 32) throw new BootError("invalid ROUTER_SETTLEMENT_TOKEN (at least 32 characters, the same value the router has)");
+  let minPayoutMicros = DEFAULT_MIN_PAYOUT_MICROS;
+  const rawMin = env.PAYOUT_MIN_USD?.trim();
+  if (rawMin) {
+    const usdMin = Number(rawMin);
+    if (!Number.isFinite(usdMin) || usdMin < 1 || usdMin > 10_000) throw new BootError("invalid PAYOUT_MIN_USD (1 to 10000)");
+    minPayoutMicros = Math.round(usdMin * 1_000_000);
+  }
+  return { stateSecret, ...(token ? { settlementToken: token } : {}), minPayoutMicros };
 }
 
 /** Parse the remote-approval settings, or `undefined` when `SHOGUN_APPROVAL_SIGNING_KEY` is unset.
@@ -340,6 +380,13 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
   const oauthSecret = env.AGENT_OAUTH_SECRET;
   if (oauthSecret !== undefined && oauthSecret !== "" && oauthSecret.length < 32) throw new BootError("invalid AGENT_OAUTH_SECRET (at least 32 characters)");
   const approvals = approvalsConfigFromEnv(env);
+  const payouts = payoutsConfigFromEnv(env);
+  let x402: X402Config | undefined;
+  try {
+    x402 = x402ConfigFromEnv(env);
+  } catch (e) {
+    throw new BootError(e instanceof Error ? e.message : "invalid X402 settings");
+  }
   return {
     powSecret,
     powBits: intFromEnv(env, "AGENT_POW_BITS", DEFAULT_POW_BITS, 0, MAX_POW_BITS),
@@ -352,12 +399,14 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
     ...(agentCardSigningKey ? { agentCardSigningKey } : {}),
     ...(mcpUrl ? { mcpUrl } : {}),
     ...(approvals ? { approvals } : {}),
+    ...(payouts ? { payouts } : {}),
+    ...(x402 ? { x402 } : {}),
   };
 }
 
 /** The periodic billing jobs (E19 / E14-T3, billing/jobs.ts) and OAuth retention, run from the
  * sweep. Each is idempotent; failures are one fixed warning line and never stop the sweep. */
-export async function billingJobs(config: Pick<RelayConfig, "agent">, store: Pick<RelayStore, "agent" | "oauth">, nowMs: number): Promise<void> {
+export async function billingJobs(config: Pick<RelayConfig, "agent">, store: Pick<RelayStore, "agent" | "oauth" | "payouts" | "x402">, nowMs: number): Promise<void> {
   if (!config.agent || !store.agent) return;
   const counts = await grantProBundle(store.agent, nowMs).catch(() => undefined);
   if (!counts) operational.warn("pro bundle grant unavailable");
@@ -368,12 +417,22 @@ export async function billingJobs(config: Pick<RelayConfig, "agent">, store: Pic
     else if (overage.claimed > 0) operational.info(`commit_overage_reports sent=${overage.sent} failed=${overage.failed}`);
   }
   if (config.agent.oauthSecret && store.oauth) await store.oauth.maintenance(nowMs).catch(() => operational.warn("oauth maintenance unavailable"));
+  // E29: pay the previous month once it has closed. Idempotent per provider-month; a held or
+  // carried month is decided again each tick until it pays. Counts only in the log.
+  if (config.agent.payouts && store.payouts) {
+    const transfer = transferFor(config.agent.stripe ? { stripe: { secretKey: config.agent.stripe.secretKey } } : {});
+    const out = await runProviderPayouts(store.payouts, transfer, previousMonth(nowMs), nowMs, config.agent.payouts.minPayoutMicros).catch(() => undefined);
+    if (!out) operational.warn("provider payouts unavailable");
+    else if (!("error" in out) && (out.paid > 0 || out.failed > 0)) operational.info(`provider_payouts paid=${out.paid} failed=${out.failed} held=${out.held}`);
+    await store.payouts.maintenance(nowMs).catch(() => operational.warn("payout maintenance unavailable"));
+  }
+  if (config.agent.x402 && store.x402) await store.x402.maintenance(nowMs).catch(() => operational.warn("x402 maintenance unavailable"));
 }
 
 /** Whether the agent API is served; one boot-log line, so a 404 on `/v1/agents` is not a mystery. */
 export function agentLaneLine(config: Pick<RelayConfig, "agent">): string {
   if (!config.agent) return "agent_api closed (AGENT_API_ENABLED unset)";
-  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"})`;
+  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"}; provider payouts ${config.agent.payouts ? "on" : "off: PAYOUTS_STATE_SECRET unset"}; x402 ${config.agent.x402 ? "on" : "off"})`;
 }
 
 /** The Batch price table in force: the override, or the shipped defaults. */
@@ -519,6 +578,10 @@ export interface RelayStore {
   resolveHost?: ResolveHost;
   /** Approval webhooks (E15). Absent = an in-process store (development). */
   webhooks?: WebhookStore;
+  /** The provider payout ledger (E29). Absent = an in-process store when payouts are configured. */
+  payouts?: PayoutStore;
+  /** The x402 replay guard (E30). Absent = an in-process store when x402 is enabled. */
+  x402?: X402Store;
   close(): Promise<void>;
 }
 
@@ -529,8 +592,10 @@ export interface RelayStore {
  * one fixed warning line. `checkSchema` is the caller's: Node runs it before listening, the
  * Worker on each sweep (a missing table is otherwise a 503 per request, fail-closed).
  */
-export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker" | "agent">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore; agent: SqlAgentStore; oauth: SqlOAuthStore } {
+export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker" | "agent">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore; agent: SqlAgentStore; oauth: SqlOAuthStore; payouts: SqlPayoutStore; x402: SqlX402Store } {
   return {
+    payouts: new SqlPayoutStore(db),
+    x402: new SqlX402Store(db),
     oauth: new SqlOAuthStore(db),
     usage: new SqlUsageStore(db),
     asr: new SqlAsrStore(db, Date.now, config.spendBreaker?.capMicros ?? 0),
@@ -640,6 +705,21 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
           ...(config.agent.agentCardSigningKey ? { agentCardSigningKey: config.agent.agentCardSigningKey } : {}),
           ...(config.agent.mcpUrl ? { mcpUrl: config.agent.mcpUrl } : {}),
         },
+        // E29: provider payouts — the settlement seam, Connect onboarding (the platform's Stripe
+        // key), statements and the payout run.
+        ...(config.agent.payouts && store.payouts ? {
+          payouts: {
+            store: store.payouts,
+            stateSecret: config.agent.payouts.stateSecret,
+            minPayoutMicros: config.agent.payouts.minPayoutMicros,
+            ...(config.agent.payouts.settlementToken ? { settlementToken: config.agent.payouts.settlementToken } : {}),
+            ...(config.agent.stripe ? { stripe: { secretKey: config.agent.stripe.secretKey } } : {}),
+          },
+        } : {}),
+        // E30: x402 acceptance, only with X402_ENABLED=1 (off by default; docs/decisions/0002-x402.md).
+        ...(config.agent.x402 && store.x402 ? {
+          x402: { config: config.agent.x402, facilitator: httpFacilitator(config.agent.x402.facilitatorUrl), store: store.x402 },
+        } : {}),
         // Remote approvals (E15): the page, Slack and webhooks reach the sidecar through one client.
         ...(config.agent.approvals ? {
           approvals: {

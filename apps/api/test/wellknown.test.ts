@@ -199,7 +199,11 @@ describe("/openapi.json (E10-T6 scaffolding)", () => {
       // E19, E3-T2, E23
       "/v1/statements", "/v1/commit", "/v1/agents/me/licence", "/v1/admin/commits", "/v1/admin/adjustments", "/v1/admin/disputes/{id}/resolve",
       "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token", "/oauth/revoke",
-      "/privacy", "/terms"]) {
+      "/privacy", "/terms",
+      // E29: the open catalog (apps/router) and provider payouts
+      "/v1/catalog", "/v1/catalog/{tool_id}", "/catalog", "/v1/internal/router/settlements", "/v1/providers/me", "/v1/providers/me/connect",
+      "/v1/providers/connect/return", "/v1/providers/connect/refresh", "/v1/providers/me/statements", "/v1/admin/providers",
+      "/v1/admin/providers/{id}/adjustments", "/v1/admin/providers/{id}/disputes/{entry}/resolve", "/v1/admin/payouts/run"]) {
       expect(doc.paths[p], p).toBeDefined();
     }
     expect(Object.keys(doc.paths["/mcp"] ?? {}).sort()).toEqual(["delete", "get", "post"]);
