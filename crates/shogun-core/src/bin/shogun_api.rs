@@ -260,7 +260,7 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
     let clock = wall_clock();
     let (embedder, line) = shogun_core::embed_models::load_configured();
     eprintln!("{FACE}: {line}");
-    let keys: Arc<dyn shogun_core::tenancy::KeyProvider> = Arc::new(keys);
+    let keys: Arc<dyn shogun_core::tenancy::KeyProvider> = keys;
     let store = Arc::new(
         PrincipalStore::new(root.clone(), keys.clone(), clock.clone(), max_open).with_embedder(embedder),
     );
