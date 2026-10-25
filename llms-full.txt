@@ -1,6 +1,6 @@
 # ShogunAgent — full documentation for agents
 
-Generated from README.md, SKILL.md, apps/api/README-agent-api.md, docs/api/402.md, docs/api/agent-surfaces.md, docs/api/billing.md, docs/api/core-tools.md, docs/api/deprecation-policy.md, docs/api/export-v1.md, docs/api/handoff.md, docs/api/oauth.md, docs/api/tool-table.json.md by scripts/gen-llms-txt.mjs. The index is llms.txt. Each section below is one file, verbatim.
+Generated from README.md, SKILL.md, apps/api/README-agent-api.md, docs/api/402.md, docs/api/agent-surfaces.md, docs/api/billing.md, docs/api/catalog.md, docs/api/core-tools.md, docs/api/deprecation-policy.md, docs/api/export-v1.md, docs/api/handoff.md, docs/api/oauth.md, docs/api/payouts.md, docs/api/tool-table.json.md by scripts/gen-llms-txt.mjs. The index is llms.txt. Each section below is one file, verbatim.
 
 ---
 
@@ -405,6 +405,20 @@ Conventions:
 | GET / POST | `/approve/{token}` | the link (+ CSRF on POST) | The human approval page (E15) |
 | POST | `/v1/slack/interactions` | Slack signature | Slack button presses on approval messages (E15) |
 | POST | `/v1/approvals/notify` | the signed token | An approval was queued: post to Slack, deliver webhooks |
+| POST | `/v1/internal/router/settlements` | `ROUTER_SETTLEMENT_TOKEN` | The router's run settlements → the provider's daily accrual (E29; [payouts](../../docs/api/payouts.md)); only with `PAYOUTS_STATE_SECRET` |
+| GET | `/v1/providers/me` | `read` | The provider this principal owns: payout account status, this month's runs and earnings |
+| POST | `/v1/providers/me/connect` | `write` (key only) | A Stripe Connect Express onboarding link |
+| GET | `/v1/providers/connect/return`, `/v1/providers/connect/refresh` | signed `state` | Stripe's return page (binds `payout_account_ref`) and a fresh link (302) |
+| GET | `/v1/providers/me/statements?month=` | `read` | The provider's monthly statement and payout decision |
+| POST | `/v1/admin/providers` | `admin` key | Bind a listed provider to its owner principal |
+| POST | `/v1/admin/providers/{id}/adjustments` | `admin` key, Idempotency-Key | A refund or a dispute against a provider |
+| POST | `/v1/admin/providers/{id}/disputes/{entry}/resolve` | `admin` key | `provider_won` / `provider_lost` |
+| POST | `/v1/admin/payouts/run` | `admin` key | Pay a closed month (idempotent per provider-month) |
+
+The open tool catalog (`GET /v1/catalog`, `GET /v1/catalog/{tool_id}`, `GET /catalog`) is served by
+the router (`apps/router`, [catalog](../../docs/api/catalog.md)). With `X402_ENABLED=1` (off by
+default; [ADR 0002](../../docs/decisions/0002-x402.md)) a `/mcp` 402 also offers the x402 rail and
+`X-PAYMENT` pays one call ([402](../../docs/api/402.md)).
 
 Everywhere a key is accepted, an OAuth access token (`sat_…`) is accepted too, as the consenting
 key with at most its scopes — except key management, licence linking and admin routes.
@@ -736,8 +750,9 @@ Field notes:
 - `unit` is one of `ingest`, `model_op`, `run`, `storage` (`/.well-known/pricing.json`).
 - `usage` and `latency_ms` are present so the envelope matches a `200`'s (§7.2); the quantity is
   `0` because nothing was billed.
-- `accepts` is ordered by preference. Today it holds the `card` rail; an `x402` rail can be
-  appended later without changing the shape.
+- `accepts` is ordered by preference. It holds the `card` rail; where `X402_ENABLED=1` an `x402`
+  entry follows it (see "The x402 rail" below). Off by default and off in production
+  (docs/decisions/0002-x402.md).
 
 ## Headers
 
@@ -773,6 +788,42 @@ that reads only headers has the full quote.
    Stripe: the gateway's webhook (`POST /v1/stripe/webhook`) credits the wallet when Stripe
    confirms, idempotently by event id.
 3. The agent retries the call that answered `402`, unchanged.
+
+## The x402 rail (behind `X402_ENABLED`, off by default)
+
+Decision: not accepted in production today; the implementation ships behind a flag so it can be
+turned on without a release when the criteria in docs/decisions/0002-x402.md are met.
+Implementation: `apps/api/src/billing/x402.ts` and the `/mcp` path in `apps/api/src/metering.ts`;
+tests: `apps/api/test/x402.test.ts`.
+
+With the flag on, a `payment_required` 402 appends:
+
+```json
+{ "rail": "x402", "scheme": "exact", "network": "eip155:8453", "asset": "0x…USDC", "payTo": "0x…",
+  "amount": "6000", "maxAmountRequired": "6000", "maxTimeoutSeconds": 60,
+  "resource": "https://api.shogunaios.com/mcp", "description": "…", "mimeType": "application/json",
+  "extra": { "name": "USDC", "version": "2", "amount_micro_usd": 6000 } }
+```
+
+USDC has 6 decimals, so the atomic amount equals `amount_micro_usd`. `cap_exceeded` never offers it:
+a cap binds x402-funded calls too.
+
+To pay, resend the same request with `X-PAYMENT: <base64 of an x402 PaymentPayload>` (the v2 name
+`PAYMENT-SIGNATURE` is also read). The gateway:
+
+1. refuses a payload it has seen before: `402` with `error.code: "payment_replayed"` (a payment pays
+   for one call; sign a new one);
+2. verifies it through the facilitator (`X402_FACILITATOR_URL`, `POST /verify`) against the
+   requirement for this call; a rejection is `402` `payment_invalid` with a fresh `accepts`;
+3. reserves against the hard caps with `funding: "x402"` — the wallet is not touched;
+4. forwards the call; on a `2xx` it settles the payment (`POST /settle`) and the receipt at the
+   quoted price, and answers `X-PAYMENT-RESPONSE` (also `PAYMENT-RESPONSE`): base64 JSON
+   `{ success, transaction, network, payer }`, plus `X-Usage-Funding: x402`;
+5. on anything but a `2xx` it settles nothing: the payment is not captured and the receipt costs 0.
+
+A facilitator outage before verification answers `503` and leaves the payload reusable. If the
+settlement itself fails after a successful call, the call is not charged and
+`X-PAYMENT-RESPONSE.success` is `false`. `GET /v1/receipts` shows `funding` per receipt.
 
 ## Client guidance
 
@@ -964,6 +1015,42 @@ at or above it; at most once per principal per UTC day.
 ```
 
 Emitted when a hard cap refuses a call (`402 cap_exceeded`); once per counter per period.
+
+---
+
+<!-- file: docs/api/catalog.md -->
+
+# Open tool catalog
+
+Every endpoint listed in the ShogunAgent router, public and without a key: price, live health, p50/p95 latency, categories, the first-party label, the permission level, the provider's data-handling statement, and the score formula `discover` ranks with. Plan: E29. Served by the router (`apps/router/src/open-catalog.ts`) from the compiled catalog — nothing on it is written by hand. Tests: `apps/router/test/open-catalog.test.ts`.
+
+| Route | Returns |
+|---|---|
+| `GET /v1/catalog` | `{ format: "shogunagent-open-catalog/1", catalog_hash, entry_count, provider_count, ranking, pricing, entries[] }`. Filters: `?category=state`, `?provider=monid`, `?first_party=true` |
+| `GET /v1/catalog/{tool_id}` | one entry plus `description`, `exclusions`, `notes`, `input_schema`, `output_schema` and the formula; `404 tool_not_found` with `next_action: "discover"` otherwise |
+| `GET /catalog` | the same list as an HTML page: no JavaScript, every value escaped, `Content-Security-Policy: default-src 'none'` |
+
+An entry:
+
+```json
+{
+  "tool_id": "shogunagent.state.commitments.list", "provider_id": "shogunagent", "provider_name": "ShogunAgent",
+  "first_party": true, "label": "first_party",
+  "summary": "Find what the user committed to: promises, deliverables and deadlines they made to others.",
+  "categories": ["state", "memory"],
+  "permission": { "level": "L1", "class": "read", "meaning": "Runs immediately. Reads only; nothing leaves the user's data." },
+  "price": { "model": "per_call", "unit": "call", "cost_micro_usd": 0, "quote_micro_usd": 0, "quote_usd": "$0", "failures_cost": 0, "empty_results_cost": 0 },
+  "health": { "p50_ms": 40, "p95_ms": 120, "success_rate": 0.999, "source": "declared" },
+  "data_handling": { "retention": "user_account", "retention_days": 0, "zero_retention": false, "regions": ["global"], "statement": "…" },
+  "docs_url": "https://…", "entry_hash": "…",
+  "links": { "detail": "/v1/catalog/shogunagent.state.commitments.list", "inspect": "/v1/router/inspect", "run": "/v1/router/run" }
+}
+```
+
+- `health.source` is `observed` once the router has seen 20 runs of the tool, `declared` (the provider's baseline) before that.
+- `data_handling` is `null` for passthrough entries (an imported marketplace catalog), which are handled under that marketplace's terms.
+- `ranking.formula` is the exact formula `router.discover` uses; `ranking.policy` states that first-party tools get no boost, no pinned slot and no hidden term (CLAUDE.md invariant 13).
+- Legal names, contacts and payout references from `provider.json` are never published: they are not in the compiled catalog at all.
 
 ---
 
@@ -1396,6 +1483,113 @@ is revoked or expires. It cannot revoke or re-cap keys, link a licence, or call 
 
 Codes, access tokens and refresh tokens are stored only as SHA-256 hashes; none of them, nor the
 client id or redirect URI, appears in a log line.
+
+---
+
+<!-- file: docs/api/payouts.md -->
+
+# Provider payouts
+
+How a tool provider listed in the router gets paid: every settled run accrues to the provider named in its `provider.json`, a monthly job pays the balance through Stripe Connect Express, and the provider reads a statement per month. Plan: E29. Implementation: `apps/api/src/payouts.ts` (rules, in-memory store, monthly job), `apps/api/src/payouts-pg-store.ts` (Postgres, `apps/api/sql/provider-payouts.sql`), `apps/api/src/payouts-app.ts` (routes), `apps/api/src/billing/connect.ts` (Stripe Connect over `fetch`, no SDK); the router side is `apps/router/src/settlement.ts`. Tests: `apps/api/test/payouts.test.ts`, `apps/router/test/settlement.test.ts`. Amounts are integer micro-USD (1 USD = 1,000,000).
+
+## 1. Accrual: the settlement seam
+
+The router settles every run it reserved exactly once and sends the settlement to `POST /v1/internal/router/settlements` with `Authorization: Bearer <ROUTER_SETTLEMENT_TOKEN>`:
+
+```json
+{ "settlements": [
+  { "format": "shogunagent-run-settlement/1", "run_id": "9f0c…", "ts": 1792411200000,
+    "tool_id": "acme.lookup", "provider_id": "acme", "first_party": false,
+    "payout_account_ref": "acct_1Acme", "outcome": "ok", "quantity": 1, "provider_micro_usd": 1000 } ] }
+```
+
+- Content-free by construction: no input, no output, no actor, no key. Unknown fields are rejected.
+- `outcome` is `ok`, `empty`, `provider_error` or `transport_error`. Only `ok` carries a price; failures and empty results settle at $0 and count as runs.
+- Idempotent by `run_id`: `{ "recorded": 1, "duplicates": 0 }`, then `{ "recorded": 0, "duplicates": 1 }` for a redelivery. Up to 100 per request; one invalid entry rejects the request and records nothing.
+- `payout_account_ref` comes from the provider's `provider.json` (`apps/router/connectors/schema.md` §9).
+
+Each settlement is added to the provider's accrual for its UTC day (`provider_accruals`): runs by outcome, the provider's price, and our take.
+
+| Payee | When | Take | Paid out |
+|---|---|---|---|
+| `connect` | a third-party provider with a payout reference | 5% of the provider's price, rounded up (`RUN_MARKUP_BPS`, the same figure `/.well-known/pricing.json` publishes) | yes, through Stripe Connect |
+| `first_party` | `first_party: true` or a `first-party:` reference | 0 (the revenue is ours) | never |
+| `passthrough` | no payout reference (an imported marketplace catalog such as Monid) | 0 (the imported price already carries its markup) | never; settled on that marketplace's invoice |
+
+An agent pays `provider price + take` for a third-party run; failures and empty results cost the agent nothing and earn the provider nothing.
+
+### Delivery
+
+The router's `HttpSettlementSink` retries a failed POST three times (the route is idempotent) and then counts the settlement as dropped. A durable outbox in the router is the production follow-up; until it exists a dropped settlement is an under-payment to the provider, never an over-payment.
+
+## 2. Onboarding (Stripe Connect Express)
+
+1. When a listing PR is merged, an operator binds the provider to the principal whose agent keys act for it: `POST /v1/admin/providers {"provider_id": "acme", "owner_principal_id": "prn_…"}` (admin key).
+2. The provider's agent calls `POST /v1/providers/me/connect` with its own key (not an OAuth token). The gateway creates an Express account once (`Idempotency-Key: connect:account:<provider_id>`) and answers `201 { url, expires_at, next_action: "approve_at_url" }`: a Stripe-hosted onboarding link a human at the provider opens.
+3. Stripe returns the human to `GET /v1/providers/connect/return?state=…`, a page without JavaScript. The gateway reads the account from Stripe and, once details are submitted and payouts are enabled, marks it `active` and **binds `payout_account_ref` to the Connect account id**. If the link expired, Stripe sends the human to `GET /v1/providers/connect/refresh?state=…`, which mints a new link and redirects (302).
+4. `state` is HMAC-signed with `PAYOUTS_STATE_SECRET`, names one provider and expires after 7 days; a forged or expired state is a 400 page.
+
+`GET /v1/providers/me` (read) shows the account status (`unboarded`, `onboarding`, `active`, `restricted`), this month's runs and earnings, and the minimum payout; while onboarding is unfinished it refreshes the status from Stripe and offers the onboarding route again. A principal owning several providers passes `?provider_id=`.
+
+## 3. Monthly payout
+
+The sweep pays the previous UTC month once it has closed (one hour after it ends), and an operator can run a month with `POST /v1/admin/payouts/run {"month": "2026-10"}`. For each `connect` provider:
+
+```
+payable = earned through the month end − refunds − lost disputes − everything already paid (any month)
+amount  = payable rounded down to whole cents
+```
+
+| Decision | When |
+|---|---|
+| `held` / `account_not_active` | no Connect account, or Stripe has not enabled payouts |
+| `held` / `payout_ref_mismatch` | `provider.json` names an `acct_…` that is not the account this provider onboarded |
+| `held` / `dispute_open` | any dispute against the provider is open |
+| `below_minimum` | `amount` is under `PAYOUT_MIN_USD` (default $10); the balance carries to the next month |
+| `pending` → `paid` | otherwise: `POST /v1/transfers` with `destination=<acct>`, `transfer_group` and `Idempotency-Key: payout:<provider_id>:<YYYY-MM>` |
+
+Guarantees:
+
+- **Once per provider-month.** A `paid` month is never decided again. A `pending` month (the transfer failed or the answer was lost) is resent with the same amount and the same Idempotency-Key, so Stripe returns the first transfer instead of making a second.
+- **Never twice across months.** Payouts are cumulative: a held or carried balance is paid by a later month, and re-deciding an earlier month subtracts what later months already paid.
+- **Refunds and disputes.** `POST /v1/admin/providers/{id}/adjustments` (admin, `Idempotency-Key` required) records `{"kind": "refund" | "dispute", "amount_micro_usd", "reason", "run_id"?}`. A refund is deducted. A dispute holds the provider's payout until `POST /v1/admin/providers/{id}/disputes/{entry}/resolve {"outcome": "provider_won" | "provider_lost"}`; a lost dispute is deducted.
+
+## 4. Statement
+
+`GET /v1/providers/me/statements?month=YYYY-MM` (read):
+
+```json
+{
+  "schema": "shogunagent/provider-statement/v1", "provider_id": "acme", "month": "2026-10", "status": "closed",
+  "currency": "USD", "amount_unit": "micro_usd", "payee": "connect",
+  "totals": { "runs": 13, "ok_runs": 12, "empty_runs": 0, "failed_runs": 1,
+              "provider_micro_usd": 12000000, "take_micro_usd": 600000, "charged_micro_usd": 12600000 },
+  "days": [ { "day": "2026-10-20", "runs": 13, "ok_runs": 12, "empty_runs": 0, "failed_runs": 1, "provider_micro_usd": 12000000, "take_micro_usd": 600000, "charged_micro_usd": 12600000 } ],
+  "adjustments": [],
+  "payout": { "status": "paid", "reason": null, "earned_to_date_micro_usd": 12000000, "refunded_micro_usd": 0, "disputes_lost_micro_usd": 0,
+              "previously_paid_micro_usd": 0, "payable_micro_usd": 12000000, "amount_micro_usd": 12000000, "transfer_id": "tr_…", "decided_at": "…" },
+  "minimum_payout_micro_usd": 10000000, "take_bps": 500, "notes": "…",
+  "hash": "sha256:…"
+}
+```
+
+`hash` is SHA-256 over the canonical JSON of every other field (also in `X-Statement-Hash`).
+
+## 5. What never leaves the ledger
+
+The open catalog (`GET /v1/catalog`, `docs/api/catalog.md`) publishes `data_handling` per endpoint and nothing else from `provider.json`: legal names, contacts and payout references are not in the compiled catalog and appear on no public surface. Settlement rows carry no body and are deleted after 400 days; daily accruals and payout decisions are kept. Logs carry fixed words only (`settlements_recorded`, `payouts_run`, …), never an amount, a provider id or a reference.
+
+## Configuration
+
+| Variable | |
+|---|---|
+| `PAYOUTS_STATE_SECRET` | secret, ≥ 32 characters; turns the payout routes and the monthly job on |
+| `ROUTER_SETTLEMENT_TOKEN` | secret, ≥ 32 characters; the router's bearer for the settlement route (same value in `apps/router`) |
+| `PAYOUT_MIN_USD` | optional, default 10 |
+| `STRIPE_SECRET_KEY` | the platform key; Connect onboarding and transfers use it |
+| router `ROUTER_SETTLEMENT_URL` | where the router posts settlements |
+
+Apply `apps/api/sql/provider-payouts.sql` (additive, idempotent) before enabling.
 
 ---
 

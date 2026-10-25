@@ -292,9 +292,9 @@
 | E26 | BYOC / オンプレ・サイドカー（Helm chart、顧客 KMS）、国内リージョン選択、SSO/SCIM、監査エクスポート、ZDR 契約文書 | `deploy/`, `apps/api` |
 | E27 | W3C AI Agent Memory Interoperability CG 参加。export v2（CG の合意形式に合わせる） | `docs/api/export-v2.md` |
 | E28 | open-loop tracking ベンチ v1 の外部公開と採点受付 | `crates/loop-bench/` |
-| E29 | プロバイダ支払い（Stripe Connect）とカタログの一般公開 | `apps/api/src/payouts.ts` |
-| E30 | x402 受け入れの判断（実商取引量、精算コスト、法務）。受け入れる場合は 402 ペイロードの `accepts` に追加するだけ | `docs/decisions/` |
-| E31 | Monid への per-call 掲載（記憶カテゴリができた場合） | `apps/router/connectors/` |
+| E29 | プロバイダ支払い（Stripe Connect）とカタログの一般公開。実装済み（2026-10-25）: ルーターの run 精算シーム（`apps/router/src/settlement.ts` → `POST /v1/internal/router/settlements`、run_id で冪等、プロバイダ別・日次の accrual、5% の取り分は `RUN_MARKUP_BPS`）、Connect Express のオンボーディング、月次支払い（プロバイダ×月で冪等、最低額、紛争中は保留）、`GET /v1/providers/me/statements`、公開カタログ `GET /v1/catalog`・`/catalog`（`docs/api/payouts.md`, `docs/api/catalog.md`）。追加 SQL: `apps/api/sql/provider-payouts.sql` | `apps/api/src/payouts.ts`, `apps/router/src/open-catalog.ts` |
+| E30 | x402 受け入れの判断（実商取引量、精算コスト、法務）。判断済み（2026-10-25）: 本番では受け入れない。実装は `X402_ENABLED`（既定 off）の裏に置く。402 の `accepts` に `x402` を足し、`X-PAYMENT` をファシリテータで検証、再利用は拒否、レシートは `funding: "x402"`（`docs/decisions/0002-x402.md`, `docs/api/402.md`） | `docs/decisions/0002-x402.md`, `apps/api/src/billing/x402.ts` |
+| E31 | Monid への per-call 掲載（記憶カテゴリができた場合）。準備のみ（2026-10-25、未提出）: Monid 形式の provider / endpoint 定義、提出手順、未決事項（記憶カテゴリが無い、エンドユーザーごとの資格情報、run 本文の保存）、チェックリスト | `integrations/monid/` |
 
 ---
 
@@ -372,7 +372,7 @@ x402 の `payment-required` ヘッダ形式と互換のフィールド名を使�
 | hosted の DB | principal ごとの SQLite ファイル（R2 + Durable Object か VM 上のファイル） | Durable Object の SQLite 上限（1GB/DO）と SQLCipher の可用性 |
 | 埋め込みモデル | Qwen3-Embedding-0.6B vs nomic-embed | 日英の MTEB、サイズ、ライセンス。全腕固定が条件 |
 | 承認の既定 | L2 を MRTR フォームにするか、全部 URL にするか | MCP クライアントの MRTR 対応率 |
-| x402 | 受け入れる／受け入れない | 実商取引量、精算コスト、法務。Phase 3 |
+| x402 | 受け入れる／受け入れない | 判断済み（E30）: 本番では受け入れない（フラグの裏に実装）。再判断の条件は `docs/decisions/0002-x402.md` |
 
 ---
 

@@ -50,6 +50,7 @@ import { metered, priceCall, type MeteringDeps } from "./metering.js";
 import { HANDOFF_PATH, handleHandoff } from "./handoff.js";
 import { createApprovalsApp, type ApprovalsDeps } from "./approvals/app.js";
 import { createWellknown, type WellknownDeps } from "./wellknown/app.js";
+import { registerPayoutRoutes, type PayoutDeps } from "./payouts-app.js";
 
 /** Self-registration: at most this many per IP per hour (in-process default; production wires
  * `SqlWindowLimiter`). */
@@ -99,6 +100,9 @@ export interface AgentDeps extends MeteringDeps {
   /** Remote approvals (E15, approvals/app.ts): the approval page, the Slack app and the
    * webhooks. Absent = those routes do not exist on this gateway. */
   approvals?: Omit<ApprovalsDeps, "log" | "now" | "publicBaseUrl">;
+  /** Provider payouts (E29, payouts-app.ts): the settlement seam, Connect onboarding, provider
+   * statements and the payout run. Absent = those routes do not exist on this gateway. */
+  payouts?: PayoutDeps;
 }
 
 /** The client IP as the edge reports it. Workers set `CF-Connecting-IP`; behind another proxy the
@@ -470,7 +474,7 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
       return c.json({
         receipts: rows.map((r) => ({
           id: r.receiptId, key_id: r.keyId, method: r.method, name: r.name ?? null, unit: r.unit, quantity: r.quantity,
-          cost_micro_usd: r.costMicros, reserved_micro_usd: r.settled ? null : r.estimateMicros, settled: r.settled, ts: new Date(r.ts).toISOString(),
+          cost_micro_usd: r.costMicros, reserved_micro_usd: r.settled ? null : r.estimateMicros, settled: r.settled, funding: r.funding, ts: new Date(r.ts).toISOString(),
         })),
         next_since: last ? new Date(last.ts + 1).toISOString() : null,
       }, 200, { "cache-control": "no-store" });
@@ -511,6 +515,12 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     ...(deps.stripe ? { stripe: { secretKey: deps.stripe.secretKey, ...(deps.stripe.fetch ? { fetch: deps.stripe.fetch } : {}), ...(deps.stripe.overagePriceId ? { overagePriceId: deps.stripe.overagePriceId } : {}) } } : {}),
     ...(deps.licensePublicKey ? { licensePublicKey: deps.licensePublicKey } : {}),
   });
+
+  // --- E29 provider payouts: the router's settlement seam, Connect onboarding, statements ---
+  if (deps.payouts) {
+    for (const path of ["/v1/providers/*", "/v1/internal/router/settlements", "/v1/admin/providers", "/v1/admin/providers/*", "/v1/admin/payouts/*"]) app.use(path, wellknown.observe);
+    registerPayoutRoutes(app, { ...deps.payouts, log: deps.log, now, publicBaseUrl: deps.publicBaseUrl, requireKey, principalOf });
+  }
 
   // --- remote approvals (E15): the page, Slack, webhooks, and the notification hook ---
   let onApprovalToken: MeteringDeps["onApprovalToken"];

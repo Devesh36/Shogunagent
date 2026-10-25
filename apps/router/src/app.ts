@@ -8,6 +8,7 @@ import type { StatusCode } from "hono/utils/http-status";
 import { callVerb, type RouterDeps } from "./engine.js";
 import { requestLogger } from "./logging.js";
 import { handleMcp } from "./mcp.js";
+import { openCatalog, openCatalogDetail, openCatalogHtml, type OpenCatalogFilter } from "./open-catalog.js";
 import { errorBody } from "./responses.js";
 import { Secret } from "./secret.js";
 import type { VerbName } from "./verbs.js";
@@ -38,6 +39,34 @@ export function createApp(deps: RouterDeps): Hono {
   app.get("/health", (c) => c.json({ ok: true, catalog_hash: deps.catalog.manifest.hash, entries: deps.catalog.manifest.entry_count }));
 
   app.get("/v1/router/catalog", (c) => sendJson(c, deps.catalog.manifest, 200));
+
+  // E29: the open public catalog. No key; generated from the compiled catalog and live health.
+  const publicCache = { "cache-control": "public, max-age=60" };
+  app.get("/v1/catalog", (c) => {
+    const fp = c.req.query("first_party");
+    const filter: OpenCatalogFilter = {
+      ...(c.req.query("category") ? { category: c.req.query("category") as string } : {}),
+      ...(c.req.query("provider") ? { provider: c.req.query("provider") as string } : {}),
+      ...(fp === "true" || fp === "false" ? { first_party: fp === "true" } : {}),
+    };
+    for (const [k, v] of Object.entries(publicCache)) c.header(k, v);
+    return sendJson(c, openCatalog(deps.catalog, deps.health, filter), 200);
+  });
+  app.get("/v1/catalog/:tool_id", (c) => {
+    const detail = openCatalogDetail(deps.catalog, deps.health, c.req.param("tool_id"));
+    if (!detail) return sendJson(c, errorBody("tool_not_found", `no tool "${c.req.param("tool_id")}" in the catalog; GET /v1/catalog lists every listed endpoint`, "discover", 0), 404);
+    for (const [k, v] of Object.entries(publicCache)) c.header(k, v);
+    return sendJson(c, detail, 200);
+  });
+  app.get("/catalog", (c) =>
+    c.newResponse(openCatalogHtml(openCatalog(deps.catalog, deps.health)), 200, {
+      "content-type": "text/html; charset=UTF-8",
+      // No script runs on this page; the policy says so to the browser too.
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "x-content-type-options": "nosniff",
+      ...publicCache,
+    }),
+  );
 
   const verb = (path: string, name: VerbName) => {
     app.post(path, async (c) => {

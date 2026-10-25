@@ -12,20 +12,25 @@
  * `accepts[]`, plus the plan's fields), so a client that only looks at headers sees it too.
  */
 import type { MeterUnit } from "../pricing.js";
+import type { X402Requirement } from "./x402.js";
 
 export const X402_VERSION = 2;
 
 /** Field names follow x402's `accepts` entries where they overlap (`scheme`/`network` are not
  * used for a card rail; `url` is where a human completes the payment). */
-export interface PaymentRail {
+export interface CardRail {
   rail: "card";
   url: string;
   /** The HTTP method the rail's `url` expects. */
   method: "POST";
 }
 
+/** A rail in `payment.accepts`: the card top-up, and — only with `X402_ENABLED=1` — an x402
+ * PaymentRequirements entry (billing/x402.ts). */
+export type PaymentRail = CardRail | X402Requirement;
+
 export interface PaymentRequiredPayload {
-  error: { code: "payment_required" | "cap_exceeded"; message: string; next_action: "top_up" | "retry_after" };
+  error: { code: "payment_required" | "cap_exceeded" | "payment_invalid" | "payment_replayed"; message: string; next_action: "top_up" | "retry_after" };
   payment: {
     amount_micro_usd: number;
     unit: MeterUnit;
@@ -45,6 +50,11 @@ export interface PaymentRequiredInput {
   balanceMicros: number;
   /** The absolute URL of `POST /v1/wallet/topup`. */
   topupUrl: string;
+  /** The x402 requirement for this amount, appended after the card rail (E30, flag-gated). */
+  x402?: X402Requirement;
+  /** A presented x402 payment was refused (E30): the code and the plain-English reason. The
+   * accepts list is the same, so the agent can pay again. */
+  refused?: { code: "payment_invalid" | "payment_replayed"; message: string };
 }
 
 export interface CapExceededInput {
@@ -62,15 +72,15 @@ export function paymentRequiredPayload(input: PaymentRequiredInput | CapExceeded
   if (input.reason === "payment_required") {
     const short = input.amountMicros - input.balanceMicros;
     return {
-      error: {
+      error: input.refused ? { ...input.refused, next_action: "top_up" } : {
         code: "payment_required",
-        message: `This call costs ${input.amountMicros} micro-USD and the wallet has ${input.balanceMicros} spendable. Top up at least ${Math.max(short, 0)} micro-USD, then retry the same request.`,
+        message: `This call costs ${input.amountMicros} micro-USD and the wallet has ${input.balanceMicros} spendable. Top up at least ${Math.max(short, 0)} micro-USD, then retry the same request.${input.x402 ? " Or pay this call with x402: send X-PAYMENT for the x402 entry in payment.accepts." : ""}`,
         next_action: "top_up",
       },
       payment: {
         amount_micro_usd: input.amountMicros,
         unit: input.unit,
-        accepts: [{ rail: "card", url: input.topupUrl, method: "POST" }],
+        accepts: [{ rail: "card", url: input.topupUrl, method: "POST" }, ...(input.x402 ? [input.x402] : [])],
         retry_after: 0,
         balance_micro_usd: input.balanceMicros,
       },

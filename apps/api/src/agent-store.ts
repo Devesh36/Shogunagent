@@ -80,6 +80,9 @@ export interface ReserveInput {
   /** The active commit's terms (E19): its discount is already in `micros`; a `commit`-funded
    * call holds nothing on the wallet and is drawn down from the commit at settlement. */
   commit?: CommitTerms;
+  /** `x402` (E30): the call is paid per call by a verified x402 payment; nothing is held on the
+   * wallet, the caps still bound it, and the receipt records the funding. */
+  funding?: "x402";
   ts: number;
   day: string;
   month: string;
@@ -334,7 +337,7 @@ export class InMemoryAgentStore implements AgentStore {
         receiptId: input.receiptId, principalId: input.principalId, keyId: input.keyId, method: input.method,
         ...(input.name !== undefined ? { name: input.name } : {}),
         unit: input.unit, quantity: input.quantity, estimateMicros: input.micros, costMicros: 0, listCostMicros: 0,
-        funding: input.commit?.funding ?? "wallet", ...(input.commit ? { commitId: input.commit.commitId } : {}),
+        funding: input.funding ?? input.commit?.funding ?? "wallet", ...(input.commit ? { commitId: input.commit.commitId } : {}),
         settled: false, day: input.day, month: input.month, ts: input.ts,
       };
       if (input.micros === 0) {
@@ -372,7 +375,7 @@ export class InMemoryAgentStore implements AgentStore {
       if (r.funding === "commit" && commit) {
         commit.overageMicros += overagePart(commit.amountMicros, commit.drawnMicros, actualMicros);
         commit.drawnMicros += actualMicros;
-      } else {
+      } else if (r.funding !== "x402") {
         const w = this.walletRow(r.principalId);
         w.reservedMicros = Math.max(0, w.reservedMicros - r.estimateMicros);
         w.balanceMicros = Math.max(0, w.balanceMicros - actualMicros);
@@ -561,6 +564,7 @@ export class InMemoryAgentStore implements AgentStore {
         u.listMicros += r.listCostMicros;
         u.chargedMicros += r.costMicros;
         if (r.funding === "commit") u.commitFundedMicros += r.costMicros;
+        if (r.funding === "x402" && r.costMicros > 0) u.x402FundedMicros = (u.x402FundedMicros ?? 0) + r.costMicros;
         usage.set(r.unit, u);
       }
       const inMonth = (ts: number): boolean => ts >= bounds.start && ts < bounds.end;

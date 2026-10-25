@@ -183,6 +183,8 @@ async function sweep(booted: Booted): Promise<void> {
       await store.usage.checkSchema();
       if (booted.config.agent) await store.agent.checkSchema();
       if (booted.config.agent?.oauthSecret) await store.oauth.checkSchema();
+      if (booted.config.agent?.payouts) await store.payouts.checkSchema();
+      if (booted.config.agent?.x402) await store.x402.checkSchema();
     } catch (e) {
       operational.error(e instanceof Error ? e.message : "shared store table missing or unreadable");
       return;

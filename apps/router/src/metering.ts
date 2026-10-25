@@ -8,6 +8,7 @@
  */
 import { shortHash } from "./hash.js";
 import type { Secret } from "./secret.js";
+import type { RunSettlement, SettlementSink } from "./settlement.js";
 
 export interface Quote {
   tool_id: string;
@@ -33,8 +34,12 @@ export type Reservation =
 export interface MeteringClient {
   identify(bearer: Secret | undefined): Promise<Identity>;
   reserve(identity: { actor: string; anonymous: boolean }, quote: Quote): Promise<Reservation>;
-  /** Settles the measured cost against a reservation; 0 releases it. */
-  settle(reservationId: string, cost_micro_usd: number): Promise<void>;
+  /**
+   * Settles the measured cost against a reservation; 0 releases it. `settlement` (E29) is the
+   * content-free record of the run the provider ledger accrues from (src/settlement.ts); a client
+   * wired to apps/api forwards it to `POST /v1/internal/router/settlements`.
+   */
+  settle(reservationId: string, cost_micro_usd: number, settlement?: RunSettlement): Promise<void>;
 }
 
 export interface InMemoryMeteringOptions {
@@ -43,6 +48,8 @@ export interface InMemoryMeteringOptions {
   balances?: Record<string, number>;
   /** Where a 402 sends the human, once. */
   topUpUrl?: string;
+  /** Where run settlements go (E29). Absent = not forwarded (development). */
+  settlements?: SettlementSink;
 }
 
 export class InMemoryMeteringClient implements MeteringClient {
@@ -50,11 +57,13 @@ export class InMemoryMeteringClient implements MeteringClient {
   readonly #reservations = new Map<string, { actor: string; amount: number }>();
   readonly #defaultBalance: number;
   readonly #topUpUrl: string;
+  readonly #settlements: SettlementSink | undefined;
   #seq = 0;
 
   constructor(opts: InMemoryMeteringOptions = {}) {
     this.#defaultBalance = opts.defaultBalanceMicroUsd ?? 1_000_000;
     this.#topUpUrl = opts.topUpUrl ?? "https://api.shogunaios.com/wallet/topup";
+    this.#settlements = opts.settlements;
     for (const [k, v] of Object.entries(opts.balances ?? {})) this.#balances.set(shortHash(k), v);
   }
 
@@ -94,11 +103,16 @@ export class InMemoryMeteringClient implements MeteringClient {
     return { ok: true, reservation_id: id };
   }
 
-  async settle(reservationId: string, cost_micro_usd: number): Promise<void> {
+  async settle(reservationId: string, cost_micro_usd: number, settlement?: RunSettlement): Promise<void> {
     const r = this.#reservations.get(reservationId);
-    if (!r) return;
-    this.#reservations.delete(reservationId);
-    const balance = this.#balances.get(r.actor) ?? this.#defaultBalance;
-    this.#balances.set(r.actor, balance + r.amount - cost_micro_usd);
+    if (r) {
+      this.#reservations.delete(reservationId);
+      const balance = this.#balances.get(r.actor) ?? this.#defaultBalance;
+      this.#balances.set(r.actor, balance + r.amount - cost_micro_usd);
+    } else if (!reservationId.startsWith("free-")) {
+      return;
+    }
+    // Free reservations settle too: a $0 run still counts on the provider's statement.
+    if (settlement && this.#settlements) await this.#settlements.accrue(settlement).catch(() => undefined);
   }
 }

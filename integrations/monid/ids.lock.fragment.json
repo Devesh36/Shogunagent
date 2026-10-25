@@ -1,0 +1,8 @@
+{
+  "_note": "Entries to merge into Monid's connectors/ids.lock.json (checked by `deno task ids:check`). Monid endpoint ids are kebab-case; the ShogunAgent wire names they map to are frozen and listed for review only.",
+  "shogunagent": {
+    "state-commitments-list": { "wire_name": "state.commitments.list", "method": "GET", "path": "/v1/state/commitments" },
+    "state-open-loops-list": { "wire_name": "state.open_loops.list", "method": "GET", "path": "/v1/state/open_loops" },
+    "memory-recall": { "wire_name": "memory.recall", "method": "POST", "path": "/v1/memory/recall" }
+  }
+}

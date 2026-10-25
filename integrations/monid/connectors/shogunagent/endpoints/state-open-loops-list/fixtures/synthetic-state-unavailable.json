@@ -1,0 +1,6 @@
+{
+  "scenario": "synthetic-state-unavailable",
+  "input": { "person": "Mika" },
+  "response": { "status": 503, "body": { "error": { "code": "store_unavailable", "message": "Retry shortly.", "next_action": "retry_after" } } },
+  "expect": { "error": true }
+}

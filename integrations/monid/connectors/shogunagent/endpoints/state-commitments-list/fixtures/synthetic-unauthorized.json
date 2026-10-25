@@ -1,0 +1,9 @@
+{
+  "scenario": "synthetic-unauthorized",
+  "input": { "status": "open" },
+  "response": {
+    "status": 401,
+    "body": { "error": { "code": "missing_key", "message": "Send a valid agent key as `Authorization: Bearer sa_live_…` (register with POST /v1/agents).", "next_action": "register" } }
+  },
+  "expect": { "error": true }
+}

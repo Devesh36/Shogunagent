@@ -19,7 +19,8 @@ import { consoleLogger } from "./logging.js";
 import { InMemoryMeteringClient } from "./metering.js";
 import { InMemoryPersonalStore, PersonalRanker } from "./personal.js";
 import { InMemoryRunLogSink } from "./runlog.js";
-import { createFetchTransport } from "./transport.js";
+import { HttpSettlementSink } from "./settlement.js";
+import { createFetchTransport, createSettlementPoster } from "./transport.js";
 
 type App = ReturnType<typeof createApp>;
 let cached: { env: RouterEnv; app: App } | undefined;
@@ -29,10 +30,16 @@ function appFor(env: RouterEnv): App {
   const catalog = compileCatalog(allProviders());
   // E20: per-isolate stub, like the other stores. Production: the principal's tool_runs (V94) via the sidecar.
   const personal = new PersonalRanker(new InMemoryPersonalStore(), catalog.index);
+  const credentials = env as Record<string, string | undefined>;
+  // E29: every settled run is forwarded to apps/api's provider ledger when the URL is set. The
+  // token is read by the transport module at send time, never here.
+  const settlements = env.ROUTER_SETTLEMENT_URL
+    ? new HttpSettlementSink(createSettlementPoster({ env: credentials, url: env.ROUTER_SETTLEMENT_URL }))
+    : undefined;
   const app = createApp({
     catalog,
-    transport: createFetchTransport({ env: env as Record<string, string | undefined> }),
-    metering: new InMemoryMeteringClient({ topUpUrl: env.ROUTER_TOPUP_URL ?? DEFAULTS.ROUTER_TOPUP_URL }),
+    transport: createFetchTransport({ env: credentials }),
+    metering: new InMemoryMeteringClient({ topUpUrl: env.ROUTER_TOPUP_URL ?? DEFAULTS.ROUTER_TOPUP_URL, ...(settlements ? { settlements } : {}) }),
     runLog: new InMemoryRunLogSink(),
     personal,
     idempotency: new InMemoryIdempotencyStore(),

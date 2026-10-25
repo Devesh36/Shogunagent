@@ -1,0 +1,15 @@
+{
+  "scenario": "synthetic-open-commitments",
+  "input": { "status": "open", "limit": 2 },
+  "response": {
+    "status": 200,
+    "body": {
+      "items": [
+        { "id": "c_1", "text": "send the revised deck to Mika", "to_person": "Mika", "due": "2026-10-27", "status": "open", "confidence": 0.91, "provenance": { "event_id": "e_8812", "quote": "I'll send the revised deck by Monday" } },
+        { "id": "c_2", "text": "review the contract draft", "to_person": "Jun", "due": null, "status": "open", "confidence": 0.86, "provenance": { "event_id": "e_8901", "quote": "I will review the contract draft tonight" } }
+      ],
+      "next_cursor": null
+    }
+  },
+  "expect": { "usage": { "units": 1, "costUsd": 0 } }
+}

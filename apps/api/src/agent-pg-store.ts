@@ -86,7 +86,7 @@ function receiptFromRow(r: Row): Receipt {
     receiptId: String(r.receipt_id), principalId: String(r.principal_id), keyId: String(r.key_id), method: String(r.method),
     ...(optText(r.name) !== undefined ? { name: String(r.name) } : {}),
     unit: String(r.unit) as MeterUnit, quantity: num(r.quantity), estimateMicros: num(r.estimate), costMicros: num(r.cost),
-    listCostMicros: opt(r.list_cost) ?? num(r.cost), funding: r.funding === "commit" ? "commit" : "wallet",
+    listCostMicros: opt(r.list_cost) ?? num(r.cost), funding: r.funding === "commit" ? "commit" : r.funding === "x402" ? "x402" : "wallet",
     ...(optText(r.commit_id) !== undefined ? { commitId: String(r.commit_id) } : {}),
     settled: num(r.settled) === 1, day: String(r.day), month: String(r.month), ts: num(r.ts),
   };
@@ -214,7 +214,7 @@ export class SqlAgentStore implements AgentStore {
   reserve(input: ReserveInput): Promise<ReserveOutcome> {
     return this.tx<ReserveOutcome>(async (tx) => {
       if (!validReserve(input)) return { kind: "unavailable" };
-      const funding = input.commit?.funding ?? "wallet";
+      const funding = input.funding ?? input.commit?.funding ?? "wallet";
       const insertReceipt = (settled: 0 | 1): Promise<Row[]> => tx.query(`INSERT INTO agent_receipts(${RECEIPT_COLUMNS})
         VALUES($1::text,$2::text,$3::text,$4::text,$5::text,$6::text,$7::bigint,$8::bigint,0,$9::smallint,$10::text,$11::text,$12::bigint,0,$13::text,$14::text)`,
       [input.receiptId, input.principalId, input.keyId, input.method, input.name ?? null, input.unit, input.quantity, input.micros, settled, input.day, input.month, input.ts,
@@ -223,8 +223,9 @@ export class SqlAgentStore implements AgentStore {
         await insertReceipt(1);
         return { kind: "ok" };
       }
-      if (funding === "commit") {
-        // Commit-funded (E19): nothing is held on the wallet; the caps still bound the call.
+      if (funding === "commit" || funding === "x402") {
+        // Commit-funded (E19) or paid per call over x402 (E30): nothing is held on the wallet;
+        // the caps still bound the call.
         for (const counter of capCounters(input)) {
           const booked = await tx.query(`INSERT INTO agent_spend_periods(subject,period,micros)
             SELECT $1::text,$2::text,$3::bigint WHERE $3::bigint <= $4::bigint
@@ -283,7 +284,7 @@ export class SqlAgentStore implements AgentStore {
         const over = overagePart(num(commitRow.amount_micros), num(commitRow.drawn_micros), actualMicros);
         await tx.query("UPDATE agent_commits SET drawn_micros=drawn_micros+$2::bigint,overage_micros=overage_micros+$3::bigint WHERE commit_id=$1::text",
           [String(r.commit_id), actualMicros, over]);
-      } else {
+      } else if (r.funding !== "x402") {
         await tx.query(`UPDATE agent_wallets SET
           reserved=CASE WHEN reserved<$2::bigint THEN 0 ELSE reserved-$2::bigint END,
           balance=CASE WHEN balance<$3::bigint THEN 0 ELSE balance-$3::bigint END
@@ -464,7 +465,8 @@ export class SqlAgentStore implements AgentStore {
   async statementInputs(principalId: string, month: string, nowMs: number): Promise<StatementInputs> {
     const bounds = monthBounds(month) ?? { start: 0, end: 0 };
     const usage = await this.read(`SELECT unit,COUNT(*) AS calls,SUM(quantity) AS qty,SUM(COALESCE(list_cost,cost)) AS list,SUM(cost) AS charged,
-      SUM(CASE WHEN funding='commit' THEN cost ELSE 0 END) AS commit_funded
+      SUM(CASE WHEN funding='commit' THEN cost ELSE 0 END) AS commit_funded,
+      SUM(CASE WHEN funding='x402' THEN cost ELSE 0 END) AS x402_funded
       FROM agent_receipts WHERE principal_id=$1::text AND month=$2::text AND settled=1 GROUP BY unit`, [principalId, month]);
     const unsettled = num((await this.read("SELECT COUNT(*) AS n FROM agent_receipts WHERE principal_id=$1::text AND month=$2::text AND settled=0", [principalId, month]))[0]?.n);
     const credits = await this.read("SELECT topup_id,principal_id,micros,source,ts FROM agent_topups WHERE principal_id=$1::text AND ts>=$2::bigint AND ts<$3::bigint",
@@ -476,7 +478,7 @@ export class SqlAgentStore implements AgentStore {
     const tenantId = (await this.principal(principalId))?.tenantId ?? principalId;
     const commit = await this.activeCommit(principalId, tenantId, Math.min(nowMs, bounds.end - 1));
     return {
-      usage: usage.map((r) => ({ unit: String(r.unit) as MeterUnit, calls: num(r.calls), quantity: num(r.qty), listMicros: num(r.list), chargedMicros: num(r.charged), commitFundedMicros: num(r.commit_funded) })),
+      usage: usage.map((r) => ({ unit: String(r.unit) as MeterUnit, calls: num(r.calls), quantity: num(r.qty), listMicros: num(r.list), chargedMicros: num(r.charged), commitFundedMicros: num(r.commit_funded), ...(num(r.x402_funded) > 0 ? { x402FundedMicros: num(r.x402_funded) } : {}) })),
       unsettled,
       credits: credits.map((r) => ({ topupId: String(r.topup_id), principalId: String(r.principal_id), micros: num(r.micros), source: String(r.source), ts: num(r.ts) })),
       adjustments: adjustments.map(adjustmentFromRow),

@@ -1,0 +1,6 @@
+{
+  "scenario": "synthetic-nothing-recalled",
+  "input": { "query": "zebra accounting" },
+  "response": { "status": 200, "body": { "excerpts": [], "people": [], "projects": [], "chars": 0 } },
+  "expect": { "usage": { "units": 1, "costUsd": 0 } }
+}
