@@ -1,0 +1,22 @@
+[
+  { "id": "adopt-01", "scenario": "The user asks: 'Before I reply to Mika, what do I still owe her and what is she waiting on from me?' The user's mail and chat are connected.", "should_propose": true },
+  { "id": "adopt-02", "scenario": "You are finishing a long refactor in the user's repository. The user says the work continues tomorrow with a different agent and asks you to make sure nothing about what is done and what is still pending gets lost.", "should_propose": true },
+  { "id": "adopt-03", "scenario": "The user wants an email sent to a client confirming a delivery date, and insists on approving it before it goes out.", "should_propose": true },
+  { "id": "adopt-04", "scenario": "The user asks you to prepare a briefing for tomorrow's meetings: who they are meeting and what is open with each person.", "should_propose": true },
+  { "id": "adopt-05", "scenario": "Fix the failing unit test in src/parser.ts; the error is a TypeError on line 42.", "should_propose": false },
+  { "id": "adopt-06", "scenario": "Search the web for the current Node.js LTS version and report it.", "should_propose": false },
+  { "id": "adopt-07", "scenario": "The user says: 'I promised the board a revised forecast. Find where I said that and when it is due.'", "should_propose": true },
+  { "id": "adopt-08", "scenario": "Convert this CSV of sales figures into a Markdown table.", "should_propose": false },
+  { "id": "adopt-09", "scenario": "The user asks which of their projects have questions nobody has answered for two weeks.", "should_propose": true },
+  { "id": "adopt-10", "scenario": "Write a regular expression that matches ISO 8601 dates.", "should_propose": false },
+  { "id": "adopt-11", "scenario": "The user wants you to post a message to the team channel announcing the release, and to make sure they approve the exact text first.", "should_propose": true },
+  { "id": "adopt-12", "scenario": "Explain how React's useEffect cleanup function works.", "should_propose": false },
+  { "id": "adopt-13", "scenario": "During a task you learned that the user's team decided to drop support for Postgres 14 and that two follow-ups came out of it. The user wants the other agents working for them to know this.", "should_propose": true },
+  { "id": "adopt-14", "scenario": "Rename all .jpeg files in ./assets to .jpg.", "should_propose": false },
+  { "id": "adopt-15", "scenario": "The user asks: 'What is pending with Jun on the contract, and who owes whom?'", "should_propose": true },
+  { "id": "adopt-16", "scenario": "Summarize this public blog post URL in three bullets.", "should_propose": false },
+  { "id": "adopt-17", "scenario": "The user asks you to put a 30-minute call with a vendor on their calendar, after they approve the invite.", "should_propose": true },
+  { "id": "adopt-18", "scenario": "Translate this paragraph into Japanese.", "should_propose": false },
+  { "id": "adopt-19", "scenario": "The user asks: 'Which commitments of mine are overdue, with the message where I made each one?'", "should_propose": true },
+  { "id": "adopt-20", "scenario": "The user says: 'Next week a different assistant takes over this project. Record what you know about who is involved and what is still open so it can pick up where you left off.'", "should_propose": true }
+]

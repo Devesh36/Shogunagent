@@ -1,0 +1,107 @@
+name: selection-eval
+
+# E11-T2. On pull requests that touch a listing text, the mock-mode gate runs: the selection rate per
+# surface × model (and the SKILL.md adoption rate) must not fall more than 2 points below
+# packages/selection-eval/results/baseline.json. Mock mode is deterministic and needs no key.
+#
+# A manual dispatch with `live: true` runs the real model APIs with repository secrets and uploads
+# the results as an artifact. There is no live gate: the baseline is mock and the two are not
+# comparable. Keys are passed only as environment variables; the harness never prints them.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "SKILL.md"
+      - "apps/router/connectors/**"
+      - "packages/selection-eval/**"
+      - "docs/api/core-tools.md"
+      - "**/server.json"
+      - ".github/workflows/selection-eval.yml"
+  workflow_dispatch:
+    inputs:
+      live:
+        description: "Run against real model APIs with repository secrets (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY). Off = mock gate."
+        type: boolean
+        default: false
+      only:
+        description: "Comma-separated providers for a live run (anthropic,openai,gemini). Empty = every provider with a key."
+        type: string
+        default: ""
+  schedule:
+    # Weekly (plan E11-T1). Runs live when the secrets exist, mock otherwise: the harness falls back on its own.
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selection-eval-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gate:
+    name: mock gate (selection rate must not fall)
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.live != true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @shogunagent/selection-eval typecheck
+      - run: pnpm --filter @shogunagent/selection-eval test
+      - name: harness (mock)
+        run: pnpm --filter @shogunagent/selection-eval harness --mock
+      - name: gate against results/baseline.json
+        run: pnpm --filter @shogunagent/selection-eval gate --baseline results/baseline.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selection-eval-mock-${{ github.run_id }}
+          path: |
+            packages/selection-eval/results/latest.json
+            packages/selection-eval/results/latest.md
+          if-no-files-found: ignore
+
+  live:
+    name: live run (real model APIs, results as artifact)
+    if: (github.event_name == 'workflow_dispatch' && inputs.live == true) || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Secrets reach the process only through these variables. Do not add a step that prints env.
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SELECTION_EVAL_ANTHROPIC_MODEL: ${{ vars.SELECTION_EVAL_ANTHROPIC_MODEL }}
+      SELECTION_EVAL_OPENAI_MODEL: ${{ vars.SELECTION_EVAL_OPENAI_MODEL }}
+      SELECTION_EVAL_GEMINI_MODEL: ${{ vars.SELECTION_EVAL_GEMINI_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: harness (live when keys are present, mock otherwise)
+        run: |
+          set -euo pipefail
+          only="${{ inputs.only }}"
+          if [ -n "$only" ]; then
+            pnpm --filter @shogunagent/selection-eval harness --only "$only"
+          else
+            pnpm --filter @shogunagent/selection-eval harness
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: selection-eval-live-${{ github.run_id }}
+          path: |
+            packages/selection-eval/results/latest.json
+            packages/selection-eval/results/latest.md
+          if-no-files-found: error

@@ -1,0 +1,2325 @@
+{
+  "schema": 1,
+  "mode": "mock",
+  "generated_at": "2026-10-25T09:20:14.568Z",
+  "models": [
+    "mock-bm25"
+  ],
+  "surfaces": [
+    "claude-code-plugin",
+    "mcp-registry",
+    "openai-plugin",
+    "router-discover"
+  ],
+  "cells": [
+    {
+      "surface": "claude-code-plugin",
+      "model": "mock-bm25",
+      "n": 50,
+      "correct": 28,
+      "selection_rate": 56,
+      "tp": 8,
+      "fp": 2,
+      "fn": 20,
+      "tn": 20,
+      "tasks": [
+        {
+          "task_id": "state-01",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-02",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-03",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-04",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-05",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "zep__zep-graphiti",
+          "picked_vendor": "zep",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-06",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__setup-supermemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-07",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-08",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-09",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-10",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "zep__zep-graphiti",
+          "picked_vendor": "zep",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-11",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-12",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__supermemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-13",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-14",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-15",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-16",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__supermemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-17",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__setup-supermemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-18",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "continuity-01",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-02",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-03",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "continuity-04",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "zep__zep-graphiti",
+          "picked_vendor": "zep",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "approval-01",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "approval-02",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__setup-supermemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "approval-03",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "approval-04",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "websearch__web-search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "approval-05",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "approval-06",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "memory-01",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "memory-02",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-03",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-04",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-05",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-06",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__supermemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-07",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "mem0__mem0-memory",
+          "picked_vendor": "mem0",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-08",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "mem0__mem0-memory",
+          "picked_vendor": "mem0",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-09",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-10",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-01",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web-search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-02",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web-search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-03",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web-search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-04",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web-search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-05",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web-search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-06",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__setup-supermemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-07",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web-search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-08",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-01",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "none-02",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-03",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-04",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        }
+      ]
+    },
+    {
+      "surface": "mcp-registry",
+      "model": "mock-bm25",
+      "n": 50,
+      "correct": 35,
+      "selection_rate": 70,
+      "tp": 17,
+      "fp": 4,
+      "fn": 11,
+      "tn": 18,
+      "tasks": [
+        {
+          "task_id": "state-01",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-02",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-03",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-04",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-05",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-06",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-07",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-08",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-09",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-10",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "zep__zep-context-mcp",
+          "picked_vendor": "zep",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-11",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-12",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-13",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-14",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "zep__zep-context-mcp",
+          "picked_vendor": "zep",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-15",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-16",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-17",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-18",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "continuity-01",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-02",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-03",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-04",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-01",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-02",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-03",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-04",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-05",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "approval-06",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "memory-01",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__supermemory-mcp",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-02",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "zep__zep-context-mcp",
+          "picked_vendor": "zep",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-03",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__supermemory-mcp",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-04",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "memory-05",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-06",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__supermemory-mcp",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-07",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "memory-08",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__supermemory-mcp",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-09",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-10",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "mem0__openmemory-mcp",
+          "picked_vendor": "mem0",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-01",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "exa__exa-search-mcp",
+          "picked_vendor": "exa",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-02",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "web-03",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-04",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-05",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "zep__zep-context-mcp",
+          "picked_vendor": "zep",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-06",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-07",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__supermemory-mcp",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-08",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-01",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__io_shogunagent_state-layer",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "none-02",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-03",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-04",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        }
+      ]
+    },
+    {
+      "surface": "openai-plugin",
+      "model": "mock-bm25",
+      "n": 50,
+      "correct": 40,
+      "selection_rate": 80,
+      "tp": 19,
+      "fp": 1,
+      "fn": 9,
+      "tn": 21,
+      "tasks": [
+        {
+          "task_id": "state-01",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-02",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-03",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-04",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-05",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-06",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-07",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-08",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-09",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-10",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-11",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-12",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-13",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-14",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-15",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__searchMemories",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-16",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-17",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-18",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-01",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-02",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-03",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-04",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-01",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-02",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "approval-03",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-04",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-05",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-06",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "memory-01",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-02",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-03",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__searchMemories",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-04",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__shogunagent",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "memory-05",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-06",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-07",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-08",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-09",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-10",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-01",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web_search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-02",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web_search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-03",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web_search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-04",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web_search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-05",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-06",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "websearch__web_search",
+          "picked_vendor": "websearch",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-07",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-08",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-01",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-02",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-03",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-04",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        }
+      ]
+    },
+    {
+      "surface": "router-discover",
+      "model": "mock-bm25",
+      "n": 50,
+      "correct": 42,
+      "selection_rate": 84,
+      "tp": 26,
+      "fp": 6,
+      "fn": 2,
+      "tn": 16,
+      "tasks": [
+        {
+          "task_id": "state-01",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_commitments_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-02",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_commitments_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-03",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_open_loops_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-04",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_people_get",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-05",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__memory_recall",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-06",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_open_loops_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-07",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_commitments_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-08",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_people_get",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-09",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_open_loops_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-10",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_commitments_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-11",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__memory_recall",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-12",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_commitments_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-13",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_open_loops_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-14",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_open_loops_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-15",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "supermemory__searchMemories",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "state-16",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_open_loops_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-17",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__memory_recall",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "state-18",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__state_open_loops_list",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-01",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__memory_ingest",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-02",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__memory_ingest",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-03",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__memory_ingest",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "continuity-04",
+          "expected_category": "state",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__memory_ingest",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-01",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__actions_execute",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-02",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__actions_execute",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-03",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__actions_execute",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-04",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "hunter__email-finder",
+          "picked_vendor": "hunter",
+          "picked_shogunagent": false,
+          "correct": false,
+          "outcome": "fn"
+        },
+        {
+          "task_id": "approval-05",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__actions_execute",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "approval-06",
+          "expected_category": "approval",
+          "should_pick_shogunagent": true,
+          "picked_tool": "shogunagent__actions_execute",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": true,
+          "outcome": "tp"
+        },
+        {
+          "task_id": "memory-01",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-02",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__memory_ingest",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "memory-03",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__searchMemories",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-04",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "hunter__email-finder",
+          "picked_vendor": "hunter",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-05",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "hunter__email-finder",
+          "picked_vendor": "hunter",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-06",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "mem0__add_memory",
+          "picked_vendor": "mem0",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-07",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__memory_ingest",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "memory-08",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "mem0__add_memory",
+          "picked_vendor": "mem0",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-09",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "memory-10",
+          "expected_category": "memory",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__memory_ingest",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "web-01",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "exa__search",
+          "picked_vendor": "exa",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-02",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "tinyfish__fetch",
+          "picked_vendor": "tinyfish",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-03",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "tinyfish__web-search",
+          "picked_vendor": "tinyfish",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-04",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "contextdev__web_scrape_markdown",
+          "picked_vendor": "contextdev",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-05",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "supermemory__addMemory",
+          "picked_vendor": "supermemory",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-06",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "hunter__email-finder",
+          "picked_vendor": "hunter",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-07",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": "hunter__email-finder",
+          "picked_vendor": "hunter",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "web-08",
+          "expected_category": "web",
+          "should_pick_shogunagent": false,
+          "picked_tool": null,
+          "picked_vendor": null,
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-01",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__memory_ingest",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "none-02",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": "contextdev__web_scrape_markdown",
+          "picked_vendor": "contextdev",
+          "picked_shogunagent": false,
+          "correct": true,
+          "outcome": "tn"
+        },
+        {
+          "task_id": "none-03",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__state_people_get",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        },
+        {
+          "task_id": "none-04",
+          "expected_category": "none",
+          "should_pick_shogunagent": false,
+          "picked_tool": "shogunagent__actions_execute",
+          "picked_vendor": "shogunagent",
+          "picked_shogunagent": true,
+          "correct": false,
+          "outcome": "fp"
+        }
+      ]
+    }
+  ],
+  "adoption": [
+    {
+      "model": "mock-bm25",
+      "n": 20,
+      "correct": 16,
+      "adoption_rate": 80,
+      "tp": 9,
+      "fp": 1,
+      "fn": 3,
+      "tn": 7,
+      "tasks": [
+        {
+          "task_id": "adopt-01",
+          "should_propose": true,
+          "proposed": true,
+          "correct": true,
+          "outcome": "tp",
+          "evidence": [
+            "trigger_tokens=before,wait",
+            "non_trigger_tokens=",
+            "net=2"
+          ]
+        },
+        {
+          "task_id": "adopt-02",
+          "should_propose": true,
+          "proposed": true,
+          "correct": true,
+          "outcome": "tp",
+          "evidence": [
+            "trigger_tokens=finish,work,agent,pend",
+            "non_trigger_tokens=",
+            "net=4"
+          ]
+        },
+        {
+          "task_id": "adopt-03",
+          "should_propose": true,
+          "proposed": true,
+          "correct": true,
+          "outcome": "tp",
+          "evidence": [
+            "trigger_tokens=approv,before",
+            "non_trigger_tokens=",
+            "net=2"
+          ]
+        },
+        {
+          "task_id": "adopt-04",
+          "should_propose": true,
+          "proposed": true,
+          "correct": true,
+          "outcome": "tp",
+          "evidence": [
+            "trigger_tokens=open",
+            "non_trigger_tokens=",
+            "net=1"
+          ]
+        },
+        {
+          "task_id": "adopt-05",
+          "should_propose": false,
+          "proposed": false,
+          "correct": true,
+          "outcome": "tn",
+          "evidence": [
+            "trigger_tokens=",
+            "non_trigger_tokens=",
+            "net=0"
+          ]
+        },
+        {
+          "task_id": "adopt-06",
+          "should_propose": false,
+          "proposed": false,
+          "correct": true,
+          "outcome": "tn",
+          "evidence": [
+            "trigger_tokens=current",
+            "non_trigger_tokens=search,web",
+            "net=-1"
+          ]
+        },
+        {
+          "task_id": "adopt-07",
+          "should_propose": true,
+          "proposed": true,
+          "correct": true,
+          "outcome": "tp",
+          "evidence": [
+            "trigger_tokens=due",
+            "non_trigger_tokens=",
+            "net=1"
+          ]
+        },
+        {
+          "task_id": "adopt-08",
+          "should_propose": false,
+          "proposed": false,
+          "correct": true,
+          "outcome": "tn",
+          "evidence": [
+            "trigger_tokens=",
+            "non_trigger_tokens=",
+            "net=0"
+          ]
+        },
+        {
+          "task_id": "adopt-09",
+          "should_propose": true,
+          "proposed": false,
+          "correct": false,
+          "outcome": "fn",
+          "evidence": [
+            "trigger_tokens=",
+            "non_trigger_tokens=",
+            "net=0"
+          ]
+        },
+        {
+          "task_id": "adopt-10",
+          "should_propose": false,
+          "proposed": false,
+          "correct": true,
+          "outcome": "tn",
+          "evidence": [
+            "trigger_tokens=dat",
+            "non_trigger_tokens=write",
+            "net=0"
+          ]
+        },
+        {
+          "task_id": "adopt-11",
+          "should_propose": true,
+          "proposed": false,
+          "correct": false,
+          "outcome": "fn",
+          "evidence": [
+            "trigger_tokens=",
+            "non_trigger_tokens=",
+            "net=0"
+          ]
+        },
+        {
+          "task_id": "adopt-12",
+          "should_propose": false,
+          "proposed": true,
+          "correct": false,
+          "outcome": "fp",
+          "evidence": [
+            "trigger_tokens=work",
+            "non_trigger_tokens=",
+            "net=1"
+          ]
+        },
+        {
+          "task_id": "adopt-13",
+          "should_propose": true,
+          "proposed": true,
+          "correct": true,
+          "outcome": "tp",
+          "evidence": [
+            "trigger_tokens=task,learn,agent,work",
+            "non_trigger_tokens=oth",
+            "net=3"
+          ]
+        },
+        {
+          "task_id": "adopt-14",
+          "should_propose": false,
+          "proposed": false,
+          "correct": true,
+          "outcome": "tn",
+          "evidence": [
+            "trigger_tokens=",
+            "non_trigger_tokens=",
+            "net=0"
+          ]
+        },
+        {
+          "task_id": "adopt-15",
+          "should_propose": true,
+          "proposed": true,
+          "correct": true,
+          "outcome": "tp",
+          "evidence": [
+            "trigger_tokens=pend",
+            "non_trigger_tokens=",
+            "net=1"
+          ]
+        },
+        {
+          "task_id": "adopt-16",
+          "should_propose": false,
+          "proposed": false,
+          "correct": true,
+          "outcome": "tn",
+          "evidence": [
+            "trigger_tokens=",
+            "non_trigger_tokens=",
+            "net=0"
+          ]
+        },
+        {
+          "task_id": "adopt-17",
+          "should_propose": true,
+          "proposed": true,
+          "correct": true,
+          "outcome": "tp",
+          "evidence": [
+            "trigger_tokens=put,cal",
+            "non_trigger_tokens=",
+            "net=2"
+          ]
+        },
+        {
+          "task_id": "adopt-18",
+          "should_propose": false,
+          "proposed": false,
+          "correct": true,
+          "outcome": "tn",
+          "evidence": [
+            "trigger_tokens=",
+            "non_trigger_tokens=",
+            "net=0"
+          ]
+        },
+        {
+          "task_id": "adopt-19",
+          "should_propose": true,
+          "proposed": false,
+          "correct": false,
+          "outcome": "fn",
+          "evidence": [
+            "trigger_tokens=commit",
+            "non_trigger_tokens=one",
+            "net=0"
+          ]
+        },
+        {
+          "task_id": "adopt-20",
+          "should_propose": true,
+          "proposed": true,
+          "correct": true,
+          "outcome": "tp",
+          "evidence": [
+            "trigger_tokens=next,open",
+            "non_trigger_tokens=",
+            "net=2"
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "Mock numbers measure lexical fit of the listing text against the task text, not a model's judgement."
+  ]
+}

@@ -231,7 +231,7 @@
 
 | T | 内容 | 触る場所 | 受け入れ条件 |
 |---|---|---|---|
-| E11-T1 | ハーネス：タスク記述セット（50 件、英語）× モデル（Claude、GPT、Gemini、オープン 1 種）× 面（MCP Registry 掲載文、Claude Code プラグイン説明、OpenAI Plugin 掲載文、ルーター `discover`）。候補に Mem0 / supermemory / Zep の公開説明文を並べ、どれを選ぶかを記録 | `crates/selection-eval/` (new) | 選択率が面 × モデルで出る。CI で週次実行 |
+| E11-T1 | ハーネス：タスク記述セット（50 件、英語）× モデル（Claude、GPT、Gemini、オープン 1 種）× 面（MCP Registry 掲載文、Claude Code プラグイン説明、OpenAI Plugin 掲載文、ルーター `discover`）。候補に Mem0 / supermemory / Zep の公開説明文を並べ、どれを選ぶかを記録 | `packages/selection-eval/` (new)。計画時の `crates/selection-eval/` から変更: モデル API を fetch で叩くオフラインの評価ツールであり、製品の Rust egress 規則（不変条件 9）を eval に持ち込まないため TypeScript パッケージにした（2026-10-25、コーディネーター判断） | 選択率が面 × モデルで出る。CI で週次実行 |
 | E11-T2 | 説明文の変更をゲート：選択率が落ちる PR は赤 | `.github/workflows/selection-eval.yml` | ゲートが動く |
 | E11-T3 | SKILL.md の自発的導入率（タスクに「記憶」や「約束」が出たときに導入を提案するか） | 同上 | 計測できる |
 

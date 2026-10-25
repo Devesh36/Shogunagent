@@ -1,0 +1,23 @@
+{
+  "name": "@shogunagent/selection-eval",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "description": "Selection eval (E11): which tool does a model pick for a task when ShogunAgent's listings sit alongside Mem0, supermemory, Zep and web tools, across four discovery surfaces; plus the SKILL.md adoption rate. Offline (mock) by default; real model APIs when keys are present.",
+  "scripts": {
+    "harness": "tsx src/cli/run.ts",
+    "adoption": "tsx src/cli/adoption.ts",
+    "gate": "tsx src/cli/gate.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  }
+}
