@@ -485,6 +485,8 @@ pub fn clear_state(conn: &mut Connection) -> Result<(), rusqlite::Error> {
     // The review signals they are consolidated from (V83) go with them.
     tx.execute("DELETE FROM loop_signal_reads", [])?;
     tx.execute("DELETE FROM loop_signals", [])?;
+    // And the outcomes read off later messages (V104).
+    tx.execute("DELETE FROM loop_updates", [])?;
     tx.commit()
 }
 

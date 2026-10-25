@@ -6,9 +6,11 @@
 //! processing), through to the end of the stream; then [`SystemAdapter::snapshot`] at the end.
 //! Each call is timed by the harness. A system that processes on ingest leaves `advance` empty.
 //!
-//! Three adapters ship: [`ShogunAgentAdapter`] (ingest → local-rules hourly dream tick → state
-//! read through the export v2 face), [`WillBaseline`] (every sentence containing "will" / "I'll"
-//! is an open commitment) and [`Oracle`] (the gold, to check a pipeline end to end).
+//! Four adapters ship: [`ShogunAgentAdapter`] (ingest → local-rules hourly dream tick → state
+//! read through the export v2 face), [`crate::scripted::ScriptedReviewAdapter`] (the same engine
+//! with its Batch lane answered by an offline scripted reviewer, not a model: E49),
+//! [`WillBaseline`] (every sentence containing "will" / "I'll" is an open commitment) and
+//! [`Oracle`] (the gold, to check a pipeline end to end).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -189,6 +191,16 @@ impl ShogunAgentAdapter {
     fn db(&self) -> Result<&shogun_core::daemon::Db, String> {
         self.db.as_ref().ok_or_else(|| "reset was not called".to_string())
     }
+
+    /// The store, for an arm that drives it through another lane ([`crate::scripted`]).
+    pub(crate) fn db_ref(&self) -> Result<&shogun_core::daemon::Db, String> {
+        self.db()
+    }
+
+    /// Move the store's clock to `now_ms`.
+    pub(crate) fn set_clock(&self, now_ms: i64) {
+        self.clock.store(now_ms, Ordering::SeqCst);
+    }
 }
 
 impl SystemAdapter for ShogunAgentAdapter {
@@ -285,6 +297,7 @@ impl SystemAdapter for ShogunAgentAdapter {
 pub fn by_name(name: &str) -> Option<Box<dyn SystemAdapter>> {
     match name {
         "shogunagent" | "shogunagent-local-rules" => Some(Box::new(ShogunAgentAdapter::default())),
+        "shogunagent-scripted-review" | "scripted-review" => Some(Box::new(crate::scripted::ScriptedReviewAdapter::default())),
         "will-baseline" | "baseline" => Some(Box::new(WillBaseline::default())),
         "oracle" => Some(Box::new(Oracle::default())),
         _ => None,

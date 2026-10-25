@@ -11,7 +11,7 @@
     "os": "linux",
     "profile": "release"
   },
-  "generated_at": "2026-10-25T16:41:28Z",
+  "generated_at": "2026-10-25T20:22:03Z",
   "headline": {
     "metric": "tracking_f1",
     "operating_point": "all",
@@ -31,11 +31,11 @@
     {
       "latency": {
         "events": 39,
-        "ingest_ms": 32.92984,
-        "ingest_ms_per_event": 0.8443548717948718,
-        "process_ms": 257.8751740000001,
-        "read_ms": 0.37357999999999997,
-        "total_ms": 661.476409
+        "ingest_ms": 30.616347000000005,
+        "ingest_ms_per_event": 0.7850345384615386,
+        "process_ms": 256.76330199999995,
+        "read_ms": 0.399237,
+        "total_ms": 676.045825
       },
       "points": {
         "actionable": [
@@ -73,39 +73,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.888888888888889,
-            "commitment_precision": 0.8,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.25,
-            "open_loop_f1": 0.6666666666666666,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.5,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
+            "resolution_accuracy": 1.0,
             "supersession_accuracy": null,
-            "tracking_f1": 0.7999999999999999
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 3,
             "distractors": 4,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 3,
             "gold_commitments": 4,
             "gold_open_loops": 4,
             "gold_superseded": 0,
             "matched_commitments": 4,
             "matched_open": 5,
-            "matched_open_loops": 2,
+            "matched_open_loops": 4,
             "open_read_closed": 0,
-            "predicted_commitments": 5,
-            "predicted_open_loops": 2,
-            "predictions_with_valid_provenance": 7,
+            "predicted_commitments": 4,
+            "predicted_open_loops": 4,
+            "predictions_with_valid_provenance": 8,
             "superseded_latest_due": 0
           }
         ]
       },
-      "predictions": 7,
+      "predictions": 8,
       "seed": 42,
       "tier": "easy",
       "usage": {
@@ -118,11 +118,11 @@
     {
       "latency": {
         "events": 39,
-        "ingest_ms": 37.064526,
-        "ingest_ms_per_event": 0.9503724615384616,
-        "process_ms": 301.76805100000007,
-        "read_ms": 0.380264,
-        "total_ms": 344.457423
+        "ingest_ms": 31.485183,
+        "ingest_ms_per_event": 0.8073123846153846,
+        "process_ms": 265.2194159999999,
+        "read_ms": 0.415127,
+        "total_ms": 302.273601
       },
       "points": {
         "actionable": [
@@ -160,33 +160,33 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.888888888888889,
-            "commitment_precision": 0.8,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.25,
-            "open_loop_f1": 0.8571428571428571,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.75,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
+            "resolution_accuracy": 1.0,
             "supersession_accuracy": null,
-            "tracking_f1": 0.875
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 3,
             "distractors": 4,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 3,
             "gold_commitments": 4,
             "gold_open_loops": 4,
             "gold_superseded": 0,
             "matched_commitments": 4,
-            "matched_open": 4,
-            "matched_open_loops": 3,
+            "matched_open": 5,
+            "matched_open_loops": 4,
             "open_read_closed": 0,
-            "predicted_commitments": 5,
-            "predicted_open_loops": 3,
+            "predicted_commitments": 4,
+            "predicted_open_loops": 4,
             "predictions_with_valid_provenance": 8,
             "superseded_latest_due": 0
           }
@@ -205,11 +205,11 @@
     {
       "latency": {
         "events": 37,
-        "ingest_ms": 34.023030999999996,
-        "ingest_ms_per_event": 0.9195413783783782,
-        "process_ms": 267.5714610000001,
-        "read_ms": 0.421503,
-        "total_ms": 306.43749399999996
+        "ingest_ms": 29.787721999999995,
+        "ingest_ms_per_event": 0.8050735675675674,
+        "process_ms": 245.28477099999984,
+        "read_ms": 0.448456,
+        "total_ms": 279.842834
       },
       "points": {
         "actionable": [
@@ -247,39 +247,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.888888888888889,
-            "commitment_precision": 0.8,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.25,
-            "open_loop_f1": 0.6666666666666666,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.5,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
+            "resolution_accuracy": 1.0,
             "supersession_accuracy": null,
-            "tracking_f1": 0.7999999999999999
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 1,
             "distractors": 4,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 1,
             "gold_commitments": 4,
             "gold_open_loops": 4,
             "gold_superseded": 0,
             "matched_commitments": 4,
-            "matched_open": 5,
-            "matched_open_loops": 2,
+            "matched_open": 7,
+            "matched_open_loops": 4,
             "open_read_closed": 0,
-            "predicted_commitments": 5,
-            "predicted_open_loops": 2,
-            "predictions_with_valid_provenance": 7,
+            "predicted_commitments": 4,
+            "predicted_open_loops": 4,
+            "predictions_with_valid_provenance": 8,
             "superseded_latest_due": 0
           }
         ]
       },
-      "predictions": 7,
+      "predictions": 8,
       "seed": 44,
       "tier": "easy",
       "usage": {
@@ -292,11 +292,11 @@
     {
       "latency": {
         "events": 41,
-        "ingest_ms": 33.289084,
-        "ingest_ms_per_event": 0.8119288780487806,
-        "process_ms": 269.478316,
-        "read_ms": 0.42912799999999995,
-        "total_ms": 307.7457
+        "ingest_ms": 31.913531,
+        "ingest_ms_per_event": 0.7783788048780488,
+        "process_ms": 257.667003,
+        "read_ms": 0.42875800000000003,
+        "total_ms": 294.165144
       },
       "points": {
         "actionable": [
@@ -339,16 +339,16 @@
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
             "false_commitment_rate": 0.0,
-            "open_loop_f1": 0.8571428571428571,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.75,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
+            "resolution_accuracy": 1.0,
             "supersession_accuracy": null,
-            "tracking_f1": 0.9333333333333333
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 5,
             "distractors": 4,
             "distractors_hit": 0,
             "gold_closed": 5,
@@ -356,17 +356,17 @@
             "gold_open_loops": 4,
             "gold_superseded": 0,
             "matched_commitments": 4,
-            "matched_open": 2,
-            "matched_open_loops": 3,
+            "matched_open": 3,
+            "matched_open_loops": 4,
             "open_read_closed": 0,
             "predicted_commitments": 4,
-            "predicted_open_loops": 3,
-            "predictions_with_valid_provenance": 7,
+            "predicted_open_loops": 4,
+            "predictions_with_valid_provenance": 8,
             "superseded_latest_due": 0
           }
         ]
       },
-      "predictions": 7,
+      "predictions": 8,
       "seed": 45,
       "tier": "easy",
       "usage": {
@@ -379,11 +379,11 @@
     {
       "latency": {
         "events": 38,
-        "ingest_ms": 36.241800999999995,
-        "ingest_ms_per_event": 0.9537316052631578,
-        "process_ms": 314.44319099999984,
-        "read_ms": 0.594724,
-        "total_ms": 355.979555
+        "ingest_ms": 40.801125000000006,
+        "ingest_ms_per_event": 1.073713815789474,
+        "process_ms": 348.13219799999996,
+        "read_ms": 0.603582,
+        "total_ms": 393.62350499999997
       },
       "points": {
         "actionable": [
@@ -421,39 +421,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.888888888888889,
-            "commitment_precision": 0.8,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.25,
-            "open_loop_f1": 0.6666666666666666,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.5,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
+            "resolution_accuracy": 1.0,
             "supersession_accuracy": null,
-            "tracking_f1": 0.7999999999999999
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 2,
             "distractors": 4,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 2,
             "gold_commitments": 4,
             "gold_open_loops": 4,
             "gold_superseded": 0,
             "matched_commitments": 4,
             "matched_open": 6,
-            "matched_open_loops": 2,
+            "matched_open_loops": 4,
             "open_read_closed": 0,
-            "predicted_commitments": 5,
-            "predicted_open_loops": 2,
-            "predictions_with_valid_provenance": 7,
+            "predicted_commitments": 4,
+            "predicted_open_loops": 4,
+            "predictions_with_valid_provenance": 8,
             "superseded_latest_due": 0
           }
         ]
       },
-      "predictions": 7,
+      "predictions": 8,
       "seed": 46,
       "tier": "easy",
       "usage": {
@@ -466,11 +466,11 @@
     {
       "latency": {
         "events": 125,
-        "ingest_ms": 98.08744799999998,
-        "ingest_ms_per_event": 0.7846995839999998,
-        "process_ms": 936.2086949999999,
-        "read_ms": 0.7536440000000001,
-        "total_ms": 1041.459767
+        "ingest_ms": 94.11357799999998,
+        "ingest_ms_per_event": 0.7529086239999998,
+        "process_ms": 912.9328329999994,
+        "read_ms": 0.5797960000000001,
+        "total_ms": 1014.290104
       },
       "points": {
         "actionable": [
@@ -508,39 +508,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.9411764705882353,
-            "commitment_precision": 0.8888888888888888,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.125,
-            "open_loop_f1": 0.6666666666666666,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.5,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.8275862068965517
+            "resolution_accuracy": 1.0,
+            "supersession_accuracy": 1.0,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 2,
             "distractors": 8,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 2,
             "gold_commitments": 8,
             "gold_open_loops": 8,
             "gold_superseded": 3,
             "matched_commitments": 8,
-            "matched_open": 11,
-            "matched_open_loops": 4,
+            "matched_open": 14,
+            "matched_open_loops": 8,
             "open_read_closed": 0,
-            "predicted_commitments": 9,
-            "predicted_open_loops": 4,
-            "predictions_with_valid_provenance": 13,
-            "superseded_latest_due": 0
+            "predicted_commitments": 8,
+            "predicted_open_loops": 8,
+            "predictions_with_valid_provenance": 16,
+            "superseded_latest_due": 3
           }
         ]
       },
-      "predictions": 13,
+      "predictions": 16,
       "seed": 42,
       "tier": "medium",
       "usage": {
@@ -553,11 +553,11 @@
     {
       "latency": {
         "events": 129,
-        "ingest_ms": 118.81464199999999,
-        "ingest_ms_per_event": 0.9210437364341084,
-        "process_ms": 1026.0536169999998,
-        "read_ms": 0.569179,
-        "total_ms": 1152.469548
+        "ingest_ms": 104.64951499999998,
+        "ingest_ms_per_event": 0.8112365503875968,
+        "process_ms": 904.7902490000002,
+        "read_ms": 0.622816,
+        "total_ms": 1014.6217769999998
       },
       "points": {
         "actionable": [
@@ -595,39 +595,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.9411764705882353,
-            "commitment_precision": 0.8888888888888888,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.125,
-            "open_loop_f1": 0.7692307692307693,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.625,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.8666666666666666
+            "resolution_accuracy": 1.0,
+            "supersession_accuracy": 1.0,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 6,
             "distractors": 8,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 6,
             "gold_commitments": 8,
             "gold_open_loops": 8,
             "gold_superseded": 3,
             "matched_commitments": 8,
-            "matched_open": 8,
-            "matched_open_loops": 5,
+            "matched_open": 10,
+            "matched_open_loops": 8,
             "open_read_closed": 0,
-            "predicted_commitments": 9,
-            "predicted_open_loops": 5,
-            "predictions_with_valid_provenance": 14,
-            "superseded_latest_due": 0
+            "predicted_commitments": 8,
+            "predicted_open_loops": 8,
+            "predictions_with_valid_provenance": 16,
+            "superseded_latest_due": 3
           }
         ]
       },
-      "predictions": 14,
+      "predictions": 16,
       "seed": 43,
       "tier": "medium",
       "usage": {
@@ -640,11 +640,11 @@
     {
       "latency": {
         "events": 130,
-        "ingest_ms": 103.01100799999998,
-        "ingest_ms_per_event": 0.7923923692307691,
-        "process_ms": 918.9107529999999,
-        "read_ms": 0.61042,
-        "total_ms": 1026.8592139999998
+        "ingest_ms": 93.768879,
+        "ingest_ms_per_event": 0.7212990692307693,
+        "process_ms": 918.7189330000007,
+        "read_ms": 0.5634060000000001,
+        "total_ms": 1017.140079
       },
       "points": {
         "actionable": [
@@ -682,39 +682,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.9411764705882353,
-            "commitment_precision": 0.8888888888888888,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.125,
-            "open_loop_f1": 0.7692307692307693,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.625,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.8666666666666666
+            "resolution_accuracy": 1.0,
+            "supersession_accuracy": 1.0,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 7,
             "distractors": 8,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 7,
             "gold_commitments": 8,
             "gold_open_loops": 8,
             "gold_superseded": 3,
             "matched_commitments": 8,
-            "matched_open": 6,
-            "matched_open_loops": 5,
+            "matched_open": 9,
+            "matched_open_loops": 8,
             "open_read_closed": 0,
-            "predicted_commitments": 9,
-            "predicted_open_loops": 5,
-            "predictions_with_valid_provenance": 14,
-            "superseded_latest_due": 0
+            "predicted_commitments": 8,
+            "predicted_open_loops": 8,
+            "predictions_with_valid_provenance": 16,
+            "superseded_latest_due": 3
           }
         ]
       },
-      "predictions": 14,
+      "predictions": 16,
       "seed": 44,
       "tier": "medium",
       "usage": {
@@ -727,11 +727,11 @@
     {
       "latency": {
         "events": 130,
-        "ingest_ms": 102.35991299999999,
-        "ingest_ms_per_event": 0.7873839461538461,
-        "process_ms": 964.8472479999999,
-        "read_ms": 0.525763,
-        "total_ms": 1071.959578
+        "ingest_ms": 96.24492899999997,
+        "ingest_ms_per_event": 0.7403456076923075,
+        "process_ms": 915.3777750000005,
+        "read_ms": 0.75515,
+        "total_ms": 1016.5601740000001
       },
       "points": {
         "actionable": [
@@ -769,39 +769,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.9411764705882353,
-            "commitment_precision": 0.8888888888888888,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.125,
-            "open_loop_f1": 0.7692307692307693,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.625,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.8666666666666666
+            "resolution_accuracy": 1.0,
+            "supersession_accuracy": 1.0,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 7,
             "distractors": 8,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 7,
             "gold_commitments": 8,
             "gold_open_loops": 8,
             "gold_superseded": 3,
             "matched_commitments": 8,
-            "matched_open": 6,
-            "matched_open_loops": 5,
+            "matched_open": 9,
+            "matched_open_loops": 8,
             "open_read_closed": 0,
-            "predicted_commitments": 9,
-            "predicted_open_loops": 5,
-            "predictions_with_valid_provenance": 14,
-            "superseded_latest_due": 0
+            "predicted_commitments": 8,
+            "predicted_open_loops": 8,
+            "predictions_with_valid_provenance": 16,
+            "superseded_latest_due": 3
           }
         ]
       },
-      "predictions": 14,
+      "predictions": 16,
       "seed": 45,
       "tier": "medium",
       "usage": {
@@ -814,11 +814,11 @@
     {
       "latency": {
         "events": 128,
-        "ingest_ms": 98.82173399999999,
-        "ingest_ms_per_event": 0.7720447968749999,
-        "process_ms": 887.537266,
-        "read_ms": 0.519285,
-        "total_ms": 991.573581
+        "ingest_ms": 97.478765,
+        "ingest_ms_per_event": 0.7615528515625,
+        "process_ms": 859.8901490000003,
+        "read_ms": 0.58429,
+        "total_ms": 963.5464000000001
       },
       "points": {
         "actionable": [
@@ -856,39 +856,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.9411764705882353,
-            "commitment_precision": 0.8888888888888888,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
             "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.125,
-            "open_loop_f1": 0.7692307692307693,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.625,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.8666666666666666
+            "resolution_accuracy": 1.0,
+            "supersession_accuracy": 1.0,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 5,
             "distractors": 8,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 5,
             "gold_commitments": 8,
             "gold_open_loops": 8,
             "gold_superseded": 3,
             "matched_commitments": 8,
-            "matched_open": 9,
-            "matched_open_loops": 5,
+            "matched_open": 11,
+            "matched_open_loops": 8,
             "open_read_closed": 0,
-            "predicted_commitments": 9,
-            "predicted_open_loops": 5,
-            "predictions_with_valid_provenance": 14,
-            "superseded_latest_due": 0
+            "predicted_commitments": 8,
+            "predicted_open_loops": 8,
+            "predictions_with_valid_provenance": 16,
+            "superseded_latest_due": 3
           }
         ]
       },
-      "predictions": 14,
+      "predictions": 16,
       "seed": 46,
       "tier": "medium",
       "usage": {
@@ -901,11 +901,11 @@
     {
       "latency": {
         "events": 299,
-        "ingest_ms": 244.29926999999992,
-        "ingest_ms_per_event": 0.8170544147157188,
-        "process_ms": 1790.841206000002,
-        "read_ms": 0.41726399999999997,
-        "total_ms": 2039.892113
+        "ingest_ms": 225.962804,
+        "ingest_ms_per_event": 0.7557284414715719,
+        "process_ms": 2062.326426999999,
+        "read_ms": 0.736368,
+        "total_ms": 2293.3687379999997
       },
       "points": {
         "actionable": [
@@ -943,39 +943,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.5555555555555556,
-            "commitment_precision": 0.8333333333333334,
-            "commitment_recall": 0.4166666666666667,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
+            "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.0625,
-            "open_loop_f1": 0.4,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.25,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.48484848484848486
+            "resolution_accuracy": 1.0,
+            "supersession_accuracy": 0.8333333333333334,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 11,
             "distractors": 16,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 11,
             "gold_commitments": 12,
             "gold_open_loops": 12,
             "gold_superseded": 6,
-            "matched_commitments": 5,
-            "matched_open": 7,
-            "matched_open_loops": 3,
+            "matched_commitments": 12,
+            "matched_open": 13,
+            "matched_open_loops": 12,
             "open_read_closed": 0,
-            "predicted_commitments": 6,
-            "predicted_open_loops": 3,
-            "predictions_with_valid_provenance": 9,
-            "superseded_latest_due": 0
+            "predicted_commitments": 12,
+            "predicted_open_loops": 12,
+            "predictions_with_valid_provenance": 24,
+            "superseded_latest_due": 5
           }
         ]
       },
-      "predictions": 9,
+      "predictions": 24,
       "seed": 42,
       "tier": "hard",
       "usage": {
@@ -988,11 +988,11 @@
     {
       "latency": {
         "events": 299,
-        "ingest_ms": 223.95472600000002,
-        "ingest_ms_per_event": 0.7490124615384616,
-        "process_ms": 1583.645823,
-        "read_ms": 0.500282,
-        "total_ms": 1813.531108
+        "ingest_ms": 235.6650110000001,
+        "ingest_ms_per_event": 0.7881772943143817,
+        "process_ms": 2130.2738590000013,
+        "read_ms": 0.77441,
+        "total_ms": 2370.976783
       },
       "points": {
         "actionable": [
@@ -1030,39 +1030,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.375,
-            "commitment_precision": 0.75,
-            "commitment_recall": 0.25,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
+            "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.0625,
-            "open_loop_f1": 0.15384615384615385,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.08333333333333333,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.27586206896551724
+            "resolution_accuracy": 0.9166666666666666,
+            "supersession_accuracy": 1.0,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 11,
             "distractors": 16,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 12,
             "gold_commitments": 12,
             "gold_open_loops": 12,
             "gold_superseded": 6,
-            "matched_commitments": 3,
-            "matched_open": 2,
-            "matched_open_loops": 1,
+            "matched_commitments": 12,
+            "matched_open": 12,
+            "matched_open_loops": 12,
             "open_read_closed": 0,
-            "predicted_commitments": 4,
-            "predicted_open_loops": 1,
-            "predictions_with_valid_provenance": 5,
-            "superseded_latest_due": 0
+            "predicted_commitments": 12,
+            "predicted_open_loops": 12,
+            "predictions_with_valid_provenance": 24,
+            "superseded_latest_due": 6
           }
         ]
       },
-      "predictions": 5,
+      "predictions": 24,
       "seed": 43,
       "tier": "hard",
       "usage": {
@@ -1075,11 +1075,11 @@
     {
       "latency": {
         "events": 301,
-        "ingest_ms": 243.83319199999997,
-        "ingest_ms_per_event": 0.810077049833887,
-        "process_ms": 1841.7599489999998,
-        "read_ms": 0.455096,
-        "total_ms": 2091.464852
+        "ingest_ms": 224.05177800000007,
+        "ingest_ms_per_event": 0.744358066445183,
+        "process_ms": 2101.229963,
+        "read_ms": 0.785802,
+        "total_ms": 2330.4171990000004
       },
       "points": {
         "actionable": [
@@ -1117,39 +1117,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.5882352941176471,
+            "commitment_f1": 1.0,
             "commitment_precision": 1.0,
-            "commitment_recall": 0.4166666666666667,
+            "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
             "false_commitment_rate": 0.0,
-            "open_loop_f1": 0.5882352941176471,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.4166666666666667,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.5882352941176471
+            "resolution_accuracy": 0.9285714285714286,
+            "supersession_accuracy": 1.0,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 13,
             "distractors": 16,
             "distractors_hit": 0,
             "gold_closed": 14,
             "gold_commitments": 12,
             "gold_open_loops": 12,
             "gold_superseded": 6,
-            "matched_commitments": 5,
-            "matched_open": 6,
-            "matched_open_loops": 5,
+            "matched_commitments": 12,
+            "matched_open": 10,
+            "matched_open_loops": 12,
             "open_read_closed": 0,
-            "predicted_commitments": 5,
-            "predicted_open_loops": 5,
-            "predictions_with_valid_provenance": 10,
-            "superseded_latest_due": 0
+            "predicted_commitments": 12,
+            "predicted_open_loops": 12,
+            "predictions_with_valid_provenance": 24,
+            "superseded_latest_due": 6
           }
         ]
       },
-      "predictions": 10,
+      "predictions": 24,
       "seed": 44,
       "tier": "hard",
       "usage": {
@@ -1162,11 +1162,11 @@
     {
       "latency": {
         "events": 300,
-        "ingest_ms": 232.89345000000003,
-        "ingest_ms_per_event": 0.7763115000000002,
-        "process_ms": 1871.6024370000007,
-        "read_ms": 0.597177,
-        "total_ms": 2110.2296159999996
+        "ingest_ms": 235.71129800000006,
+        "ingest_ms_per_event": 0.7857043266666669,
+        "process_ms": 2183.952982000001,
+        "read_ms": 0.781336,
+        "total_ms": 2425.185876
       },
       "points": {
         "actionable": [
@@ -1204,39 +1204,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.5882352941176471,
+            "commitment_f1": 1.0,
             "commitment_precision": 1.0,
-            "commitment_recall": 0.4166666666666667,
+            "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
             "false_commitment_rate": 0.0,
-            "open_loop_f1": 0.7368421052631579,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.5833333333333334,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.6666666666666666
+            "resolution_accuracy": 1.0,
+            "supersession_accuracy": 0.8333333333333334,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 12,
             "distractors": 16,
             "distractors_hit": 0,
             "gold_closed": 12,
             "gold_commitments": 12,
             "gold_open_loops": 12,
             "gold_superseded": 6,
-            "matched_commitments": 5,
-            "matched_open": 5,
-            "matched_open_loops": 7,
+            "matched_commitments": 12,
+            "matched_open": 12,
+            "matched_open_loops": 12,
             "open_read_closed": 0,
-            "predicted_commitments": 5,
-            "predicted_open_loops": 7,
-            "predictions_with_valid_provenance": 12,
-            "superseded_latest_due": 0
+            "predicted_commitments": 12,
+            "predicted_open_loops": 12,
+            "predictions_with_valid_provenance": 24,
+            "superseded_latest_due": 5
           }
         ]
       },
-      "predictions": 12,
+      "predictions": 24,
       "seed": 45,
       "tier": "hard",
       "usage": {
@@ -1249,11 +1249,11 @@
     {
       "latency": {
         "events": 300,
-        "ingest_ms": 275.61242200000004,
-        "ingest_ms_per_event": 0.9187080733333335,
-        "process_ms": 2150.948011999998,
-        "read_ms": 0.830695,
-        "total_ms": 2432.042551
+        "ingest_ms": 246.13379900000007,
+        "ingest_ms_per_event": 0.8204459966666668,
+        "process_ms": 2378.861322999999,
+        "read_ms": 0.7569560000000001,
+        "total_ms": 2630.547453
       },
       "points": {
         "actionable": [
@@ -1291,39 +1291,39 @@
         ],
         "all": [
           {
-            "commitment_f1": 0.761904761904762,
-            "commitment_precision": 0.8888888888888888,
-            "commitment_recall": 0.6666666666666666,
+            "commitment_f1": 1.0,
+            "commitment_precision": 1.0,
+            "commitment_recall": 1.0,
             "false_closure_rate": 0.0,
-            "false_commitment_rate": 0.0625,
-            "open_loop_f1": 0.5882352941176471,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 1.0,
             "open_loop_precision": 1.0,
-            "open_loop_recall": 0.4166666666666667,
+            "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.0,
-            "supersession_accuracy": 0.0,
-            "tracking_f1": 0.6842105263157894
+            "resolution_accuracy": 0.8571428571428571,
+            "supersession_accuracy": 0.8333333333333334,
+            "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 0,
+            "closed_and_read_closed": 12,
             "distractors": 16,
-            "distractors_hit": 1,
+            "distractors_hit": 0,
             "gold_closed": 14,
             "gold_commitments": 12,
             "gold_open_loops": 12,
             "gold_superseded": 6,
-            "matched_commitments": 8,
-            "matched_open": 6,
-            "matched_open_loops": 5,
+            "matched_commitments": 12,
+            "matched_open": 10,
+            "matched_open_loops": 12,
             "open_read_closed": 0,
-            "predicted_commitments": 9,
-            "predicted_open_loops": 5,
-            "predictions_with_valid_provenance": 14,
-            "superseded_latest_due": 0
+            "predicted_commitments": 12,
+            "predicted_open_loops": 12,
+            "predictions_with_valid_provenance": 24,
+            "superseded_latest_due": 5
           }
         ]
       },
-      "predictions": 14,
+      "predictions": 24,
       "seed": 46,
       "tier": "hard",
       "usage": {
@@ -1351,34 +1351,34 @@
       "latency": {
         "ingest_ms_per_event": {
           "ci95": [
-            0.8160614505025588,
-            0.975910227506901
+            0.6938053164442659,
+            1.0059999280805394
           ],
-          "mean": 0.89598583900473,
+          "mean": 0.8499026222624027,
           "n": 5
         },
         "process_ms": {
           "ci95": [
-            251.88071538024943,
-            312.57376181975064
+            222.83057390122144,
+            326.39610209877856
           ],
-          "mean": 282.2272386,
+          "mean": 274.613338,
           "n": 5
         },
         "read_ms": {
           "ci95": [
-            0.3281429056859463,
-            0.5515366943140537
+            0.35623345451854815,
+            0.5618305454814518
           ],
-          "mean": 0.4398398,
+          "mean": 0.459032,
           "n": 5
         },
         "total_ms": {
           "ci95": [
-            208.43843659895816,
-            582.0001958010419
+            182.52550508993238,
+            595.8548585100676
           ],
-          "mean": 395.2193162,
+          "mean": 389.1901818,
           "n": 5
         }
       },
@@ -1469,18 +1469,18 @@
         "all": {
           "commitment_f1": {
             "ci95": [
-              0.8494222222222223,
-              0.9728000000000001
+              1.0,
+              1.0
             ],
-            "mean": 0.9111111111111112,
+            "mean": 1.0,
             "n": 5
           },
           "commitment_precision": {
             "ci95": [
-              0.72896,
-              0.9510400000000001
+              1.0,
+              1.0
             ],
-            "mean": 0.8400000000000001,
+            "mean": 1.0,
             "n": 5
           },
           "commitment_recall": {
@@ -1501,18 +1501,18 @@
           },
           "false_commitment_rate": {
             "ci95": [
-              0.061200000000000004,
-              0.3388
+              0.0,
+              0.0
             ],
-            "mean": 0.2,
+            "mean": 0.0,
             "n": 5
           },
           "open_loop_f1": {
             "ci95": [
-              0.6133374566482647,
-              0.8723768290660209
+              1.0,
+              1.0
             ],
-            "mean": 0.7428571428571428,
+            "mean": 1.0,
             "n": 5
           },
           "open_loop_precision": {
@@ -1525,10 +1525,10 @@
           },
           "open_loop_recall": {
             "ci95": [
-              0.4300054118508474,
-              0.7699945881491526
+              1.0,
+              1.0
             ],
-            "mean": 0.6,
+            "mean": 1.0,
             "n": 5
           },
           "provenance_validity": {
@@ -1541,10 +1541,10 @@
           },
           "resolution_accuracy": {
             "ci95": [
-              0.0,
-              0.0
+              1.0,
+              1.0
             ],
-            "mean": 0.0,
+            "mean": 1.0,
             "n": 5
           },
           "supersession_accuracy": {
@@ -1554,10 +1554,10 @@
           },
           "tracking_f1": {
             "ci95": [
-              0.7663499900420452,
-              0.916983343291288
+              1.0,
+              1.0
             ],
-            "mean": 0.8416666666666666,
+            "mean": 1.0,
             "n": 5
           }
         }
@@ -1572,34 +1572,34 @@
       "latency": {
         "ingest_ms_per_event": {
           "ci95": [
-            0.7341797904389032,
-            0.8942856093296573
+            0.7416984024457205,
+            0.8160672477800677
           ],
-          "mean": 0.8142326998842803,
+          "mean": 0.7788828251128941,
           "n": 5
         },
         "process_ms": {
           "ci95": [
-            1595.217105400692,
-            2100.3018653993086
+            2017.129681241833,
+            2325.5281403581666
           ],
-          "mean": 1847.7594854000004,
+          "mean": 2171.3289108,
           "n": 5
         },
         "read_ms": {
           "ci95": [
-            0.3546014298649908,
-            0.7656041701350089
+            0.7417361300638683,
+            0.7922126699361318
           ],
-          "mean": 0.5601027999999999,
+          "mean": 0.7669744000000001,
           "n": 5
         },
         "total_ms": {
           "ci95": [
-            1822.5700826917146,
-            2372.294013308285
+            2245.481209526695,
+            2574.7172100733055
           ],
-          "mean": 2097.4320479999997,
+          "mean": 2410.0992098,
           "n": 5
         }
       },
@@ -1693,26 +1693,26 @@
         "all": {
           "commitment_f1": {
             "ci95": [
-              0.4030515111581668,
-              0.7445208511200778
+              1.0,
+              1.0
             ],
-            "mean": 0.5737861811391223,
+            "mean": 1.0,
             "n": 5
           },
           "commitment_precision": {
             "ci95": [
-              0.7599966281414566,
-              1.0288922607474325
+              1.0,
+              1.0
             ],
-            "mean": 0.8944444444444445,
+            "mean": 1.0,
             "n": 5
           },
           "commitment_recall": {
             "ci95": [
-              0.24826666666666675,
-              0.6184000000000001
+              1.0,
+              1.0
             ],
-            "mean": 0.4333333333333334,
+            "mean": 1.0,
             "n": 5
           },
           "false_closure_rate": {
@@ -1725,18 +1725,18 @@
           },
           "false_commitment_rate": {
             "ci95": [
-              -0.00499864703728814,
-              0.07999864703728814
+              0.0,
+              0.0
             ],
-            "mean": 0.0375,
+            "mean": 0.0,
             "n": 5
           },
           "open_loop_f1": {
             "ci95": [
-              0.21495047393669586,
-              0.7719130650011465
+              1.0,
+              1.0
             ],
-            "mean": 0.4934317694689212,
+            "mean": 1.0,
             "n": 5
           },
           "open_loop_precision": {
@@ -1749,10 +1749,10 @@
           },
           "open_loop_recall": {
             "ci95": [
-              0.11408536383777385,
-              0.5859146361622263
+              1.0,
+              1.0
             ],
-            "mean": 0.35000000000000003,
+            "mean": 1.0,
             "n": 5
           },
           "provenance_validity": {
@@ -1765,26 +1765,26 @@
           },
           "resolution_accuracy": {
             "ci95": [
-              0.0,
-              0.0
+              0.8651160242839235,
+              1.0158363566684572
             ],
-            "mean": 0.0,
+            "mean": 0.9404761904761904,
             "n": 5
           },
           "supersession_accuracy": {
             "ci95": [
-              0.0,
-              0.0
+              0.7866702745672317,
+              1.0133297254327684
             ],
-            "mean": 0.0,
+            "mean": 0.9,
             "n": 5
           },
           "tracking_f1": {
             "ci95": [
-              0.33224792119190627,
-              0.7476812951737359
+              1.0,
+              1.0
             ],
-            "mean": 0.5399646081828211,
+            "mean": 1.0,
             "n": 5
           }
         }
@@ -1799,34 +1799,34 @@
       "latency": {
         "ingest_ms_per_event": {
           "ci95": [
-            0.7349297671891161,
-            0.8880960058883735
+            0.7156904377970739,
+            0.7992466433521956
           ],
-          "mean": 0.8115128865387448,
+          "mean": 0.7574685405746348,
           "n": 5
         },
         "process_ms": {
           "ci95": [
-            881.5823395709186,
-            1011.8406920290814
+            872.1967834662323,
+            932.4871921337678
           ],
-          "mean": 946.7115158,
+          "mean": 902.3419878000001,
           "n": 5
         },
         "read_ms": {
           "ci95": [
-            0.47691031575795945,
-            0.7144060842420407
+            0.5242057381050933,
+            0.7179774618949069
           ],
-          "mean": 0.5956582,
+          "mean": 0.6210916000000001,
           "n": 5
         },
         "total_ms": {
           "ci95": [
-            981.4288330743773,
-            1132.2998421256227
+            976.2624723447166,
+            1034.2009412552834
           ],
-          "mean": 1056.8643376,
+          "mean": 1005.2317068,
           "n": 5
         }
       },
@@ -1920,18 +1920,18 @@
         "all": {
           "commitment_f1": {
             "ci95": [
-              0.9411764705882353,
-              0.9411764705882353
+              1.0,
+              1.0
             ],
-            "mean": 0.9411764705882353,
+            "mean": 1.0,
             "n": 5
           },
           "commitment_precision": {
             "ci95": [
-              0.8888888888888888,
-              0.8888888888888891
+              1.0,
+              1.0
             ],
-            "mean": 0.888888888888889,
+            "mean": 1.0,
             "n": 5
           },
           "commitment_recall": {
@@ -1952,18 +1952,18 @@
           },
           "false_commitment_rate": {
             "ci95": [
-              0.125,
-              0.125
+              0.0,
+              0.0
             ],
-            "mean": 0.125,
+            "mean": 0.0,
             "n": 5
           },
           "open_loop_f1": {
             "ci95": [
-              0.6917743589743589,
-              0.8056615384615385
+              1.0,
+              1.0
             ],
-            "mean": 0.7487179487179487,
+            "mean": 1.0,
             "n": 5
           },
           "open_loop_precision": {
@@ -1976,10 +1976,10 @@
           },
           "open_loop_recall": {
             "ci95": [
-              0.5306,
-              0.6694
+              1.0,
+              1.0
             ],
-            "mean": 0.6,
+            "mean": 1.0,
             "n": 5
           },
           "provenance_validity": {
@@ -1992,26 +1992,26 @@
           },
           "resolution_accuracy": {
             "ci95": [
-              0.0,
-              0.0
+              1.0,
+              1.0
             ],
-            "mean": 0.0,
+            "mean": 1.0,
             "n": 5
           },
           "supersession_accuracy": {
             "ci95": [
-              0.0,
-              0.0
+              1.0,
+              1.0
             ],
-            "mean": 0.0,
+            "mean": 1.0,
             "n": 5
           },
           "tracking_f1": {
             "ci95": [
-              0.8371531034482759,
-              0.8805480459770115
+              1.0,
+              1.0
             ],
-            "mean": 0.8588505747126437,
+            "mean": 1.0,
             "n": 5
           }
         }
