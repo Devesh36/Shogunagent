@@ -10,6 +10,7 @@
  *   GET /openapi.json                       E10-T6  OpenAPI 3.1 of the REST face
  *   GET /llms.txt, /llms-full.txt           E10-T4  generated from the docs
  *   GET /privacy, /terms                    E23     generated from docs/legal/*.md (DRAFT)
+ *   GET /legal/dpa, /legal/zdr, /legal/sla  E26     the enterprise contract drafts, same generator
  *
  * Every document is computed from code and config (invariant 12) and cached per process; none
  * reads a request body. `observe()` is the middleware the agent app puts in front of its routes
@@ -22,7 +23,7 @@ import incidentsJson from "../../incidents.json" with { type: "json" };
 import toolTableJson from "../../fixtures/tool-table.json" with { type: "json" };
 import { agentCard, signAgentCard } from "./agent-card.js";
 import type { WellknownContext } from "./identity.js";
-import { PRIVACY_HTML, TERMS_HTML } from "./legal-content.generated.js";
+import { DPA_HTML, PRIVACY_HTML, SLA_HTML, TERMS_HTML, ZDR_HTML } from "./legal-content.generated.js";
 import { LLMS_FULL_TXT, LLMS_TXT } from "./llms-content.generated.js";
 import { mcpConfigDocument } from "./mcp-config.js";
 import { openapiDocument } from "./openapi.js";
@@ -96,6 +97,10 @@ export function createWellknown(deps: WellknownDeps): Wellknown {
   const legal = (html: string) => (c: Context) => c.html(html, 200, { ...TEXT_CACHE, "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'", "x-content-type-options": "nosniff" });
   app.get("/privacy", legal(PRIVACY_HTML));
   app.get("/terms", legal(TERMS_HTML));
+  // E26: the enterprise contract drafts (DRAFT for legal review).
+  app.get("/legal/dpa", legal(DPA_HTML));
+  app.get("/legal/zdr", legal(ZDR_HTML));
+  app.get("/legal/sla", legal(SLA_HTML));
 
   // Live: never cached beyond a few seconds.
   const statusDeps = { window, incidents, now, ctx };
