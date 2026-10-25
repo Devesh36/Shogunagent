@@ -68,7 +68,7 @@ jobs:
       - run: pnpm --filter @shogun-ai/api test:node
 
   agent-surfaces:
-    name: agent-readable surfaces (E10: generated files match, registry entry valid, CLI)
+    name: "agent-readable surfaces (E10: generated files match, registry entry valid, CLI)"
     if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -92,3 +92,29 @@ jobs:
           pnpm --filter shogunagent typecheck
           pnpm --filter shogunagent test
           pnpm --filter shogunagent build
+
+  sdk:
+    name: "SDKs (E17: @shogunagent/sdk typecheck, test, build; shogunagent pytest)"
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: TypeScript SDK (fake fetch, no network)
+        run: |
+          pnpm --filter @shogunagent/sdk typecheck
+          pnpm --filter @shogunagent/sdk test
+          pnpm --filter @shogunagent/sdk build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Python SDK (httpx.MockTransport, no network)
+        run: |
+          python -m pip install -e 'packages/sdk-py[test]'
+          cd packages/sdk-py && python -m pytest -q
