@@ -161,6 +161,49 @@ Does not carry over: the macOS capture layer, Keychain-bound secrets, the Tauri 
 
 Shortest path: multiplex the `shogun_api` binary across per-tenant SQLCipher files with `apps/api` in front for auth and metering.
 
+## 11. Agent-native commerce: designed from day one to be chosen by agents
+
+The buyer is increasingly an agent, not a person. An agent discovers a service, compares it on price, latency, health and trust, onboards itself, pays within a budget, and re-selects or abandons it based on how the first calls went. Every one of those steps is designed for, from the first release.
+
+### Principles
+
+1. **Zero-config first call.** An agent with no key can call `discover`, `inspect`, and a tightly scoped read. The first write or metered run returns `402` with everything needed to proceed. Nothing requires a human before the agent has seen value.
+2. **Every response is self-describing.** Each result carries `usage` (cost, units), `latency_ms`, `next_action` on error (what to do, not just what failed), and `hints` (a cheaper or better-fitting alternative when one exists, including a competitor's connector inside the router). Agents' selection loops penalize opaque failures; honesty is the retention mechanism.
+3. **Machine-readable at every well-known location.** The same identity, tool names and schemas appear everywhere an agent might look, and the human-facing docs are derived from the machine-facing ones, never the reverse.
+4. **Descriptions are written for ranking, not for marketing.** Registries and routers rank on description text. Tool descriptions name the tasks an agent is trying to do ("find what the user committed to", "what is pending with this person", "run a tool and keep the result as state") and the exclusions ("not for storing chat transcripts verbatim"). Each description is tested, not guessed (see selection eval).
+5. **One human approval, at most, and only for money.** A card is attached once through URL-mode elicitation; after that the agent spends within its cap. Reads never ask. Permission tiers (L1/L2/L3) govern actions on the user's world; budget caps govern spend. The two are separate and both are visible to the agent before it acts.
+6. **Stability is a feature agents can measure.** Frozen wire names, a published deprecation policy, idempotency keys on every write, `ttlMs` on lists, honored `Retry-After`, and a public incident history. An agent that was burned once does not come back.
+
+### Day-one artifacts
+
+| Surface | What ships | Why an agent needs it |
+|---|---|---|
+| `/.well-known/mcp/server-card.json` | MCP Server Card: endpoint, auth, tool list with annotations | Progressive discovery without a handshake |
+| `server.json` in the MCP Registry | Canonical registry entry | Where Claude Code, Cursor and gateways look first |
+| `/.well-known/agent-card.json` | Signed A2A Agent Card | Cross-organization handoff and identity |
+| `llms.txt` and `llms-full.txt` | Agent-readable docs index | Agents read docs before humans do |
+| `SKILL.md` | Trigger conditions and non-trigger exceptions, setup, auth, precedence rules, cost warnings, status semantics, L2/L3 meaning, numbered rules | Agents install and operate it themselves |
+| `openapi.json` | OpenAPI 3.1 for the REST face | Code-generating agents |
+| `/.well-known/pricing.json` | Machine-readable rate card, free allowance, caps | Price comparison before the first call |
+| `/health` and `/.well-known/status.json` | Live p50 / p95, error rate, incident history | Health-weighted ranking |
+| `benchmarks.json` | Same-harness results with reader, judge, seeds, cost per answer | Trust signal that can be re-run |
+| `quote` endpoint and `dryRun` on every metered call | Exact cost before committing | Budgeted agents refuse unknown costs |
+| 402 payload | Amount, units, accepted rails, human-approval URL, `Retry-After` | Self-service top-up with no support ticket |
+| `POST /v1/agents` | Agent self-registration: returns a scoped key and the free allowance, rate-limited and abuse-gated, no email | Onboarding without a form |
+| Referral in the key | `ref` attribute credited to the referring agent's or developer's wallet | Agents become the channel |
+
+### Payment design
+
+Prepaid wallet settled through Stripe. The `402` response follows the x402 payment-required shape so wallet-carrying agents already know how to read it, even before we accept on-chain settlement. Per-key and per-agent hard caps (daily and monthly) are mandatory and default to conservative values. Receipts are machine-readable per call. Failed and empty results cost nothing. Disputes are an API, not an email.
+
+### Selection eval: the metric that matters
+
+A harness that runs from CI: given a task description, which tool does Claude, GPT, Gemini and an open model pick when ShogunAgent sits alongside Mem0, supermemory, Zep and the router's own alternatives, across the MCP Registry listing, the Claude Code plugin description, the OpenAI Plugin listing and the router's `discover`? The result is a selection rate per surface per model. Description changes ship only when this number does not fall. This is the agent-era equivalent of conversion-rate optimization, and nobody in the category runs it.
+
+### Being chosen inside our own router
+
+The router ranks third-party tools and our own connectors by the same published score (task fit, price, health, latency), with first-party items labeled and a written no-self-preferencing policy. The state layer is not listed as a competing tool; it is the substrate every run writes into. Agents choose tools in the router; they choose the router because the results persist as their user's state.
+
 ## Repository layout
 
 ```
