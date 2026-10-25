@@ -27,6 +27,7 @@ ALLOWLIST = {
     # Each must read the raw credential exactly once, to seal it or to hand it to its OS store; none logs it.
     "crates/shogun-integrations/src/token_store/file.rs",    # seals the value with ChaCha20-Poly1305 before it touches disk (0600)
     "crates/shogun-integrations/src/token_store/grants.rs",  # parses a stored OAuth grant back into the TokenSet the refresh path uses
+    "crates/shogun-integrations/src/token_store/kms.rs",     # E26: seals the value under a KMS-wrapped data key (ChaCha20-Poly1305) for the hosted/BYOC RemoteTokenStore
     "crates/shogun-integrations/src/keychain.rs",            # hands the value to the macOS Keychain (feature `desktop`, macOS only)
 }
 

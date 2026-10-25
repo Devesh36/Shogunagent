@@ -50,6 +50,8 @@ shogun-redact = { path = "../shogun-redact" }
 # nothing new enters the graph.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 hkdf = "0.12"
+# Zeroize the KMS data keys on drop (E26). Already in the graph through chacha20poly1305.
+zeroize = "1"
 
 # The macOS Keychain token source (invariant 7: secrets never in a file/DB/log). macOS-only, and
 # since E5-T5 also behind the `desktop` feature: the server build never links Security.framework.
