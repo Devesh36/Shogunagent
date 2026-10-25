@@ -1462,8 +1462,12 @@ impl Db {
 
 /// Tell the host shell the panel's state tables moved (issue #357). The panel lists commitments
 /// and open loops and its status line counts them, so both parts re-read. A no-op outside the
-/// desktop app (no sink installed); coalesced there, so a burst of writes is one push.
+/// desktop app (no sink installed, and no panel at all without feature `desktop`); coalesced
+/// there, so a burst of writes is one push.
 pub(crate) fn notify_state_changed() {
-    crate::panel_events::notify(crate::panel_events::PanelPart::State);
-    crate::panel_events::notify(crate::panel_events::PanelPart::Status);
+    #[cfg(feature = "desktop")]
+    {
+        crate::panel_events::notify(crate::panel_events::PanelPart::State);
+        crate::panel_events::notify(crate::panel_events::PanelPart::Status);
+    }
 }

@@ -17,7 +17,8 @@
 //! answers each memory call with `memory_update_pending` / `memory_newer_than_app` and recovers
 //! without a restart once the versions match.
 //!
-//! The key comes from `SHOGUN_DB_KEY` (hex), else the app's Keychain entry on macOS.
+//! The key comes from `SHOGUN_DB_KEY` (hex), else the app's Keychain entry (the Mac app's build,
+//! feature `desktop`, on macOS).
 //!
 //! Config via env: `SHOGUN_DB_PATH` (default `./shogun.db`, which does not exist unless you put
 //! the app's store there, so the default alone always exits), `SHOGUN_API_TOKEN` (issues one client
@@ -37,8 +38,6 @@ use shogun_mcp::live_tokens::{revision_path, LiveTokens};
 use shogun_mcp::memory_api::TokenRegistry;
 use shogun_mcp::memory_api_settings;
 use shogun_mcp::startup_report;
-#[cfg(target_os = "macos")]
-use shogun_mcp::memory_api_settings::TOKENS_KEYCHAIN_ACCOUNT;
 use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
 
 /// The live SLO metrics source served at `GET /v1/metrics` (NFR-SLO-00). Wraps the shared
@@ -149,41 +148,24 @@ fn db_backend(db: Db) -> DbBackend {
         .with_dream_action_facts(shogun_core::db_backend::dream_action_facts_for_daemon)
 }
 
+/// The token list: the app's Keychain item in the Mac app's build (feature `desktop`, read
+/// uncached — `shogun_core::desktop::tokens`, issue #744), else one client token from
+/// `SHOGUN_API_TOKEN`.
 fn load_token_registry() -> Result<TokenRegistry, String> {
-    let mut tokens = TokenRegistry::new();
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     {
-        let blob = memory_api_settings::load_token_blob_with_migration(
-            // Uncached: the desktop rewrites this item on every issue or revoke, and the live
-            // re-check (`LiveTokens`) must see that. Only a missing item means "none issued"
-            // (issue #744).
-            || {
-                memory_api_settings::token_blob_read(
-                    shogun_integrations::keychain_store::get_generic_secret_uncached(
-                        TOKENS_KEYCHAIN_ACCOUNT,
-                    )
-                    .map_err(|error| error.code()),
-                )
-            },
-            |bytes| {
-                shogun_integrations::keychain_store::set_generic_secret(
-                    TOKENS_KEYCHAIN_ACCOUNT,
-                    bytes,
-                )
-                .map_err(|_| "could not migrate Memory API token verifiers".to_string())
-            },
-        )?;
-        // Each record brings its scope (issue #400); a pre-scope record reads as `full`. The app
-        // connections (issue #963) come from the same item.
-        tokens.register_blob(&blob)?;
+        shogun_core::desktop::tokens::load_token_registry()
     }
-    #[cfg(not(target_os = "macos"))]
-    if let Ok(token) = std::env::var("SHOGUN_API_TOKEN") {
-        if !token.is_empty() {
-            tokens.issue(token);
+    #[cfg(not(feature = "desktop"))]
+    {
+        let mut tokens = TokenRegistry::new();
+        if let Ok(token) = std::env::var("SHOGUN_API_TOKEN") {
+            if !token.is_empty() {
+                tokens.issue(token);
+            }
         }
+        Ok(tokens)
     }
-    Ok(tokens)
 }
 
 /// The name every stderr line starts with.
@@ -215,6 +197,8 @@ fn gate_or_exit(db_path: &str, db_env_set: bool) {
 async fn main() -> std::io::Result<()> {
     // Audit 2026-10-20 M7: plan resolution reads the Keychain mirrors of the trial stamp and the
     // time high-water mark, so editing onboarding.json / billing.json cannot stretch the plan.
+    // The Mac app's build only (feature `desktop`); the server has no Keychain to mirror.
+    #[cfg(feature = "desktop")]
     shogun_core::plan_mirrors::install();
     let db_env = std::env::var("SHOGUN_DB_PATH").ok();
     let db_env_set = db_env.is_some();

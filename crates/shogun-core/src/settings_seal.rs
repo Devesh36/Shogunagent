@@ -661,34 +661,18 @@ pub fn install_mcp_hooks() -> bool {
     memory_api && web_fetch && export_folders && gmail
 }
 
-/// The Keychain marker (macOS). `may_adopt` lets this process record new kinds.
-#[cfg(all(target_os = "macos", feature = "db"))]
+/// The Keychain marker (the Mac app's build, `desktop::keychain::seal_marker`). `may_adopt`
+/// lets this process record new kinds.
+#[cfg(all(feature = "desktop", feature = "db"))]
 fn keychain_marker(may_adopt: bool) -> Option<SealMarker> {
-    fn read() -> Option<String> {
-        use shogun_integrations::keychain_store::{
-            get_generic_secret_non_interactive_uncached, SETTINGS_SEALED_ACCOUNT,
-        };
-        match get_generic_secret_non_interactive_uncached(SETTINGS_SEALED_ACCOUNT) {
-            Ok(bytes) => String::from_utf8(bytes).ok(),
-            // No item yet: nothing sealed before.
-            Err(error) if error.code() == -25300 => Some(String::new()),
-            Err(_) => None,
-        }
-    }
-    fn record(kinds: &str) {
-        use shogun_integrations::keychain_store::{set_generic_secret, SETTINGS_SEALED_ACCOUNT};
-        if set_generic_secret(SETTINGS_SEALED_ACCOUNT, kinds.as_bytes()).is_err() {
-            eprintln!("[settings-seal] could not record the seal marker");
-        }
-    }
-    Some(SealMarker { sealed_kinds: read, record: may_adopt.then_some(record as fn(&str)) })
+    crate::desktop::keychain::seal_marker(may_adopt)
 }
 
-#[cfg(all(not(target_os = "macos"), feature = "db"))]
+#[cfg(all(not(feature = "desktop"), feature = "db"))]
 fn keychain_marker(may_adopt: bool) -> Option<SealMarker> {
-    // Off macOS there is no Keychain: a process that may adopt runs without a marker (every
-    // missing seal is a first run); one that may not gets a marker that says nothing was sealed
-    // and records nothing, so it never adopts.
+    // Without the Mac app there is no Keychain: a process that may adopt runs without a marker
+    // (every missing seal is a first run); one that may not gets a marker that says nothing was
+    // sealed and records nothing, so it never adopts.
     if may_adopt {
         None
     } else {

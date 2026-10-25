@@ -7,6 +7,13 @@ use shogun_memory::voice_terms::{self, NewVoiceTerm, VoiceTermScope};
 
 use crate::dictionary_learn::Learned;
 
+/// Tell the host shell the auto-add rows moved. A no-op without a sink, and without the panel
+/// (feature `desktop`).
+fn notify_autoadd_changed() {
+    #[cfg(feature = "desktop")]
+    crate::panel_events::notify(crate::panel_events::PanelPart::DictionaryAutoAdd);
+}
+
 const RETENTION_MS: i64 = 86_400_000;
 /// Undo stops relearning a pair for 30 days (owner decision, 2026-10-19).
 const SUPPRESSION_MS: i64 = 30 * RETENTION_MS;
@@ -430,7 +437,7 @@ impl Db {
             tx.commit()
         })
         .map_err(|_| "Could not enable dictionary auto-add".to_string())?;
-        crate::panel_events::notify(crate::panel_events::PanelPart::DictionaryAutoAdd);
+        notify_autoadd_changed();
         Ok(())
     }
 
@@ -447,7 +454,7 @@ impl Db {
                     tx.execute("DELETE FROM dictionary_autoadd_corrections WHERE state = 'pending'", [])?;
                     tx.commit()
                 }).map_err(|_| "Could not disable dictionary auto-add".to_string())?;
-                crate::panel_events::notify(crate::panel_events::PanelPart::DictionaryAutoAdd);
+                notify_autoadd_changed();
                 Ok(())
             }
             AutoAddAction::Undo { .. } | AutoAddAction::UndoGroup { .. } => {
@@ -477,7 +484,7 @@ impl Db {
                             .into(),
                     );
                 }
-                crate::panel_events::notify(crate::panel_events::PanelPart::DictionaryAutoAdd);
+                notify_autoadd_changed();
                 Ok(())
             }
         }
@@ -591,7 +598,7 @@ impl Db {
         }).unwrap_or(ObservationResult { active: true, ..Default::default() });
         drop(guard);
         if result.added.is_some() {
-            crate::panel_events::notify(crate::panel_events::PanelPart::DictionaryAutoAdd);
+            notify_autoadd_changed();
         }
         result
     }
@@ -708,7 +715,7 @@ impl Db {
             })
             .unwrap_or_default();
         if !added.is_empty() {
-            crate::panel_events::notify(crate::panel_events::PanelPart::DictionaryAutoAdd);
+            notify_autoadd_changed();
             eprintln!("[dictionary] notice pushed ({})", added.len());
         }
         added

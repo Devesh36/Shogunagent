@@ -306,8 +306,11 @@ pub fn brief_input_window(created_at_ms: i64, cycle_from: i64, cycle_to: i64) ->
     )
 }
 
+/// The local calendar day around `now_ms`. The Mac app's build (feature `desktop`) asks libc
+/// (`localtime_r` / `mktime`, DST folded in); the server build keeps the documented UTC fallback
+/// until the principal's time zone lands (E1-T7 kept the two paths, only the gate changed).
 pub fn local_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     {
         // SAFETY: `tm` is initialized by localtime_r. mktime accepts and normalizes the copied
         // local calendar values; `tm_isdst = -1` makes libc resolve the correct offset per date.
@@ -339,7 +342,7 @@ pub fn local_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
             }
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(feature = "desktop"))]
     {
         utc_day_bounds(now_ms)
     }
@@ -354,7 +357,7 @@ pub fn local_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
 #[cfg(feature = "db")]
 pub fn local_wrap_window(now_ms: i64) -> (i64, i64) {
     let today_start = local_day_bounds(now_ms).today_start_ms;
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     {
         // SAFETY: `tm` is initialized by localtime_r and only read after it reports success.
         // mktime normalizes `tm_mday + 2` across month and year ends; `tm_isdst = -1` makes libc
@@ -405,7 +408,7 @@ fn utc_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
 /// Seconds east of UTC per the OS, DST folded in. macOS asks libc; elsewhere 0 (UTC) is the
 /// honest fallback — matching `local_date_string`'s convention.
 pub fn os_gmt_offset_secs(now_ms: i64) -> i32 {
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     {
         // SAFETY: `tm` is only read after localtime_r reports success by returning non-null.
         unsafe {
@@ -428,7 +431,7 @@ pub fn local_hour_now(now_ms: i64) -> u32 {
 
 pub fn local_date_string(now_ms: i64) -> String {
     let secs = now_ms.div_euclid(1000);
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     {
         // SAFETY: `tm` is only read after localtime_r reports success by returning non-null.
         unsafe {
@@ -457,7 +460,7 @@ pub fn local_date_string(now_ms: i64) -> String {
 /// `localtime_r`/`mktime` path as [`local_day_bounds`], so a DST day is one date rather than an
 /// assumed 24-hour elapsed interval. Non-macOS keeps the documented UTC fallback.
 pub fn local_date_days_before(now_ms: i64, days: i32) -> String {
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     {
         // SAFETY: `tm` is initialized by localtime_r, and mktime normalizes a calendar-day
         // adjustment with DST inferred from the destination date.

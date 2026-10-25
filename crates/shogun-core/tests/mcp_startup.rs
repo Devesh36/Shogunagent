@@ -6,7 +6,7 @@
 //! a temp folder exist only there. Not on macOS: there the binary reads the token list from the
 //! real login Keychain, which a test must not touch; elsewhere it takes `SHOGUN_API_TOKEN`, which
 //! the harness removes. CI runs this on Linux (`cargo test -p shogun-core --features daemon-server`, a superset of `db`).
-#![cfg(all(feature = "db", debug_assertions, not(target_os = "macos")))]
+#![cfg(all(feature = "db", debug_assertions, not(feature = "desktop")))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::Write as _;

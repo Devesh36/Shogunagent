@@ -64,7 +64,9 @@ use shogun_agents::entitlement::{
 use shogun_license::{trusted_keys, Clock, DeviceBinding, LicenceFacts, TrustedKeys};
 
 /// The desktop app's bundle identifier — its app-data directory holds `onboarding.json` and
-/// `billing.json`. Kept in lockstep with `apps/desktop/src-tauri/tauri.conf.json`.
+/// `billing.json`. Kept in lockstep with `apps/desktop/src-tauri/tauri.conf.json`. Read only by
+/// the Mac app's build (feature `desktop`, [`app_data_dir`]).
+#[cfg(feature = "desktop")]
 const DESKTOP_IDENTIFIER: &str = "com.syogun.shogunai";
 
 /// File name of the billing snapshot the desktop app writes after each successful verification.
@@ -327,15 +329,19 @@ pub(crate) fn app_data_file(env_override: &str, file: &str) -> Option<PathBuf> {
     app_data_dir().map(|dir| dir.join(file))
 }
 
-/// The desktop app's data folder (`~/Library/Application Support/<bundle id>`); `None` off macOS
-/// or without `HOME`. The standalone faces also compare `SHOGUN_DB_PATH` against it to explain a
-/// launcher that points elsewhere (issue #744).
+/// The desktop app's data folder (`~/Library/Application Support/<bundle id>`); `None` off macOS,
+/// without `HOME`, or in a build without the Mac app (feature `desktop`, E1-T7: the server never
+/// looks beside itself for the app's files). The standalone faces also compare `SHOGUN_DB_PATH`
+/// against it to explain a launcher that points elsewhere (issue #744).
 pub fn app_data_dir() -> Option<PathBuf> {
-    if cfg!(target_os = "macos") {
-        let home = std::env::var_os("HOME")?;
-        return Some(PathBuf::from(home).join("Library/Application Support").join(DESKTOP_IDENTIFIER));
+    #[cfg(feature = "desktop")]
+    {
+        crate::desktop_paths::app_data_dir(DESKTOP_IDENTIFIER)
     }
-    None
+    #[cfg(not(feature = "desktop"))]
+    {
+        None
+    }
 }
 
 /// Shared desktop meeting settings location.

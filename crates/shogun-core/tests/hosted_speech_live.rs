@@ -1,6 +1,6 @@
 //! Explicit live smoke: no personal provider key; synthetic PCM stays in memory.
 //! Run only with SHOGUN_ASR_SMOKE_BILLING pointing at this Mac's signed licence file.
-#![cfg(all(feature = "net", target_os = "macos"))]
+#![cfg(all(feature = "desktop", feature = "net", target_os = "macos"))]
 use shogun_core::audio::asr::{
     deepgram::{DeepgramConfig, DeepgramLive, LiveMode},
     hosted,

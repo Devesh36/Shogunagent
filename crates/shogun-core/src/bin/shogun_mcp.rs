@@ -54,8 +54,6 @@ use shogun_mcp::live_tokens::{revision_path, LiveTokens};
 use shogun_mcp::memory_api::{TokenRegistry, TokenScope};
 use shogun_mcp::memory_api_settings;
 use shogun_mcp::startup_report;
-#[cfg(target_os = "macos")]
-use shogun_mcp::memory_api_settings::TOKENS_KEYCHAIN_ACCOUNT;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -75,36 +73,24 @@ fn visual_recall_settings_path(db_path: &str) -> Option<std::path::PathBuf> {
         })
 }
 
+/// The token list: the app's Keychain item in the Mac app's build (feature `desktop`, read
+/// uncached — `shogun_core::desktop::tokens`, issue #744), else one client token from
+/// `SHOGUN_API_TOKEN`.
 fn load_token_registry() -> Result<TokenRegistry, String> {
-    let mut tokens = TokenRegistry::new();
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     {
-        let blob = memory_api_settings::load_token_blob_with_migration(
-            || {
-                memory_api_settings::token_blob_read(
-                    shogun_integrations::keychain_store::get_generic_secret_uncached(
-                        TOKENS_KEYCHAIN_ACCOUNT,
-                    )
-                    .map_err(|error| error.code()),
-                )
-            },
-            |bytes| {
-                shogun_integrations::keychain_store::set_generic_secret(
-                    TOKENS_KEYCHAIN_ACCOUNT,
-                    bytes,
-                )
-                .map_err(|_| "could not migrate Memory API token verifiers".to_string())
-            },
-        )?;
-        tokens.register_blob(&blob)?;
+        shogun_core::desktop::tokens::load_token_registry()
     }
-    #[cfg(not(target_os = "macos"))]
-    if let Ok(token) = std::env::var(API_TOKEN_ENV) {
-        if !token.is_empty() {
-            tokens.issue(token);
+    #[cfg(not(feature = "desktop"))]
+    {
+        let mut tokens = TokenRegistry::new();
+        if let Ok(token) = std::env::var(API_TOKEN_ENV) {
+            if !token.is_empty() {
+                tokens.issue(token);
+            }
         }
+        Ok(tokens)
     }
-    Ok(tokens)
 }
 
 /// The name every stderr line starts with, so a client's server log says whose line it is.
@@ -175,19 +161,17 @@ fn gate_or_exit(
 /// Issue #979: for an app whose code signature SHOGUN expects
 /// (`shogun_mcp::launcher_check::EXPECTED_SIGNERS`), exit unless that app started this process.
 /// Every other app is not checked and nothing is read, so this only ever takes access away. The
-/// table is empty until each app is confirmed on a Mac, so today it never refuses.
+/// table is empty until each app is confirmed on a Mac, so today it never refuses. The check is
+/// the Mac app's (feature `desktop`, `shogun_core::desktop::launcher`); the server build has no
+/// signatures to read and nothing to refuse.
 fn check_launcher_or_exit(client: &str) {
-    #[cfg(target_os = "macos")]
-    let verdict = shogun_mcp::launcher_check::judge(
-        client,
-        shogun_integrations::code_signature::ancestors(),
-    );
-    #[cfg(not(target_os = "macos"))]
-    let verdict = shogun_mcp::launcher_check::judge_without_signatures(client);
-    if let shogun_mcp::launcher_check::LauncherVerdict::Refused(refusal) = verdict {
+    #[cfg(feature = "desktop")]
+    if let Some(refusal) = shogun_core::desktop::launcher::refusal(client) {
         eprintln!("{}", startup_report::launcher_refusal(FACE, client, refusal));
         std::process::exit(1);
     }
+    #[cfg(not(feature = "desktop"))]
+    let _ = client;
 }
 
 /// The PostHog key embedded at build time, like the desktop's (`SHOGUN_POSTHOG_KEY` in release CI).
@@ -248,6 +232,8 @@ fn main() -> std::io::Result<()> {
     chat_bridge_or_continue();
     // Audit 2026-10-20 M7: plan resolution reads the Keychain mirrors of the trial stamp and the
     // time high-water mark, so editing onboarding.json / billing.json cannot stretch the plan.
+    // The Mac app's build only (feature `desktop`); the server has no Keychain to mirror.
+    #[cfg(feature = "desktop")]
     shogun_core::plan_mirrors::install();
     let db_env = std::env::var(DB_PATH_ENV).ok();
     let db_env_set = db_env.is_some();

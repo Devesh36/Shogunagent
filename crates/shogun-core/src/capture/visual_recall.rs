@@ -9,60 +9,22 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-#[cfg(target_os = "macos")]
-use std::os::fd::AsRawFd;
-#[cfg(target_os = "macos")]
-use std::path::PathBuf;
+/// The Mac app's half (feature `desktop`): the cross-process settings file lock and the Apple
+/// Vision OCR. The server build keeps the settings model and the in-process lock only.
+#[cfg(feature = "desktop")]
+mod desktop;
+#[cfg(feature = "desktop")]
+use desktop::SettingsFileLock;
 
 static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 static SETTINGS_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-#[cfg(target_os = "macos")]
-struct SettingsFileLock(std::fs::File);
-
-#[cfg(target_os = "macos")]
-impl SettingsFileLock {
-    fn acquire(path: &Path) -> Result<Self, String> {
-        use std::fs::OpenOptions;
-
-        let lock_path = settings_lock_path(path);
-        if let Some(dir) = lock_path.parent() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| format!("create visual_recall settings directory: {e}"))?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|e| format!("open visual_recall settings lock: {e}"))?;
-        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if result != 0 {
-            return Err(format!(
-                "lock visual_recall settings: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        Ok(Self(file))
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for SettingsFileLock {
-    fn drop(&mut self) {
-        let _ = unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn settings_lock_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("visual_recall.json");
-    path.with_file_name(format!(".{file_name}.lock"))
-}
+/// Whether this build can OCR a stored frame (`visual_recall.rescan_frame`'s `ocr_available`):
+/// Apple Vision, so the Mac app's build on macOS only.
+#[cfg(feature = "desktop")]
+pub const OCR_AVAILABLE: bool = desktop::OCR_AVAILABLE;
+#[cfg(not(feature = "desktop"))]
+pub const OCR_AVAILABLE: bool = false;
 
 /// Existing installs and invalid retention values safely fall back to three days.
 pub const DEFAULT_RETENTION_DAYS: u32 = 3;
@@ -253,7 +215,7 @@ pub fn try_update_settings_with_commit(
     let _guard = SETTINGS_WRITE_LOCK
         .lock()
         .map_err(|_| "visual recall settings lock poisoned".to_string())?;
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     let _file_guard = SettingsFileLock::acquire(path)?;
     let mut settings = load_settings(path);
     update(&mut settings)?;
@@ -270,7 +232,7 @@ pub fn with_locked_settings<T>(
     let _guard = SETTINGS_WRITE_LOCK
         .lock()
         .map_err(|_| "visual recall settings lock poisoned".to_string())?;
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     let _file_guard = SettingsFileLock::acquire(path)?;
     Ok(read(&load_settings(path)))
 }
@@ -333,94 +295,19 @@ pub fn map_vision_box(region: [f64; 4], bb: [f64; 4]) -> [f64; 4] {
     [rx + bx * rw, 1.0 - (bottom + h), bw * rw, h]
 }
 
-/// Run Vision text recognition on a stored JPEG, restricted to `region` (see [`ocr_jpeg_bytes`]).
-/// Returns `(text, confidence, full-image box)` per non-empty line.
-///
-/// Vision and ImageIO autorelease the decoded pixel buffers, and the capture poller is a plain
-/// thread with no pool: without this one, every OCR'd frame stayed in RAM for the life of the
-/// process (about 4 GB after an hour).
-#[cfg(target_os = "macos")]
-fn recognize_lines(jpeg: &[u8], region: [f64; 4]) -> Option<Vec<OcrLine>> {
-    objc2::rc::autoreleasepool(|_| recognize_lines_in_pool(jpeg, region))
-}
-
-#[cfg(target_os = "macos")]
-fn recognize_lines_in_pool(jpeg: &[u8], region: [f64; 4]) -> Option<Vec<OcrLine>> {
-    use objc2::AnyThread;
-    use objc2::runtime::AnyObject;
-    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-    use objc2_foundation::{NSArray, NSData, NSDictionary};
-    use objc2_vision::{
-        VNImageRequestHandler, VNRecognizedTextObservation, VNRecognizeTextRequest, VNRequest,
-        VNRequestTextRecognitionLevel,
-    };
-
-    let data = NSData::with_bytes(jpeg);
-    let options = NSDictionary::<objc2_vision::VNImageOption, AnyObject>::new();
-    let handler =
-        VNImageRequestHandler::initWithData_options(VNImageRequestHandler::alloc(), &data, &options);
-    let request = unsafe {
-        let req = VNRecognizeTextRequest::init(VNRecognizeTextRequest::alloc());
-        req.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
-        req.setUsesLanguageCorrection(true);
-        req.setAutomaticallyDetectsLanguage(true);
-        // Vision's origin is the lower-left corner.
-        let [x, y, width, height] = region;
-        req.setRegionOfInterest(CGRect::new(
-            CGPoint::new(x, 1.0 - y - height),
-            CGSize::new(width, height),
-        ));
-        req
-    };
-    let requests = NSArray::from_slice(&[&*request as &VNRequest]);
-    handler.performRequests_error(&requests).ok()?;
-    let observations = request.results()?;
-    let mut lines: Vec<OcrLine> = Vec::new();
-    let mut conf_sum = 0.0f32;
-    for obs in observations.iter() {
-        let Some(text_obs) = obs.downcast_ref::<VNRecognizedTextObservation>() else {
-            continue;
-        };
-        let candidates = text_obs.topCandidates(1);
-        if let Some(best) = candidates.firstObject() {
-            let line = best.string().to_string();
-            if line.trim().is_empty() {
-                continue;
-            }
-            conf_sum += best.confidence();
-            let bb = unsafe { text_obs.boundingBox() };
-            let [x, y, w, h] = map_vision_box(
-                region,
-                [bb.origin.x, bb.origin.y, bb.size.width, bb.size.height],
-            );
-            lines.push(OcrLine { text: line, x, y, w, h });
-        }
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    let n = lines.len() as f32;
-    eprintln!(
-        "[visual_recall] ocr lines={} mean_conf={:.2} chars={}",
-        lines.len(),
-        conf_sum / n,
-        lines.iter().map(|l| l.text.len()).sum::<usize>() + lines.len().saturating_sub(1)
-    );
-    Some(lines)
-}
-
-/// Re-OCR a stored JPEG via Apple Vision (macOS). Returns `None` when OCR fails or unavailable.
+/// Re-OCR a stored JPEG via Apple Vision (the Mac app's build on macOS). Returns `None` when OCR
+/// fails or is unavailable, as it always is in the server build.
 ///
 /// `region` is the focused window as `(x, y, width, height)` fractions of the image, top-left
 /// origin ([`shogun_memory::screen_frames::OcrRegion::normalized`]). Text outside it belongs to
 /// other windows and is never read (#969).
-#[cfg(target_os = "macos")]
+#[cfg(feature = "desktop")]
 pub fn ocr_jpeg_bytes(jpeg: &[u8], region: [f64; 4]) -> Option<String> {
-    let lines = recognize_lines(jpeg, region)?;
+    let lines = desktop::recognize_lines(jpeg, region)?;
     Some(lines.into_iter().map(|l| l.text).collect::<Vec<_>>().join("\n"))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(feature = "desktop"))]
 pub fn ocr_jpeg_bytes(_jpeg: &[u8], _region: [f64; 4]) -> Option<String> {
     None
 }
@@ -429,23 +316,23 @@ pub fn ocr_jpeg_bytes(_jpeg: &[u8], _region: [f64; 4]) -> Option<String> {
 /// hands it a lossless crop of the focused window at native resolution, taken from the same
 /// capture as the saved preview, so recognition does not suffer the preview's downscale and JPEG
 /// loss. `region` is as in [`ocr_jpeg_bytes`].
-#[cfg(target_os = "macos")]
+#[cfg(feature = "desktop")]
 pub fn ocr_image_bytes(image: &[u8], region: [f64; 4]) -> Option<String> {
     ocr_jpeg_bytes(image, region)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(feature = "desktop"))]
 pub fn ocr_image_bytes(_image: &[u8], _region: [f64; 4]) -> Option<String> {
     None
 }
 
 /// Like [`ocr_jpeg_bytes`] but keeps each line's box (read-only "View OCR text").
-#[cfg(target_os = "macos")]
+#[cfg(feature = "desktop")]
 pub fn ocr_jpeg_lines(jpeg: &[u8], region: [f64; 4]) -> Option<Vec<OcrLine>> {
-    recognize_lines(jpeg, region)
+    desktop::recognize_lines(jpeg, region)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(feature = "desktop"))]
 pub fn ocr_jpeg_lines(_jpeg: &[u8], _region: [f64; 4]) -> Option<Vec<OcrLine>> {
     None
 }
@@ -600,8 +487,8 @@ mod tests {
         let settings: Settings = serde_json::from_str(&json).unwrap();
         assert!(settings.enabled);
         assert_eq!(settings.retention.days(), 30);
-        #[cfg(target_os = "macos")]
-        let _ = std::fs::remove_file(settings_lock_path(&path));
+        #[cfg(feature = "desktop")]
+        let _ = std::fs::remove_file(desktop::settings_lock_path(&path));
         let _ = std::fs::remove_file(path);
     }
 
@@ -618,8 +505,8 @@ mod tests {
         update_settings(&path, |settings| settings.enabled = false).unwrap();
         assert_eq!(with_capture_enabled(&path, || 9).unwrap(), None);
 
-        #[cfg(target_os = "macos")]
-        let _ = std::fs::remove_file(settings_lock_path(&path));
+        #[cfg(feature = "desktop")]
+        let _ = std::fs::remove_file(desktop::settings_lock_path(&path));
         let _ = std::fs::remove_file(path);
     }
 
@@ -657,12 +544,12 @@ mod tests {
         capture.join().unwrap();
 
         assert!(!frame_present.load(Ordering::SeqCst));
-        #[cfg(target_os = "macos")]
-        let _ = std::fs::remove_file(settings_lock_path(&path));
+        #[cfg(feature = "desktop")]
+        let _ = std::fs::remove_file(desktop::settings_lock_path(&path));
         let _ = std::fs::remove_file(path);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     #[test]
     fn cross_process_settings_update_child() {
         let Ok(path) = std::env::var("SHOGUN_VR_SETTINGS_TEST_PATH") else {
@@ -680,7 +567,7 @@ mod tests {
         .unwrap();
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     #[test]
     fn cross_process_updates_are_serialized() {
         use std::process::Command;
@@ -711,7 +598,7 @@ mod tests {
         let settings: Settings = serde_json::from_str(&json).unwrap();
         assert!(settings.enabled);
         assert_eq!(settings.retention.days(), 30);
-        let _ = std::fs::remove_file(settings_lock_path(&path));
+        let _ = std::fs::remove_file(desktop::settings_lock_path(&path));
         let _ = std::fs::remove_file(path);
     }
 }

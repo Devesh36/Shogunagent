@@ -20,6 +20,14 @@ path = "src/lib.rs"
 
 [features]
 default = []
+# `desktop` compiles the modules that exist only for the ShogunAI Mac app (E1-T7): the capture
+# pipeline, the audio lane, the notch, Scribe / inline drafting, form filling, the Gmail transport,
+# the host-shell bridges (sounds, panel events, self-install, updater) and the Keychain glue that
+# the standalone faces use on a Mac. OFF by default: the ShogunAgent server build carries none of
+# them. The feature compiles on Linux too (the `cfg(target_os = "macos")` gates inside it stay),
+# so CI proves the Mac app can keep consuming this crate. `scripts/check-desktop-gate.py` keeps
+# every `target_os = "macos"` site behind it.
+desktop = ["shogun-mcp?/desktop"]
 # Local relay override (SHOGUN_RELAY_BASE_URL / relay_override.json, loopback only) and plain-http
 # loopback requests. OFF in shipping builds; the owner testing build enables it.
 local-relay = []
@@ -40,7 +48,9 @@ exec = ["db", "net", "dep:shogun-agents"]
 daemon-server = ["exec", "shogun-mcp/server", "tokio/rt-multi-thread", "tokio/macros"]
 # The MT3 audio lane: the real capture + ASR backends. macOS-only heavy deps (whisper.cpp/Metal,
 # cpal, Core Audio via objc2), so OFF by default — the pure-logic audio tests compile without them.
+# The audio module itself is part of the desktop set, so this implies `desktop`.
 audio = [
+    "desktop",
     "dep:whisper-rs",
     "dep:cpal",
     "dep:objc2-foundation",
@@ -137,6 +147,24 @@ objc2-core-foundation = { version = "0.3.2", features = ["CFCGTypes"] }
 name = "shogun-api"
 path = "src/bin/shogun_api.rs"
 required-features = ["daemon-server"]
+
+# Desktop-only probes and benches (E1-T7): they drive modules the server build does not carry, so
+# cargo skips them unless `desktop` is on. `recap_probe` uses only `meeting::minutes` and needs
+# no feature.
+[[example]]
+name = "audio_probe"
+path = "examples/audio_probe.rs"
+required-features = ["desktop"]
+
+[[example]]
+name = "inline_bench"
+path = "examples/inline_bench.rs"
+required-features = ["desktop"]
+
+[[example]]
+name = "rewrite_ab"
+path = "examples/rewrite_ab.rs"
+required-features = ["desktop"]
 
 # The MCP server face — a stdio JSON-RPC loop (no axum; only the storage layer).
 [[bin]]

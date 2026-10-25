@@ -324,7 +324,7 @@ fn merge_period_windows(
     current
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(feature = "desktop")]
 fn local_period_containing(
     instant_ms: i64,
     level: shogun_memory::period_summaries::PeriodLevel,
@@ -380,7 +380,7 @@ fn local_period_containing(
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(feature = "desktop"))]
 fn local_period_containing(
     instant_ms: i64,
     level: shogun_memory::period_summaries::PeriodLevel,
@@ -418,7 +418,7 @@ fn local_period_containing(
     Some(bounds)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(feature = "desktop"))]
 fn days_from_civil(year: i32, month: i32, day: i32) -> i64 {
     let year = year - i32::from(month <= 2);
     let era = year.div_euclid(400);
@@ -2329,7 +2329,7 @@ mod tests {
     use shogun_memory::event_log::EventText;
     use std::sync::Arc;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     #[test]
     fn local_periods_preserve_half_open_hours_across_dst_spring_forward() {
         const CHILD_MARKER: &str = "SHOGUN_DREAM_DST_TEST_CHILD";

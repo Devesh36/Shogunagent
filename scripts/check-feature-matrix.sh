@@ -8,7 +8,11 @@
 # That happened on issue #81 step 3 and cost a red CI round trip; running this before pushing
 # turns that into a local failure instead.
 #
-# ShogunAgent has no macOS shell: every workspace member builds and tests on Linux.
+# ShogunAgent has no macOS shell: every workspace member builds and tests on Linux. The Mac app's
+# modules sit behind the `desktop` feature of shogun-core / shogun-mcp (E1-T7): off in every job
+# below but the two `--features desktop,…` lines, which keep that feature compiling on Linux so
+# ShogunAI can go on consuming the crates. `check-desktop-gate.py` then proves the default build
+# carries no `cfg(target_os = "macos")` site.
 #
 # Keep in step with .github/workflows/ci.yml — the combinations below mirror its jobs.
 set -euo pipefail
@@ -22,7 +26,11 @@ run cargo clippy --workspace --all-targets
 run cargo clippy -p shogun-core --features db --all-targets
 run cargo clippy -p shogun-core --features exec --all-targets
 run cargo clippy -p shogun-core --features daemon-server --all-targets
+run cargo clippy -p shogun-core --features desktop,daemon-server --all-targets
 run cargo clippy -p shogun-mcp --features server --all-targets
+run cargo clippy -p shogun-mcp --features desktop,server --all-targets
+run python3 scripts/check-desktop-gate.py --self-test
+run python3 scripts/check-desktop-gate.py
 
 run cargo test --workspace
 # One run under the superset (daemon-server = exec + server, exec = db + net) executes every
