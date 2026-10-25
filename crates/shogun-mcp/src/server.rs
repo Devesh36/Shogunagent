@@ -27,6 +27,16 @@ use crate::memory_api::TokenRegistry;
 use crate::memory_readiness::MemoryUnavailable;
 use crate::rest::{self, Method, RestRequest, Routed};
 
+#[path = "server_governance.rs"]
+mod governance;
+
+/// SHA-256 of an admin credential of at least 16 characters; `None` otherwise.
+fn admin_digest(token: &str) -> Option<[u8; 32]> {
+    use sha2::Digest as _;
+    let token = token.trim();
+    (token.chars().count() >= 16).then(|| sha2::Sha256::digest(token.as_bytes()).into())
+}
+
 /// The default Memory API port (FR-API-01).
 pub const DEFAULT_PORT: u16 = 7464;
 
@@ -74,6 +84,13 @@ pub struct AppState {
     /// The MCP face behind `POST /mcp` (E4-T1, Streamable HTTP, stateless). `None` answers 404
     /// there, as before the transport existed.
     mcp: Option<Arc<dyn crate::mcp_http::McpHandler>>,
+    /// Remote approvals (E15): the approval base URL, the decision-token key and the ledger,
+    /// shared with the MCP face.
+    remote: crate::remote_approvals::RemoteApprovals,
+    /// SHA-256 of the operator's admin credential (`SHOGUN_ADMIN_TOKEN`): the bearer that may
+    /// decide approvals and change grants from the CLI. Never an agent's token; the raw value is
+    /// not kept.
+    admin_digest: Option<[u8; 32]>,
 }
 
 /// Multi-principal mode (E2-T2): which store and which writer a bearer token names. `apps/api`
@@ -83,13 +100,45 @@ pub trait BackendResolver: Send + Sync {
     /// the JSON body to answer with (401 for a token no principal owns, 503 for a store that
     /// cannot be opened).
     fn resolve(&self, token: &str) -> Result<ResolvedBackend, (u16, String)>;
+
+    /// The backend of `principal` with no caller: for the operator's admin routes and for
+    /// recording an approval decision in the principal's audit log. Default: unknown.
+    fn backend_for_principal(&self, _principal: &str) -> Result<Arc<dyn MemoryBackend>, (u16, String)> {
+        Err((404, r#"{"error":"principal_not_found"}"#.to_string()))
+    }
+
+    /// Team (E18): `token`'s principal reading `target`'s world state. Only when both are on one
+    /// team and `target` granted the caller `world_read`; the backend answers world rows only
+    /// (the server pins the read scope). Default: refused.
+    fn cross_read(&self, _token: &str, _target: &str) -> Result<ResolvedBackend, (u16, String)> {
+        Err((403, crate::server::CROSS_READ_REFUSED.to_string()))
+    }
+
+    /// The teams this sidecar knows, as JSON (`GET /v1/teams`). Default: none (single principal).
+    fn teams(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// Define or replace a team (`POST /v1/teams`, admin). Default: not available.
+    fn set_team(&self, _tenant: &str, _team: &str, _members: &[String]) -> Result<serde_json::Value, (u16, String)> {
+        Err((404, r#"{"error":"teams_unavailable","message":"Teams exist only in multi-principal mode."}"#.to_string()))
+    }
 }
 
 /// One principal's backend and the actor (`agent:<id>`) the request's writes carry.
 pub struct ResolvedBackend {
     pub backend: Arc<dyn MemoryBackend>,
     pub actor: String,
+    /// The principal id (multi-principal mode).
+    pub principal: Option<String>,
 }
+
+/// A request's store, call scope and principal (multi-principal mode).
+type ResolvedCall = (Arc<dyn MemoryBackend>, shogun_memory::actor::CallScope, Option<String>);
+
+/// The 403 body of a cross-principal read without a team grant: the same whether the principal
+/// exists or not, so it is no oracle on principal ids.
+pub const CROSS_READ_REFUSED: &str = r#"{"error":"cross_principal_forbidden","message":"No read grant from that principal. A teammate grants world read access with acl.grant (kind principal).","next_action":null}"#;
 
 impl AppState {
     /// Build state from the token registry, the data backend, the shared approval queue, and a
@@ -120,7 +169,26 @@ impl AppState {
             llm_limiter: Arc::new(crate::rate_limit::LlmRateLimiter::in_memory()),
             principals: None,
             mcp: None,
+            remote: crate::remote_approvals::RemoteApprovals::from_env(),
+            admin_digest: std::env::var("SHOGUN_ADMIN_TOKEN").ok().and_then(|t| admin_digest(&t)),
         }
+    }
+
+    /// Remote approvals (E15): base URL, decision-token key and ledger. Overrides the
+    /// environment (`SHOGUN_APPROVAL_BASE_URL`, `SHOGUN_APPROVAL_SIGNING_KEY`); share the same value
+    /// with the MCP face so both record into one ledger.
+    #[must_use]
+    pub fn with_remote_approvals(mut self, remote: crate::remote_approvals::RemoteApprovals) -> Self {
+        self.remote = remote;
+        self
+    }
+
+    /// The operator's admin credential (overrides `SHOGUN_ADMIN_TOKEN`). `None` disables the
+    /// admin routes' bearer path (a signed approval token still decides).
+    #[must_use]
+    pub fn with_admin_token(mut self, token: Option<&str>) -> Self {
+        self.admin_digest = token.and_then(admin_digest);
+        self
     }
 
     /// Serve many principals from one process (E2-T2): every memory request resolves its backend
@@ -134,21 +202,39 @@ impl AppState {
 
     /// The backend and call scope for one request. Single-principal: the fixed backend, written as
     /// the owner. Multi-principal: the resolver's answer, or the status and body to refuse with.
+    /// `cross` names another principal to read (Team, E18): its world rows only, through the
+    /// resolver's grant check; the caller's writer stays the call's actor.
     fn backend_for(
         &self,
         token: Option<&str>,
         include_scratch: bool,
-    ) -> Result<(Arc<dyn MemoryBackend>, shogun_memory::actor::CallScope), (u16, String)> {
+        cross: Option<&str>,
+    ) -> Result<ResolvedCall, (u16, String)> {
         use shogun_memory::actor::{CallScope, Namespace, ReadScope, WriteContext};
         let read = ReadScope { include_scratch };
         let Some(resolver) = &self.principals else {
-            return Ok((self.backend.clone(), CallScope { write: WriteContext::owner(), read }));
+            if cross.is_some() {
+                return Err((403, CROSS_READ_REFUSED.to_string()));
+            }
+            return Ok((self.backend.clone(), CallScope { write: WriteContext::owner(), read }, None));
         };
         let token = token.ok_or_else(|| (401, r#"{"error":"unauthorized"}"#.to_string()))?;
         let resolved = resolver.resolve(token)?;
+        if let Some(target) = cross.filter(|target| Some(*target) != resolved.principal.as_deref()) {
+            let other = resolver.cross_read(token, target)?;
+            // A teammate is a human of another principal: not restricted by this store's scratch
+            // ACL, so the read scope is pinned to the world — never scratch, whatever was asked.
+            let actor = shogun_memory::actor::Actor::human(resolved.principal.as_deref().unwrap_or("team"))
+                .map_err(|_| (500, r#"{"error":"invalid_actor"}"#.to_string()))?;
+            return Ok((
+                other.backend,
+                CallScope { write: WriteContext::world(actor), read: ReadScope::WORLD_ONLY },
+                other.principal,
+            ));
+        }
         let write = WriteContext::new(&resolved.actor, Namespace::World)
             .map_err(|_| (500, r#"{"error":"invalid_actor"}"#.to_string()))?;
-        Ok((resolved.backend, CallScope { write, read }))
+        Ok((resolved.backend, CallScope { write, read }, resolved.principal))
     }
 
     /// Serve the MCP face at `POST /mcp` (E4-T1): the handler runs every request under the
@@ -322,6 +408,11 @@ async fn handle_mcp(State(state): State<AppState>, req: Request) -> Response {
     if let Some(allow) = reply.allow {
         response = response.header(axum::http::header::ALLOW, allow);
     }
+    // E15: a call that queued an approval names its decision token in a header, so the gateway
+    // can notify Slack and webhooks without reading the body (invariant 2).
+    if let Some(token) = approval_token_in(&reply.body) {
+        response = response.header(crate::remote_approvals::TOKEN_HEADER, token);
+    }
     response
         .body(Body::from(reply.body))
         .unwrap_or_else(|_| render(500, r#"{"error":"internal"}"#.to_string()))
@@ -398,11 +489,23 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             .get(AUTHORIZATION)
             .and_then(|v| v.to_str().ok()),
     );
+    // E15: a hosted surface's signed decision token; E18: the request id every audit record
+    // carries (the caller's `X-Request-Id`, or a fresh one), echoed on the response.
+    let approval_token = req
+        .headers()
+        .get(crate::remote_approvals::TOKEN_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let request_id = crate::governance_api::request_id(
+        req.headers().get("x-request-id").and_then(|v| v.to_str().ok()),
+    );
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
     let include_low = include_low_opt_in(raw_query);
     // E2-T5: `?include_scratch` widens reads to the agents' scratch namespaces for this call.
     let include_scratch = query_flag(raw_query, "include_scratch");
+    // E18 Team: `?principal=<other>` reads a teammate's world state, when it granted it.
+    let cross = query_value(raw_query, "principal");
     let for_generation = query_flag(raw_query, "for_generation");
     // `?url=` (the web reads, issue #555) rides the same slot as `?q=`: one string per read.
     let query = raw_query
@@ -463,8 +566,24 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         Err(_) => return render(413, r#"{"error":"payload_too_large"}"#.to_string()),
     };
 
-    let (status, resp_body) = match method {
-        None => (405, r#"{"error":"method_not_allowed"}"#.to_string()),
+    // The operator's and the hosted surfaces' routes (E15 decide, E18 grants and teams) answer
+    // before the agent routing: none of them is a tool an agent's bearer can reach.
+    if let Some(method) = method {
+        let incoming = governance::Incoming {
+            method,
+            path: &path,
+            bearer: token.as_deref(),
+            approval_token: approval_token.as_deref(),
+            body: body.as_deref(),
+            request_id: &request_id,
+        };
+        if let Some((status, body)) = governance::admin_route(&state, &incoming) {
+            return render_with(status, body, &request_id, None);
+        }
+    }
+
+    let (status, resp_body, approval_header) = match method {
+        None => (405, r#"{"error":"method_not_allowed"}"#.to_string(), None),
         Some(method) => {
             let rreq = RestRequest {
                 method,
@@ -518,12 +637,23 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             // The store this request reads and writes, and the writer it records (E2-T2 / E2-T4).
             // Only a route that touches memory needs one; status, metrics and approval polling
             // answer without it.
-            let (backend, scope) = match state.backend_for(rreq.token.as_deref(), include_scratch) {
+            // A cross-principal read (E18 Team) reaches world-state reads only: no write, no
+            // scratch file, no other principal's approvals, audit log or grants.
+            if cross.is_some() && !governance::cross_allowed(&routed) {
+                return render_with(403, governance::CROSS_READ_ONLY.to_string(), &request_id, None);
+            }
+            let (backend, scope, principal) = match state.backend_for(rreq.token.as_deref(), include_scratch, cross.as_deref()) {
                 Ok(resolved) => resolved,
-                Err((status, body)) if tool.is_some() => return render(status, body),
-                Err(_) => (state.backend.clone(), shogun_memory::actor::CallScope::default()),
+                Err((status, body)) if tool.is_some() => return render_with(status, body, &request_id, None),
+                Err(_) => (state.backend.clone(), shogun_memory::actor::CallScope::default(), None),
             };
-            shogun_memory::actor::with_call_scope(scope, || match routed {
+            let write_info = governance::write_info(&routed);
+            let actor = scope.write.actor.as_str().to_string();
+            let answered = shogun_memory::actor::with_call_scope(scope, || match routed {
+                // E15: the approval summaries, from the queue and the ledger (never the body).
+                Routed::Read { tool: tool @ (crate::memory_api::Tool::ApprovalsList | crate::memory_api::Tool::ApprovalsGet), id } => {
+                    governance::approvals_read(&state, tool, id, principal.as_deref())
+                }
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
                 // A local action is answered here, before the queue (issue #779): a search runs,
                 // the screen-side kinds are refused. Sends take the approval queue.
@@ -712,11 +842,23 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                 ),
                 // reads/writes/status/errors go through the backend renderer.
                 _ => rest::respond_with(&rreq, &tokens, &ent, backend.as_ref()),
-            })
+            });
+            governance::after_call(
+                &state,
+                backend.as_ref(),
+                &governance::CallFacts {
+                    actor: &actor,
+                    principal: principal.as_deref(),
+                    write: write_info,
+                    cross: cross.as_deref(),
+                    request_id: &request_id,
+                },
+                answered,
+            )
         }
     };
 
-    render(status, resp_body)
+    render_with(status, resp_body, &request_id, approval_header.as_deref())
 }
 
 /// The 429 body when `tool` starts a model call and the caller's token is over its per-client
@@ -758,7 +900,7 @@ fn with_approvals(
     request: impl FnOnce(&mut ApprovalQueue, rest::ApprovalSurface) -> (u16, String),
 ) -> (u16, String) {
     if let Some(store) = &state.approval_store {
-        if !(state.desktop_running)() {
+        if !(state.desktop_running)() && !state.remote.enabled() {
             return (503, r#"{"error":"desktop_unavailable"}"#.to_string());
         }
         return match store.with_queue(|queue| request(queue, rest::ApprovalSurface::Present)) {
@@ -767,7 +909,7 @@ fn with_approvals(
         };
     }
     match state.approvals.lock() {
-        Ok(mut queue) => request(&mut queue, state.surface),
+        Ok(mut queue) => request(&mut queue, if state.remote.enabled() { rest::ApprovalSurface::Present } else { state.surface }),
         Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
     }
 }
@@ -780,6 +922,31 @@ fn approval_store_error(why: &str) -> String {
         return serde_json::json!({ "error": "approval_store", "detail": why }).to_string();
     }
     r#"{"error":"approval_store"}"#.to_string()
+}
+
+/// The decision token in an `approval_required` MCP result (`result.approval.url` ends in
+/// `/approve/<token>`), if any.
+fn approval_token_in(body: &str) -> Option<String> {
+    if !body.contains("/approve/") {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let url = value["result"]["approval"]["url"].as_str()?;
+    url.rsplit_once("/approve/").map(|(_, token)| token.to_string()).filter(|t| !t.is_empty())
+}
+
+/// [`render`] with the request id (E18) and, when this call queued an approval, its decision
+/// token (E15) — the gateway reads the header to notify Slack and webhooks without reading the
+/// body (invariant 2).
+fn render_with(status: u16, body: String, request_id: &str, approval_token: Option<&str>) -> Response {
+    let mut builder = Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "application/json")
+        .header("x-request-id", request_id);
+    if let Some(token) = approval_token {
+        builder = builder.header(crate::remote_approvals::TOKEN_HEADER, token);
+    }
+    builder.body(Body::from(body)).unwrap_or_default()
 }
 
 /// The one place a JSON response is built, so every exit from `handle` is shaped the same.

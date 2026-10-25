@@ -194,10 +194,10 @@ pub struct McpServer<B: MemoryBackend> {
     /// Per-client limit on model-starting calls (2026-10-20 cost audit). In-process by default;
     /// the stdio binary shares its window with every other face through a file.
     llm_limiter: Arc<crate::rate_limit::LlmRateLimiter>,
-    /// Where a human approves a queued L3 request (E4-T2): the pending envelope's approval URL is
-    /// `<base>/approvals/<id>`. `None` (no `SHOGUN_APPROVAL_BASE_URL`) answers the id and the
-    /// poll without a URL: the user approves in the app.
-    approval_base_url: Option<String>,
+    /// Where and how a human approves a queued L3 request (E4-T2 / E15): the pending envelope's
+    /// approval URL is `<SHOGUN_APPROVAL_BASE_URL>/approve/<signed token>`. Without a base URL or
+    /// a signing key the envelope carries the id and the poll only: the user approves in the app.
+    remote: crate::remote_approvals::RemoteApprovals,
 }
 
 thread_local! {
@@ -249,10 +249,7 @@ impl<B: MemoryBackend> McpServer<B> {
             plan_lock: None,
             memory_gate: None,
             llm_limiter: Arc::new(crate::rate_limit::LlmRateLimiter::in_memory()),
-            approval_base_url: std::env::var("SHOGUN_APPROVAL_BASE_URL")
-                .ok()
-                .map(|url| url.trim().trim_end_matches('/').to_string())
-                .filter(|url| !url.is_empty()),
+            remote: crate::remote_approvals::RemoteApprovals::from_env(),
         }
     }
 
@@ -260,7 +257,15 @@ impl<B: MemoryBackend> McpServer<B> {
     /// `None` answers approvals without a URL.
     #[must_use]
     pub fn with_approval_base_url(mut self, base_url: Option<String>) -> Self {
-        self.approval_base_url = base_url.map(|url| url.trim().trim_end_matches('/').to_string()).filter(|url| !url.is_empty());
+        self.remote = self.remote.with_base_url(base_url);
+        self
+    }
+
+    /// Remote approvals (E15): base URL, decision-token key and ledger, shared with the REST
+    /// face so both record into one ledger. Overrides the environment.
+    #[must_use]
+    pub fn with_remote_approvals(mut self, remote: crate::remote_approvals::RemoteApprovals) -> Self {
+        self.remote = remote;
         self
     }
 
@@ -626,9 +631,18 @@ impl<B: MemoryBackend> McpServer<B> {
             Some(tool) => normalize_core_response(tool, response),
             None => response,
         };
-        // E4-T2: a pending envelope becomes `resultType: "approval_required"` with the approval
-        // URL (URL-mode elicitation); a read carries its cache hints (E4-T1).
-        let response = crate::mrtr::shape_approval(response, self.approval_base_url.as_deref());
+        // E4-T2 / E15: a pending envelope becomes `resultType: "approval_required"` with the
+        // approval URL (URL-mode elicitation, `<base>/approve/<token>`), recorded in the ledger
+        // under the caller; a read carries its cache hints (E4-T1).
+        let actor = shogun_memory::actor::current_write().actor;
+        let now = u64::try_from((self.clock)()).unwrap_or(0);
+        let response = crate::mrtr::shape_approval(response, |approval_id, level| {
+            self.remote.on_queued(approval_id, None, actor.as_str(), level, now).map(|(url, _)| url)
+        });
+        // E18: every write and action leaves an audit record (labels only, never arguments).
+        if let Some(tool) = tool.filter(|tool| tool_level(*tool) != ApiLevel::Read) {
+            self.audit_call(tool, actor.as_str(), &response);
+        }
         match tool {
             // The approval poll is a read a client must not cache: it changes the moment the
             // human decides.
@@ -923,6 +937,12 @@ impl<B: MemoryBackend> McpServer<B> {
                 Err(crate::ingest_api::Refusal::BadArguments(message)) => error(id, -32602, &message),
                 Err(crate::ingest_api::Refusal::Unavailable(code)) => error(id, -32000, code),
             };
+        }
+
+        // E15 / E18 governance reads: approval summaries, the audit log, the grants. Deciding and
+        // granting are not tools (a human's, on the approval page, Slack or the operator's CLI).
+        if matches!(tool, Tool::ApprovalsList | Tool::ApprovalsGet | Tool::AuditList | Tool::AclList) {
+            return self.governance_tool(id, tool, &args);
         }
 
         // memory.fs (E6-T2): the memory tool's file operations; one parser, one backend call and
@@ -1508,16 +1528,94 @@ impl<B: MemoryBackend> McpServer<B> {
         request: impl FnOnce(&mut ApprovalQueue, rest::ApprovalSurface) -> String,
     ) -> String {
         if let Some(store) = &self.approval_store {
-            if !(self.desktop_running)() {
+            if !(self.desktop_running)() && !self.remote.enabled() {
                 return r#"{"error":"desktop_unavailable","detail":"start ShogunAI to review L3 sends"}"#.to_string();
             }
             return store
                 .with_queue(|queue| request(queue, rest::ApprovalSurface::Present))
                 .unwrap_or_else(|why| approval_store_error(&why));
         }
+        let surface = if self.remote.enabled() { rest::ApprovalSurface::Present } else { self.surface };
         match self.approvals.lock() {
-            Ok(mut queue) => request(&mut queue, self.surface),
+            Ok(mut queue) => request(&mut queue, surface),
             Err(_) => r#"{"error":"internal"}"#.to_string(),
+        }
+    }
+
+    /// `approvals.list` / `approvals.get` / `audit.list` / `acl.list` (E15 / E18).
+    fn governance_tool(&self, id: Value, tool: Tool, args: &Value) -> String {
+        let text = |value: Value| result(id.clone(), json!({ "content": [{ "type": "text", "text": value.to_string() }], "isError": false }));
+        let failed = |code: &str| {
+            result(id.clone(), json!({ "content": [{ "type": "text", "text": json!({ "error": code, "tool": tool.wire_name() }).to_string() }], "isError": true }))
+        };
+        let now = u64::try_from((self.clock)()).unwrap_or(0);
+        match tool {
+            Tool::ApprovalsList | Tool::ApprovalsGet => {
+                let approval_id = match tool {
+                    Tool::ApprovalsGet => match args.get("approval_id").and_then(Value::as_u64).filter(|n| *n > 0) {
+                        Some(n) => Some(n),
+                        None => return error(id, -32602, "invalid_approval_id: approval_id must be a positive integer."),
+                    },
+                    _ => None,
+                };
+                let ledger = self.remote.ledger();
+                let answer = |queue: &mut ApprovalQueue| match approval_id {
+                    Some(n) => crate::remote_approvals::summary(queue, ledger, n, now).map(|s| json!({ "tool": "approvals.get", "approval": s })),
+                    None => {
+                        let mut listed = crate::remote_approvals::list(queue, ledger, None, false, now);
+                        listed["tool"] = Value::String("approvals.list".into());
+                        Some(listed)
+                    }
+                };
+                let answered = match &self.approval_store {
+                    Some(store) => store.with_queue(answer).map_err(|_| "approval_store"),
+                    None => self.approvals.lock().map(|mut queue| answer(&mut queue)).map_err(|_| "internal"),
+                };
+                match answered {
+                    Ok(Some(value)) => text(value),
+                    Ok(None) => failed("not_found"),
+                    Err(code) => failed(code),
+                }
+            }
+            Tool::AuditList => match crate::governance_api::audit_query(args) {
+                Ok(query) => match self.backend.audit_list(&query) {
+                    Ok(value) => text(value),
+                    Err(code) => failed(&code),
+                },
+                Err(message) => error(id, -32602, &message),
+            },
+            _ => match self.backend.acl(&crate::governance_api::AclOperation::List, "human:owner") {
+                Ok(value) => text(value),
+                Err(code) => failed(&code),
+            },
+        }
+    }
+
+    /// Append the audit record of one `tools/call` that wrote or acted (E18).
+    fn audit_call(&self, tool: Tool, actor: &str, response: &str) {
+        let value: Value = serde_json::from_str(response).unwrap_or(Value::Null);
+        let outcome = if value.get("error").is_some() {
+            "refused"
+        } else if value["result"]["resultType"] == crate::mrtr::RESULT_APPROVAL_REQUIRED {
+            "pending"
+        } else if value["result"]["resultType"] == crate::mrtr::RESULT_INPUT_REQUIRED {
+            "input_required"
+        } else if value["result"]["isError"] == Value::Bool(true) {
+            "refused"
+        } else {
+            "ok"
+        };
+        let level = match tool_level(tool) {
+            ApiLevel::Write(shogun_agents::permission::Level::L1) => "L1",
+            ApiLevel::Write(shogun_agents::permission::Level::L2) => "L2",
+            ApiLevel::Write(shogun_agents::permission::Level::L3) => "L3",
+            _ => "per_action",
+        };
+        let request_id = crate::governance_api::new_request_id();
+        if let Some(record) = crate::governance_api::record((self.clock)(), actor, None, tool.wire_name(), level, outcome, &request_id) {
+            if self.backend.audit_append(&record).is_err() {
+                eprintln!("shogun-mcp: audit append failed for {} ({outcome})", tool.wire_name());
+            }
         }
     }
 
@@ -1954,6 +2052,10 @@ fn tool_title(tool: Tool) -> &'static str {
         Tool::MemoryIngest => "Ingest events or turns",
         Tool::MemoryRecall => "Recall within a budget",
         Tool::MemoryFs => "Memory as files",
+        Tool::ApprovalsList => "List approvals",
+        Tool::ApprovalsGet => "Get an approval",
+        Tool::AuditList => "Read the audit log",
+        Tool::AclList => "List access grants",
         Tool::MemoryNotesList => "List memory notes",
         Tool::MemoryNotesChange => "Change a memory note",
         Tool::MemorySearch => "Search memory",
@@ -2125,6 +2227,10 @@ pub fn tool_descriptor(tool: Tool) -> Value {
         Tool::MemoryIngest => ("Append events or turns to the event log under an idempotency key (L1).", crate::ingest_api::ingest_schema()),
         Tool::MemoryRecall => ("What memory holds on a question, within a token budget.", crate::ingest_api::recall_schema()),
         Tool::MemoryFs => (crate::memfs_tool::DESCRIPTION, crate::memfs_tool::schema()),
+        Tool::ApprovalsList => ("The L2/L3 approvals queued for this principal, newest first, each as a redacted summary: kind, tier, recipient class (never the recipient), a masked one-line preview, created/expires times, status and who decided. Use it to see what is waiting on a human; poll one with actions.status. Never approves: a human decides on the approval page, in Slack or with the operator's CLI. Free read.", json!({})),
+        Tool::ApprovalsGet => ("One approval's redacted summary by approval_id (kind, tier, recipient class, masked preview, times, status, decision). Not the full body, and never a way to approve. Free read.", json!({"approval_id":{"type":"integer","minimum":1}})),
+        Tool::AuditList => ("The principal's audit log, oldest first: one record per write and per approval decision with actor, principal, tool or route, tier, outcome, time and request id. Never bodies. Filter with since_ms and limit (1-500). Free read.", json!({"since_ms":{"type":"integer"},"limit":{"type":"integer","minimum":1,"maximum":500}})),
+        Tool::AclList => ("Access grants on this principal's store: which agents may read or write another agent's agent_scratch namespace, and which team members may read the world state. Read-only: granting and revoking are the operator's (REST / CLI with the admin credential). Free read.", json!({})),
         Tool::FormsInspect => ("Inspect the focused form in the running ShogunAI desktop and open its review window (L2). Captures nearby labeled blank text controls only; credentials/payment controls are skipped. Never submits.", json!({})),
         Tool::FormsPlan => ("Match exact supplied facts and bounded memory excerpts to blank fields using Jev (TypeSafe), through ShogunAI's server on its own key unless the user saved their own TypeSafe key (L1). Supply notes as one labelled fact per line. Decisions remain proposals requiring human review. Never fills or submits.", json!({"session_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":0},"instruction":{"type":"string","minLength":1,"maxLength":4000}})),
         Tool::FormsStatus => ("Read a live form session snapshot, proposed values, evidence and write results. The same token/client must own the session.", json!({"session_id":{"type":"integer","minimum":1}})),
@@ -6573,7 +6679,21 @@ mod mrtr_tests {
         )
         .with_approval_surface(rest::ApprovalSurface::Present)
         .with_toolsets(Toolsets::every())
-        .with_approval_base_url(base_url.map(str::to_string))
+        .with_remote_approvals(
+            crate::remote_approvals::RemoteApprovals::default()
+                .with_base_url(base_url.map(str::to_string))
+                .with_signer(crate::remote_approvals::ApprovalSigner::new(SIGNING_KEY)),
+        )
+    }
+
+    const SIGNING_KEY: &[u8] = b"test-approval-signing-key-0123456789";
+
+    /// The approval URL points at the gateway's page with a token the key verifies for `id`.
+    fn assert_approve_url(url: &Value, base: &str, id: u64) {
+        let url = url.as_str().expect("url");
+        let token = url.strip_prefix(&format!("{base}/approve/")).unwrap_or_else(|| panic!("{url}"));
+        let signer = crate::remote_approvals::ApprovalSigner::new(SIGNING_KEY).unwrap();
+        assert_eq!(signer.verify(token, 1001).unwrap().approval_id, id);
     }
 
     fn call<B: MemoryBackend>(server: &McpServer<B>, name: &str, arguments: Value, responses: Option<Value>) -> Value {
@@ -6632,7 +6752,7 @@ mod mrtr_tests {
         let approval = &accepted["result"]["approval"];
         assert_eq!(approval["level"], "L2");
         assert_eq!(approval["origin"], "mcp");
-        assert_eq!(approval["url"], "https://approve.example/approvals/1");
+        assert_approve_url(&approval["url"], "https://approve.example", 1);
         assert_eq!(accepted["result"]["inputRequests"][0]["mode"], "url");
         assert_eq!(queue.lock().unwrap().pending_len(), 1);
         assert_eq!(queue.lock().unwrap().origin(shogun_agents::approval::ApprovalId(1)), Some(ApprovalOrigin::Mcp));
@@ -6653,16 +6773,16 @@ mod mrtr_tests {
         let approval = &send["result"]["approval"];
         assert_eq!(approval["approval_id"], 1);
         assert_eq!(approval["level"], "L3");
-        assert_eq!(approval["url"], "https://approve.example/approvals/1");
+        assert_approve_url(&approval["url"], "https://approve.example", 1);
         assert_eq!(approval["poll"], json!({ "tool": "actions.status", "arguments": { "approval_id": 1 } }));
         let url_request = &send["result"]["inputRequests"][0];
         assert_eq!(url_request["id"], crate::mrtr::APPROVAL_REQUEST_ID);
         assert_eq!(url_request["mode"], "url");
-        assert_eq!(url_request["url"], "https://approve.example/approvals/1");
+        assert_eq!(url_request["url"], approval["url"]);
         let payload = text(&send);
         assert_eq!(payload["pending"], true);
         assert_eq!(payload["approval_id"], 1);
-        assert_eq!(payload["url"], "https://approve.example/approvals/1");
+        assert_eq!(payload["url"], approval["url"]);
         assert_eq!(payload["next_action"], "approve_at_url");
         // The queue is the one every face shares, and the poll is unchanged.
         let q = queue.lock().unwrap();

@@ -185,7 +185,7 @@ Since 2026-10-14 the app connects the AI apps it finds with `read` access and no
 3. Neither: `core`. The generated **Add to ...** entries carry neither, so they list core.
 
 - `core` (always included): `memory.search` (with `limit`, `from_ms`/`to_ms`, `source_kind`), `memory.get_context`, `memory.get_periods` (stored hour/day/week/month summaries for a window), `memory.get_context_pack`, `memory.get_wrap`, `memory.append_note`, `profile.whoami`, `state.commitments.list`, `state.open_loops.list`, `state.people.list` / `.get`, `state.projects.list` / `.get`, `meeting.list` / `.search` / `.recap.get` / `.transcript.get`, `wiki.evidence`, `actions.execute`, `actions.status`.
-- Other groups: `files` (`memory.fs`: `/memories` as files, the memory tool's operations), `import`, `state`, `meeting`, `mail`, `visual_recall`, `voice`, `skills`, `wiki`, `web`, `export`, `translate`, `settings`, `forms`. The full table is in [`docs/specs/mcp-tool-surface.md`](specs/mcp-tool-surface.md) §7.
+- Other groups: `files` (`memory.fs`: `/memories` as files, the memory tool's operations), `governance` (`approvals.list`, `approvals.get`, `audit.list`, `acl.list`: remote approvals, the audit log and access grants, reads only), `import`, `state`, `meeting`, `mail`, `visual_recall`, `voice`, `skills`, `wiki`, `web`, `export`, `translate`, `settings`, `forms`. The full table is in [`docs/specs/mcp-tool-surface.md`](specs/mcp-tool-surface.md) §7.
 - An unknown group id in the env var is ignored with one warning on stderr; in `--toolset` it is an error (the server refuses to start rather than list a different surface).
 
 **Listing is guidance, not a boundary.** A tool outside the listed set still works when called by name, at its own approval level, if the connection's scope (`read` / `full`) allows it. Scopes, grants and the L1/L2/L3 levels are the enforcement; REST and CLI never read toolsets.
@@ -357,9 +357,52 @@ The bearer is a REST token; it is authenticated on every request against the liv
   to run it; `decline` or `cancel` runs nothing.
 - An **L3** request (an `actions.execute` send, or any write that waits in the approval queue)
   answers `resultType: "approval_required"` with an `approval` block (`approval_id`, `level`,
-  `url`, the `actions.status` poll). With `SHOGUN_APPROVAL_BASE_URL` set, `url` is
-  `<base>/approvals/<id>` and a URL-mode `inputRequests` entry carries it for the human; without
-  it the human approves in the app and the agent polls `actions.status`. The text block keeps the
-  pending envelope (`pending`, `approval_id`, `level`, `origin`) for older clients.
+  `url`, the `actions.status` poll). With `SHOGUN_APPROVAL_BASE_URL` and
+  `SHOGUN_APPROVAL_SIGNING_KEY` set, `url` is `<base>/approve/<token>` (E15: the gateway's
+  approval page; the token is signed, short-lived and decides once) and a URL-mode
+  `inputRequests` entry carries it for the human; without them the human approves in the app and
+  the agent polls `actions.status`. The text block keeps the pending envelope (`pending`,
+  `approval_id`, `level`, `origin`) for older clients.
 
-REST and the CLI keep their `202 pending` envelope with the same `approval_id`.
+REST and the CLI keep their `202 pending` envelope with the same `approval_id`, and since E15 it
+carries the same `url` and `next_action: "approve_at_url"` (three-face parity), plus the
+`poll` path. A response that queued an approval also names its token in the
+`X-Shogun-Approval-Token` header, so the gateway can notify Slack and webhooks without reading the
+body.
+
+### Remote approvals, audit log and access grants (E15 / E18)
+
+The sidecar's approval decision API (`crates/shogun-mcp/src/remote_approvals.rs`,
+`server_governance.rs`):
+
+| Route | Who | What |
+|---|---|---|
+| `GET /v1/approvals` · MCP `approvals.list` · `shogun approvals list` | any agent key (read) | the principal's queued approvals as redacted summaries |
+| `GET /v1/approvals/{id}` · MCP `approvals.get` · `shogun approvals get <id>` | any agent key (read) | one redacted summary: kind, tier, recipient class (never the recipient), a masked one-line preview, `created_at`, `expires_at`, status, decision |
+| `GET /v1/approvals/{id}` + `X-Shogun-Approval-Token` | the gateway | the same summary, authorized by the signed token |
+| `POST /v1/approvals/{id}/decide` `{decision, decided_by, nonce}` | the gateway (token) or the operator (`SHOGUN_ADMIN_TOKEN`; `shogun approvals decide <id> approve\|reject`) | approve or reject. Never an MCP tool; an agent's bearer is `403 human_only` |
+| `GET /v1/audit?since_ms=&limit=` · MCP `audit.list` · `shogun audit` | any agent key (read) | the principal's audit log |
+| `GET /v1/acl` · MCP `acl.list` · `shogun acl list` | any agent key (read) | scratch and Team grants |
+| `POST /v1/acl/grant`, `/v1/acl/revoke` · `shogun acl grant\|revoke <json>` | the operator only | change a grant |
+| `GET`/`POST /v1/teams` · `shogun acl teams\|team <json>` | the operator only (multi-principal) | define teams |
+
+- **Decision token.** `sat1.<base64url(claims)>.<base64url(HMAC-SHA256)>` over
+  `shogun-approval-v1.<base64url(claims)>`, keyed with `SHOGUN_APPROVAL_SIGNING_KEY` (shared with
+  the gateway only). Claims: approval id, principal, expiry (the approval's own 10-minute window),
+  nonce. A decision repeats the nonce; the sidecar spends it, so a replay is `409 token_replayed`,
+  an expired token `410 token_expired`, a forged one `403 invalid_token`.
+- **Approved** is a terminal status (`actions.status` reads `approved`): a human confirmed with the
+  dedicated button's authority; the executor that owns the action carries it out. The decision is
+  recorded with `decided_by` and the time in the ledger and in the audit log.
+- **Audit log** (V101 `audit_log`): one record per write and per approval decision on every face —
+  actor, principal, tool or route, tier, outcome (`ok`, `pending`, `refused`, `approved`, …),
+  time, request id (`X-Request-Id`, echoed). Never a body or an argument value.
+- **Scratch ACL** (V101 `scratch_acl`): an agent reads and writes its own `agent_scratch:<id>` and
+  the world; another agent's scratch is invisible (search, lists, GET by id, `/memories` files)
+  unless the operator granted `read` or `write`. Enforced in the data layer (`ReadScope`,
+  `scratch_files`, `event_log` writes); a request body cannot name another agent as its writer.
+- **Team** (multi-principal): `?principal=<other>` on a read reaches a teammate's store only when
+  both are on one team (`teams.json` under the principal root) and the teammate granted
+  `world_read` in its own file (V101 `principal_grants`). World rows only, never scratch or a
+  write; results carry `"source_principal"`. Without the grant the answer is a 403 that is the same
+  for every principal id.

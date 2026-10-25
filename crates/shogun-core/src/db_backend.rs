@@ -2463,6 +2463,22 @@ impl MemoryBackend for DbBackend {
         self.db.agent_recall(request)
     }
 
+    fn audit_append(&self, record: &shogun_memory::audit::AuditRecord) -> Result<(), String> {
+        self.db.audit_append(record)
+    }
+
+    fn audit_list(&self, query: &shogun_mcp::governance_api::AuditQuery) -> Result<serde_json::Value, String> {
+        self.db.audit_list(query)
+    }
+
+    fn acl(&self, operation: &shogun_mcp::governance_api::AclOperation, by: &str) -> Result<serde_json::Value, String> {
+        self.db.acl(operation, by)
+    }
+
+    fn principal_may_read(&self, grantee_principal: &str) -> bool {
+        self.db.principal_may_read(grantee_principal)
+    }
+
     /// `memory.fs` (E6-T2): the memory tool's commands over `/memories`, as the call's writer.
     fn memory_fs(
         &self,
@@ -2753,6 +2769,11 @@ impl MemoryBackend for DbBackend {
             | Tool::MemoryRecall
             // Served by `memory_fs` (E6-T2).
             | Tool::MemoryFs
+            // Served by the approval queue (E15) and by `audit_list` / `acl` (E18).
+            | Tool::ApprovalsList
+            | Tool::ApprovalsGet
+            | Tool::AuditList
+            | Tool::AclList
             | Tool::MemoryNotesList
             | Tool::MemoryNotesChange
             | Tool::ProfileSet

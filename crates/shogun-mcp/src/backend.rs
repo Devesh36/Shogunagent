@@ -703,6 +703,29 @@ pub trait MemoryBackend: Send + Sync {
     fn export_v1(&self, _request: &crate::export_api::ExportRequest) -> Result<crate::export_api::ExportOutput, String> {
         Err("export_unavailable".to_string())
     }
+
+    /// Append one audit record (E18) to this principal's store. A backend without a store has
+    /// nothing to record into and answers `Ok`; a store fault is `Err` (the write it describes
+    /// already happened, so the face reports it and carries on).
+    fn audit_append(&self, _record: &shogun_memory::audit::AuditRecord) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// `audit.list` (E18): the store's audit records, oldest first.
+    fn audit_list(&self, _query: &crate::governance_api::AuditQuery) -> Result<serde_json::Value, String> {
+        Err("audit_unavailable".to_string())
+    }
+
+    /// `acl.list`, `acl.grant`, `acl.revoke` (E18) on this principal's store, `by` recording who
+    /// granted. The faces decide who may change grants; this only applies the change.
+    fn acl(&self, _operation: &crate::governance_api::AclOperation, _by: &str) -> Result<serde_json::Value, String> {
+        Err("acl_unavailable".to_string())
+    }
+
+    /// Team (E18): whether `grantee_principal` holds a `world_read` grant on this store.
+    fn principal_may_read(&self, _grantee_principal: &str) -> bool {
+        false
+    }
 }
 
 /// A shared backend is a backend (E4-T1): the HTTP transport's `McpServer` and the REST state
@@ -774,6 +797,18 @@ impl<T: MemoryBackend + ?Sized> MemoryBackend for std::sync::Arc<T> {
     }
     fn export_v1(&self, request: &crate::export_api::ExportRequest) -> Result<crate::export_api::ExportOutput, String> {
         (**self).export_v1(request)
+    }
+    fn audit_append(&self, record: &shogun_memory::audit::AuditRecord) -> Result<(), String> {
+        (**self).audit_append(record)
+    }
+    fn audit_list(&self, query: &crate::governance_api::AuditQuery) -> Result<serde_json::Value, String> {
+        (**self).audit_list(query)
+    }
+    fn acl(&self, operation: &crate::governance_api::AclOperation, by: &str) -> Result<serde_json::Value, String> {
+        (**self).acl(operation, by)
+    }
+    fn principal_may_read(&self, grantee_principal: &str) -> bool {
+        (**self).principal_may_read(grantee_principal)
     }
 }
 

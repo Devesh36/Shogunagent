@@ -359,6 +359,7 @@ fn status_wire(status: ApprovalStatus) -> &'static str {
         ApprovalStatus::SendFailed => "send_failed",
         ApprovalStatus::DraftSaved => "draft_saved",
         ApprovalStatus::OutcomeUnknown => "outcome_unknown",
+        ApprovalStatus::Approved => "approved",
     }
 }
 fn status_parse(value: &str) -> Result<ApprovalStatus, String> {
@@ -369,6 +370,7 @@ fn status_parse(value: &str) -> Result<ApprovalStatus, String> {
         "send_failed" => Ok(ApprovalStatus::SendFailed),
         "draft_saved" => Ok(ApprovalStatus::DraftSaved),
         "outcome_unknown" => Ok(ApprovalStatus::OutcomeUnknown),
+        "approved" => Ok(ApprovalStatus::Approved),
         _ => Err("invalid terminal approval status".into()),
     }
 }

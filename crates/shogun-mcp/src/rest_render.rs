@@ -47,6 +47,7 @@ pub fn poll_approval(id: u64, approvals: &mut ApprovalQueue, now_ms: i64) -> Str
         Some(ApprovalStatus::SendFailed) => "send_failed",
         Some(ApprovalStatus::DraftSaved) => "draft_saved",
         Some(ApprovalStatus::OutcomeUnknown) => "outcome_unknown",
+        Some(ApprovalStatus::Approved) => "approved",
         None => "unknown",
     };
     match approvals.failure_reason(ApprovalId(id)) {
@@ -318,6 +319,9 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
         return response;
     }
     if let Some(response) = memory_fs_response(&routed, req, backend) {
+        return response;
+    }
+    if let Some(response) = governance_response(&routed, req, backend) {
         return response;
     }
     if let Some(response) = export_v1_response(&routed, req, backend) {
@@ -972,6 +976,47 @@ fn memory_fs_response<B: MemoryBackend + ?Sized>(
             (503, serde_json::json!({ "error": code }).to_string())
         }
     })
+}
+
+/// E18 on REST: `GET /v1/audit?since_ms=&limit=` and `GET /v1/acl`. The approval reads need the
+/// queue and are answered by the server; reaching here they are unavailable. `None` for every
+/// other route.
+fn governance_response<B: MemoryBackend + ?Sized>(
+    routed: &Routed,
+    req: &RestRequest,
+    backend: &B,
+) -> Option<(u16, String)> {
+    let Routed::Read { tool, .. } = routed else {
+        return None;
+    };
+    let unavailable = |code: String| (503, serde_json::json!({ "error": code, "next_action": "retry_after" }).to_string());
+    match tool {
+        Tool::AuditList => {
+            let mut args = serde_json::Map::new();
+            if let Some(since) = req.mail.since_ms {
+                args.insert("since_ms".into(), since.into());
+            }
+            if let Some(limit) = req.mail.limit {
+                args.insert("limit".into(), limit.into());
+            }
+            Some(match crate::governance_api::audit_query(&serde_json::Value::Object(args)) {
+                Ok(query) => match backend.audit_list(&query) {
+                    Ok(value) => (200, value.to_string()),
+                    Err(code) => unavailable(code),
+                },
+                Err(message) => {
+                    let code = message.split(':').next().unwrap_or("invalid_request").to_string();
+                    (400, serde_json::json!({ "error": code, "message": message }).to_string())
+                }
+            })
+        }
+        Tool::AclList => Some(match backend.acl(&crate::governance_api::AclOperation::List, "human:owner") {
+            Ok(value) => (200, value.to_string()),
+            Err(code) => unavailable(code),
+        }),
+        Tool::ApprovalsList | Tool::ApprovalsGet => Some(unavailable("approvals_unavailable".to_string())),
+        _ => None,
+    }
 }
 
 /// Clarify (issue #394) on REST: `GET /v1/actions/questions[/{id}]` and `POST /v1/actions/answer`

@@ -29,6 +29,8 @@ pub mod memfs_tool;
 pub mod mcp_http;
 /// MRTR and URL-mode elicitation: how L2 / L3 look on the MCP face (E4-T2).
 pub mod mrtr;
+pub mod governance_api;
+pub mod remote_approvals;
 pub mod ai_search_api;
 pub mod api_port;
 pub mod approval_store;

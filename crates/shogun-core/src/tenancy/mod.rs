@@ -20,6 +20,9 @@
 //! - [`dream_tick`]: the hourly Dream Cycle per principal, only when new material exists (E5-T4;
 //!   `shogun-api --dream-tick`).
 //! - [`multi`] (feature `daemon-server`): the `shogun-api --multi` composition.
+//! - [`team`]: the tenant's teams (E18). A principal grants a teammate read access to its
+//!   `world` state in its own file (`principal_grants`, V101); the sidecar checks both before it
+//!   opens that file for the teammate.
 
 pub mod dream_tick;
 pub mod import;
@@ -29,12 +32,14 @@ pub mod multi;
 pub mod principal;
 pub mod resolver;
 pub mod store;
+pub mod team;
 
 pub use import::{import_single_user_store, ImportReport};
 pub use key_provider::{EnvKeyProvider, KeyProvider, KmsKeyProvider};
 pub use principal::PrincipalId;
 pub use resolver::{PrincipalResolver, ResolvedPrincipal, TokenPrincipalMap};
 pub use store::{OpenPolicy, OpenPrincipal, PrincipalStore};
+pub use team::{Team, TeamRegistry};
 
 /// What can go wrong around a principal's store. Never carries a key or a row.
 #[derive(Debug, thiserror::Error)]
