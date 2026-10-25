@@ -139,17 +139,50 @@ fn ran(run: GatedRun) -> TickOutcome {
     }
 }
 
+/// Older failed hourly windows one tick may retry after its own window ran to the end.
+pub const MAX_CATCHUP_WINDOWS_PER_TICK: usize = 8;
+
 /// One principal through a Batch lane: the model path, only when [`plan_principal`] says so.
+///
+/// A window whose review failed before the relay held any handle (relay down, a 5xx) stays
+/// unfinished in the `dream_cycles` ledger and keeps owning its events, while the next hour gets
+/// a window of its own at once (`prepare_full_cycle` in [`crate::dreamcycle::schedule`]) so a
+/// failure never holds back new material. On a server ticked once an hour every tick carries a
+/// new hour id, so that rule alone would open a fresh window on each tick and never retry the
+/// failed one: its events, excluded from every later window, would never become signals. So once
+/// this tick's window has run to the end on a working lane, the same tick retries the older
+/// unfinished hourly windows, oldest first ([`MAX_CATCHUP_WINDOWS_PER_TICK`] at most), and stops
+/// at the first that does not complete. Windows own disjoint events, so nothing reviewed is sent
+/// again, and nothing more is attempted while the lane is failing.
 pub async fn tick_principal_with_lane<B: BatchLane>(db: &Db, lane: &B, now_ms: i64) -> TickOutcome {
     let cycle_id = match plan_principal(db, now_ms) {
         Ok(id) => id,
         Err(outcome) => return outcome,
     };
+    let mut outcome = run_hourly_window(db, lane, &cycle_id, now_ms).await;
+    for _ in 0..MAX_CATCHUP_WINDOWS_PER_TICK {
+        if outcome != (TickOutcome::Ran { complete: true }) {
+            break;
+        }
+        // With this hour's id already in the ledger, the next run resumes the oldest unfinished
+        // hourly window (`prepare_full_cycle`): an older failed one, when one remains.
+        match db.try_oldest_unfinished_hourly_cycle() {
+            Ok(Some(older)) if older.cycle_id.as_str() < cycle_id.as_str() => {}
+            Ok(_) => break,
+            Err(_) => return TickOutcome::Unavailable("ledger_unreadable"),
+        }
+        outcome = run_hourly_window(db, lane, &cycle_id, now_ms).await;
+    }
+    outcome
+}
+
+/// Run (or resume) one hourly window through the lane.
+async fn run_hourly_window<B: BatchLane>(db: &Db, lane: &B, cycle_id: &str, now_ms: i64) -> TickOutcome {
     match run_batch_cycle(
         db,
         DreamBatchClients::classify_only(lane),
         &server_conditions(),
-        &cycle_id,
+        cycle_id,
         now_ms,
         SERVER_MAX_POLLS,
         || async {},
@@ -699,6 +732,57 @@ mod tests {
         assert_eq!(outcome, TickOutcome::Failed("batch_lane"));
         assert_eq!(loops, None);
         assert_eq!(consolidator_rows(db).len(), 3, "no call when the lane is unavailable");
+        drop(open);
+    }
+
+    /// A window whose review failed is not lost when the server ticks once an hour: the next tick
+    /// on a working lane runs its own window, then retries the failed ones, so that hour's
+    /// material reaches the lane, becomes a signal and is consolidated. A tick while the lane is
+    /// still failing attempts nothing more, and nothing is reviewed twice.
+    #[tokio::test]
+    async fn a_failed_window_is_reviewed_on_the_next_hourly_tick() {
+        use shogun_memory::dream_cycles::CycleStatus;
+        let start = 240 * 24 * HOUR + 16 * HOUR + 30 * 60_000;
+        let root = TempRoot::new("catchup");
+        let store = store(&root, start);
+        let busy = PrincipalId::parse("busy").unwrap();
+        let open = store.open(&busy).unwrap();
+        let db = open.db();
+        ingest(db, "c1", "I'll send the latency report to Dana by Friday.", start - HOUR);
+
+        // 16:30: the relay is down; the window fails and keeps its events.
+        let lane = TracedLane::new(db, true);
+        assert_eq!(tick_principal_batch(db, &lane, start).await, (TickOutcome::Failed("batch_lane"), None));
+        let failed = db.try_oldest_unfinished_hourly_cycle().unwrap().expect("the failed window stays unfinished");
+
+        // 17:30: still down. Nothing is traced or sent; the retry stops at the first failure.
+        let lane = TracedLane::new(db, true);
+        assert_eq!(tick_principal_batch(db, &lane, start + HOUR).await, (TickOutcome::Failed("batch_lane"), None));
+        assert!(lane.purposes().is_empty());
+
+        // 18:30: the relay is back and an hour of new material waits. The tick reviews this hour's
+        // window and the failed one, each once, and the consolidator sees both signals.
+        ingest(db, "c2", "I'll send the pricing deck to Priya by Monday.", start + HOUR + 10 * 60_000);
+        let lane = TracedLane::new(db, false);
+        let (outcome, loops) = tick_principal_batch(db, &lane, start + 2 * HOUR).await;
+        assert_eq!(outcome, TickOutcome::Ran { complete: true });
+        assert_eq!(db.try_oldest_unfinished_hourly_cycle().unwrap().map(|c| c.cycle_id), None, "no window left behind");
+        assert_eq!(db.try_dream_cycle(&failed.cycle_id).unwrap().map(|c| c.status), Some(CycleStatus::Done));
+        let window = crate::dreamcycle::jobs::WINDOW_PURPOSE;
+        let consolidate = shogun_memory::loops::PURPOSE;
+        assert_eq!(lane.purposes(), vec![window.to_string(), window.to_string(), consolidate.to_string()]);
+        let applied = loops.expect("the consolidator followed");
+        assert_eq!(applied.opened + applied.relisted, 2, "{applied:?}");
+        let listed: Vec<String> = db.commitment_rows().into_iter().map(|c| c.description).collect();
+        assert!(listed.iter().any(|t| t.contains("latency report")), "the failed hour's material: {listed:?}");
+        assert!(listed.iter().any(|t| t.contains("pricing deck")), "{listed:?}");
+
+        // 19:30: nothing left: nothing is sent.
+        let lane = TracedLane::new(db, false);
+        let (outcome, loops) = tick_principal_batch(db, &lane, start + 3 * HOUR).await;
+        assert!(matches!(outcome, TickOutcome::NothingNew | TickOutcome::AlreadyDone), "{outcome:?}");
+        assert_eq!(loops, None);
+        assert!(lane.purposes().is_empty(), "nothing reviewed twice");
         drop(open);
     }
 }
