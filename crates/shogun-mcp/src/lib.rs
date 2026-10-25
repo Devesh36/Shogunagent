@@ -41,7 +41,14 @@ pub mod dictionary_autoadd_api;
 pub mod dispatch;
 pub mod export_folders;
 pub mod gmail_policy;
+// `launcher_check` is the pure policy table (which app must have started `shogun-mcp`); the
+// token listing names each connection's policy, so every build carries it. Reading the process
+// tree's signatures is the Mac app's (`shogun_core::desktop::launcher`).
 pub mod launcher_check;
+/// The Mac app's data folder (feature `desktop`, E1-T7): where `plan_source` finds the app's
+/// files.
+#[cfg(feature = "desktop")]
+pub mod desktop_paths;
 pub mod live_tokens;
 pub mod mcp;
 pub mod memory_api;

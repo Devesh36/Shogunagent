@@ -21,23 +21,40 @@
 //! This crate makes no process-boundary assumptions (AR-03): it is a library the Tauri
 //! backend hosts today and a future daemon could host unchanged.
 //!
+//! **Feature `desktop` (E1-T7).** The modules that exist only for the ShogunAI Mac app sit behind
+//! `#[cfg(feature = "desktop")]`: the capture pipeline, the audio lane, the notch, inline / Scribe
+//! drafting, form filling, the Gmail transport, the host-shell bridges and the Keychain glue
+//! (`desktop`). The default build is the ShogunAgent server: it carries none of them and no
+//! `cfg(target_os = "macos")` site (`scripts/check-desktop-gate.py`). Modules the data layer
+//! shares with the Mac app — capture policy (`capture::{exclusion, control, status, visual_recall,
+//! dedup, own_app}`), stored meeting notes (`meeting::{minutes, export, recap, templates, …}`),
+//! translation jobs, the voice dictionary, writing-voice mining — stay in the default build
+//! because the Memory API tools that serve them do.
+//!
 //! CLAUDE.md forbids `unwrap()`/`expect()` outside tests; test modules are exempted below.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+#[cfg(feature = "desktop")]
 pub mod auto_update;
 pub mod ai_search;
 pub mod analytics;
 pub mod backup_retention;
+#[cfg(feature = "desktop")]
 pub mod audio;
 pub mod bus;
 pub mod capture;
 pub mod context;
+/// The Mac app's glue for the standalone faces (feature `desktop`): the login Keychain reads the
+/// daemons make, the launcher check. Every `cfg(target_os = "macos")` the server build must not
+/// carry lives here or in another `desktop`-gated module.
+#[cfg(feature = "desktop")]
+pub mod desktop;
 #[cfg(feature = "db")]
 pub mod daemon;
 pub mod daily_delivery;
 #[cfg(feature = "db")]
 pub mod db_backend;
-#[cfg(any(feature = "db", feature = "net"))]
+#[cfg(all(feature = "desktop", any(feature = "db", feature = "net")))]
 pub mod plan_mirrors;
 pub mod settings_seal;
 #[cfg(feature = "db")]
@@ -48,12 +65,17 @@ pub mod dreamcycle;
 // Issue #397: LocalAction::WriteFile — exports into user-chosen folders (L2, never overwrites).
 #[cfg(feature = "db")]
 pub mod file_export;
+#[cfg(feature = "desktop")]
 pub mod forms;
+#[cfg(feature = "desktop")]
 pub mod inline;
+#[cfg(feature = "desktop")]
 pub mod paste_verification;
 pub mod inline_context;
 pub mod when;
+#[cfg(feature = "desktop")]
 pub mod known_links;
+#[cfg(feature = "desktop")]
 pub mod left_option_hold;
 #[cfg(feature = "db")]
 pub mod rewrite_context;
@@ -69,9 +91,9 @@ pub mod memory_health;
 #[cfg(feature = "net")]
 pub mod composio_send;
 
-#[cfg(feature = "net")]
+#[cfg(all(feature = "desktop", feature = "net"))]
 pub mod gmail_direct;
-#[cfg(feature = "net")]
+#[cfg(all(feature = "desktop", feature = "net"))]
 pub mod gmail_local;
 #[cfg(feature = "net")]
 pub mod mcp_http;
@@ -79,7 +101,7 @@ pub mod mcp_http;
 pub mod mcp_oauth;
 #[cfg(feature = "net")]
 pub mod github_device;
-#[cfg(feature = "net")]
+#[cfg(all(feature = "desktop", feature = "net"))]
 pub mod model_asset;
 /// The account API (#148 P2): browser sign-in over loopback + PKCE, the session's refresh, devices,
 /// re-authentication and sign-out. Fail-closed `Route::Billing` rows, content-free.
@@ -95,12 +117,14 @@ pub mod meeting;
 #[cfg(feature = "net")]
 pub mod composio_read;
 pub mod gmail_shape;
-#[cfg(feature = "db")]
+#[cfg(all(feature = "desktop", feature = "db"))]
 pub mod mail_actions;
 #[cfg(feature = "db")]
 pub mod mail_batch;
 pub mod metrics;
+#[cfg(feature = "desktop")]
 pub mod notch;
+#[cfg(feature = "desktop")]
 pub mod panel_events;
 pub mod chat_prompt;
 pub mod chat_failure;
@@ -114,10 +138,13 @@ pub mod context_sufficiency;
 pub mod send_exec;
 #[cfg(feature = "exec")]
 pub mod tool_runner;
+#[cfg(feature = "desktop")]
 pub mod self_install;
+#[cfg(feature = "desktop")]
 pub mod sound;
 pub mod traceview;
 pub mod reply_draft;
+#[cfg(feature = "desktop")]
 pub mod release_notes;
 pub mod web_fetch;
 pub mod translate;

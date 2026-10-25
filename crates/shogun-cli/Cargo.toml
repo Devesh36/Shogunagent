@@ -26,5 +26,11 @@ shogun-agents = { path = "../shogun-agents" }
 shogun-core = { path = "../shogun-core" }
 serde_json = "1"
 
+# On a Mac the command finds the app's `memory.db` under `~/Library/Application Support`
+# (`shogun_mcp::plan_source::app_data_dir`), which the Mac app's `desktop` feature compiles
+# (E1-T7). macOS targets only: the Linux server build carries none of the desktop set.
+[target.'cfg(target_os = "macos")'.dependencies]
+shogun-mcp = { path = "../shogun-mcp", features = ["desktop"] }
+
 [lints]
 workspace = true

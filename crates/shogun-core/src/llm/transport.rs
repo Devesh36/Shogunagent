@@ -682,7 +682,7 @@ mod tests {
 
     use super::*;
 
-    #[cfg(feature = "net")]
+    #[cfg(all(feature = "net", feature = "desktop"))]
     #[test]
     fn actual_request_keeps_jev_deadline_and_other_non_streaming_defaults() {
         let decisions = ReqwestTransport::decisions().unwrap();

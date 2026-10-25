@@ -1317,8 +1317,9 @@ impl DaemonDb {
     }
 }
 
-/// The database key the daemons use: `SHOGUN_DB_KEY`, else the Keychain entry (macOS). Also
-/// used to verify the newest backup snapshot before an immediate retention prune (#647).
+/// The database key the daemons use: `SHOGUN_DB_KEY`, else the Keychain entry (the Mac app's
+/// build, `desktop::keychain::memory_db_key`). Also used to verify the newest backup snapshot
+/// before an immediate retention prune (#647).
 #[cfg(feature = "db")]
 pub(crate) fn load_db_encryption_key() -> Result<shogun_memory::DbKey, String> {
     if let Ok(hex) = std::env::var("SHOGUN_DB_KEY") {
@@ -1328,22 +1329,11 @@ pub(crate) fn load_db_encryption_key() -> Result<shogun_memory::DbKey, String> {
                 .ok_or_else(|| "SHOGUN_DB_KEY is not valid hex".to_string());
         }
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     {
-        use shogun_integrations::keychain_store;
-        const DB_KEY_ACCOUNT: &str = "memory-db-key";
-        let bytes = keychain_store::get_generic_secret(DB_KEY_ACCOUNT).map_err(|e| {
-            format!(
-                "could not read memory DB key from Keychain (status {}): unlock Keychain and retry",
-                e.code()
-            )
-        })?;
-        let hex = String::from_utf8(bytes)
-            .map_err(|_| "memory DB key in Keychain is not valid text".to_string())?;
-        shogun_memory::DbKey::from_hex(&hex)
-            .ok_or_else(|| "memory DB key in Keychain is malformed".to_string())
+        crate::desktop::keychain::memory_db_key()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(feature = "desktop"))]
     {
         Err("encrypted memory DB requires SHOGUN_DB_KEY".to_string())
     }

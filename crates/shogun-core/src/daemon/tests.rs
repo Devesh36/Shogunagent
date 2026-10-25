@@ -2454,6 +2454,7 @@ fn assemble_context_retrieves_the_event_that_answers_the_question() {
     assert!(hit.event_id > 0);
 }
 
+#[cfg(feature = "desktop")]
 #[test]
 fn form_context_shares_project_evidence_and_keeps_longer_context() {
     let db = Db::open_in_memory(clock(1000)).unwrap();

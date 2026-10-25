@@ -25,7 +25,7 @@ The state layer for AI agents: a typed, provenance-backed model of a person's wo
 ## Code rules
 
 - Rust: `clippy::all` deny, `unwrap_used` deny, rustc `unused` deny (workspace lints). `expect` is allowed in tests. Every crate builds and tests on Linux; there is no macOS-only member.
-- macOS-only code inherited from ShogunAI sits behind `#[cfg(target_os = "macos")]` and is being moved behind a `desktop` cargo feature (E1-T7). Do not add new macOS dependencies.
+- macOS-only code inherited from ShogunAI sits behind the cargo feature `desktop` of `shogun-core` and `shogun-mcp` (E1-T7, default off; `audio` implies it). The default build is the server and carries no module that exists only for the Mac app and no `cfg(target_os = "macos")` site: `scripts/check-desktop-gate.py` (run by `check-feature-matrix.sh` and the CI guards) fails on one outside its justified allowlist. New Mac-only code goes behind `desktop` (in `shogun_core::desktop` when it reaches the Keychain or the host shell), with a `not(feature = "desktop")` arm that answers what the server answers; `--features desktop` must keep compiling on Linux. Do not add new macOS dependencies, and do not gate a module the data layer or a Memory API tool depends on — split the shared type out instead. Which modules are behind the feature and which stay is recorded in `docs/MIGRATION.md`.
 - Every write path takes an idempotency key. Every metered response returns `usage`, `latency_ms`, and on error `next_action`.
 - Tool descriptions are written for agents: name the task, name the exclusions, state the cost class. Changes to descriptions, `SKILL.md` or directory listings must not lower the selection-eval rate (E11).
 - No telemetry by default. Opt-in only, counts only, never content.
@@ -39,7 +39,7 @@ export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-target}
 cargo clippy --workspace --all-targets --locked
 cargo test --workspace --locked
 scripts/check-feature-matrix.sh
-for g in http-egress secret-exposure media-writes log-hygiene migrations batch-source-filter; do
+for g in http-egress secret-exposure media-writes log-hygiene migrations batch-source-filter desktop-gate; do
   python3 scripts/check-$g.py --self-test && python3 scripts/check-$g.py
 done
 pnpm install && pnpm --filter @shogun-ai/api typecheck && pnpm --filter @shogun-ai/api test:node

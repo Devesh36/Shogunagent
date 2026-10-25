@@ -3,6 +3,9 @@
 //! same path the macOS adapter drives, and the resulting state sequence is asserted. This is
 //! the off-device stand-in for the expand flow — it exercises the modules together under the
 //! two-level open model (spec §6.1.1) rather than in isolation.
+//!
+//! The notch is the Mac app's (feature `desktop`, E1-T7), so this target compiles only with it.
+#![cfg(feature = "desktop")]
 
 use shogun_core::notch::engine::{DisplayCoordinateSpace, EngineInput, EngineOutput, NotchEngine};
 use shogun_core::notch::geometry::{idle_rect, regions, GeometryParams, Rect, Regions};

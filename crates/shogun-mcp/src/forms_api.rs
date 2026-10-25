@@ -311,59 +311,16 @@ pub fn refusal_json(code: &str) -> String {
     json!({"error":code}).to_string()
 }
 
-/// Check a connected IPC peer is the same effective user before sharing credentials.
-#[cfg(unix)]
-pub fn same_uid(stream: &std::os::unix::net::UnixStream) -> bool {
-    use std::os::fd::AsRawFd;
-    // SAFETY: geteuid takes no arguments or pointers.
-    let ours = unsafe { libc::geteuid() };
-    #[cfg(any(
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd"
-    ))]
-    {
-        let mut uid = 0;
-        let mut gid = 0;
-        // SAFETY: live socket fd and valid uid/gid output pointers.
-        unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) == 0 && uid == ours }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let mut credentials: libc::ucred = libc::ucred {
-            pid: 0,
-            uid: 0,
-            gid: 0,
-        };
-        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        // SAFETY: live socket fd, correctly sized ucred output buffer and length pointer.
-        unsafe {
-            libc::getsockopt(
-                stream.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                (&mut credentials as *mut libc::ucred).cast(),
-                &mut len,
-            ) == 0
-                && credentials.uid == ours
-        }
-    }
-    #[cfg(not(any(
-        target_os = "macos",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "linux"
-    )))]
-    {
-        let _ = (stream, ours);
-        false
-    }
-}
+/// The peer-credential check on the Mac app's owner-only socket. The socket is the app's live
+/// review session, so this and [`request`] compile only with feature `desktop` (E1-T7); the
+/// server build answers `form_unavailable`, as it does without the app.
+#[cfg(all(unix, feature = "desktop"))]
+mod peer;
+#[cfg(all(unix, feature = "desktop"))]
+pub use peer::same_uid;
 
 /// Call the live desktop through its owner-only socket, bounded to one JSON reply.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "desktop"))]
 pub fn request(
     db_path: &Path,
     operation: FormOperation,
@@ -404,7 +361,10 @@ pub fn request(
     Ok(value.to_string())
 }
 
-#[cfg(not(unix))]
+/// Without the Mac app's socket (a non-Unix target, or a build without feature `desktop`) a form
+/// request has nowhere to go: the same `form_unavailable` the faces give when the app is not
+/// running.
+#[cfg(not(all(unix, feature = "desktop")))]
 pub fn request(
     _db_path: &Path,
     _operation: FormOperation,
@@ -493,7 +453,7 @@ mod tests {
         .is_err());
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "desktop"))]
     #[test]
     fn owner_only_socket_roundtrip_checks_peer_and_shared_frames() {
         use std::os::unix::fs::PermissionsExt;

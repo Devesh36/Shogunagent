@@ -5,7 +5,7 @@
 //! Debug builds only (the `SHOGUN_*_JSON` path overrides live there) and not on macOS (there the
 //! binary reads the token list from the real login Keychain; elsewhere it registers
 //! `SHOGUN_API_TOKEN`, which this test sets).
-#![cfg(all(feature = "daemon-server", debug_assertions, not(target_os = "macos")))]
+#![cfg(all(feature = "daemon-server", debug_assertions, not(feature = "desktop")))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};

@@ -4,6 +4,7 @@ use super::*;
 use rusqlite::OptionalExtension;
 
 // Reserve context anchors before generic question labels consume FTS's 24-term budget.
+#[cfg(feature = "desktop")]
 fn form_context_query(profile: &[&str], questions: &[&str]) -> String {
     let anchors = profile
         .iter()
@@ -39,7 +40,7 @@ fn form_context_query(profile: &[&str], questions: &[&str]) -> String {
     terms.join(" ")
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod form_context_tests {
     use super::*;
 
@@ -525,7 +526,7 @@ impl Db {
         .unwrap_or_default()
     }
 
-    /// Confidence-gated memory lines for the inline draft prompt ([`crate::inline::compose_inline`]):
+    /// Confidence-gated memory lines for the inline draft prompt (`inline::compose_inline`):
     /// the commitments the user owes and the open loops in play, passed through the FR-ST-20 gate
     /// (High stated as fact, Medium prefixed `possibly:`, Low dropped) so a low-confidence guess is
     /// never handed to the model as a fact. Capped at `limit` lines.
@@ -940,6 +941,8 @@ impl Db {
 
     /// One shared lookup for the form, with the user's source-backed About You lines.
     /// Repeating federated search per field made a 12-field device lookup take 15 seconds.
+    /// Form filling is the Mac app's (feature `desktop`, `docs/features/form-mode.md`).
+    #[cfg(feature = "desktop")]
     pub fn assemble_form_context(
         &self,
         owner: Option<&str>,

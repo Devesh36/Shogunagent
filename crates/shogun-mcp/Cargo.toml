@@ -14,6 +14,14 @@ description = "SHOGUN first-layer MCP integration: the per-service permission sc
 
 [features]
 default = []
+# `desktop` (E1-T7) compiles what exists only for the ShogunAI Mac app: the launcher code-signature
+# check, the app's `~/Library/Application Support` data folder and the owner-only socket to its
+# live form-review session. OFF by default: the ShogunAgent server build carries none of it and
+# no `cfg(target_os = "macos")` site (`scripts/check-desktop-gate.py`). The token-list format
+# (`memory_api_settings`), the live re-check (`live_tokens`), the file-backed plan source
+# (`plan_source`, `trial_relay`), the "Add to …" planner (`client_install`) and the chat bridge are
+# pure and serve every face, so they stay in the default build.
+desktop = []
 # `server` pulls in the axum listener for the REST face. OFF by default so the pure routing layer
 # (rest::route / rest::respond) tests without a runtime; the daemon enables it. axum is a server
 # framework (inbound), not an HTTP client — it does not violate the FR-TR-03 egress rule.

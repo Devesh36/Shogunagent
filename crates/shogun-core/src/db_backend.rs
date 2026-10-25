@@ -194,29 +194,14 @@ pub type ConnectionRestrictor = Arc<dyn Fn(&str) -> Result<bool, String> + Send 
 /// The standalone faces' [`ConnectionRestrictor`]: the Keychain item the app keeps the
 /// connections in, rewritten only when something changed, then the revision marker beside
 /// `memory_api.json` (`settings_path`) so running sessions re-read it at their next call. Only
-/// ever narrows (`memory_api_settings::withhold_in_store`). macOS only; `None` elsewhere.
+/// ever narrows (`memory_api_settings::withhold_in_store`). The Mac app's build only
+/// (`desktop::keychain::connection_restrictor`); `None` elsewhere.
 pub fn keychain_connection_restrictor(settings_path: PathBuf) -> Option<ConnectionRestrictor> {
-    #[cfg(target_os = "macos")]
+    #[cfg(feature = "desktop")]
     {
-        Some(Arc::new(move |client: &str| {
-            use shogun_integrations::keychain_store::{get_generic_secret_uncached, set_generic_secret};
-            use shogun_mcp::memory_api_settings::{token_blob_read, withhold_in_store, TOKENS_KEYCHAIN_ACCOUNT};
-            let changed = withhold_in_store(
-                || token_blob_read(get_generic_secret_uncached(TOKENS_KEYCHAIN_ACCOUNT).map_err(|error| error.code())),
-                |bytes| {
-                    set_generic_secret(TOKENS_KEYCHAIN_ACCOUNT, bytes)
-                        .map_err(|_| "connections_unavailable".to_string())
-                },
-                client,
-            )?;
-            if changed {
-                // A failed marker write leaves the change to the sessions' 60-second re-read.
-                let _ = shogun_mcp::live_tokens::bump_revision(&shogun_mcp::live_tokens::revision_path(&settings_path));
-            }
-            Ok(changed)
-        }))
+        crate::desktop::keychain::connection_restrictor(settings_path)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(feature = "desktop"))]
     {
         let _ = settings_path;
         None
@@ -351,13 +336,12 @@ impl AgentSourceConfig {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(feature = "desktop")]
 fn daemon_key_present(provider: &str) -> Option<bool> {
-    let account = crate::agent_source::byok_keychain_account(provider)?;
-    shogun_integrations::keychain_store::generic_secret_present(account)
+    crate::desktop::keychain::daemon_key_present(provider)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(feature = "desktop"))]
 fn daemon_key_present(_provider: &str) -> Option<bool> {
     None
 }
@@ -1321,7 +1305,7 @@ impl DbBackend {
             Err(FrameRescanError::OcrFailed) => json!({
                 "error": "ocr_failed",
                 "frame_id": frame_id,
-                "ocr_available": cfg!(target_os = "macos"),
+                "ocr_available": crate::capture::visual_recall::OCR_AVAILABLE,
             })
             .to_string(),
             Err(FrameRescanError::EventUpdateFailed) => {
@@ -2831,7 +2815,11 @@ impl MemoryBackend for DbBackend {
                 Err(_) => json!({ "error": "storage_preview_unavailable" }).to_string(),
             },
             // Static, compiled in: every face gets the real answer with no shared-store problem.
+            // The notes describe the Mac app's releases, so only its build carries them (E1-T7).
+            #[cfg(feature = "desktop")]
             Tool::DeviceReleaseNotesGet => crate::release_notes::catalog_json(),
+            #[cfg(not(feature = "desktop"))]
+            Tool::DeviceReleaseNotesGet => json!({ "error": "unavailable" }).to_string(),
             // The Settings "Nightly review" row, from the same ledger and the same shared
             // `dream_outcome.json` (issue #285, invariant 6).
             // `actions` (#285) adds what this process knows beyond the ledger.
@@ -2862,16 +2850,11 @@ impl MemoryBackend for DbBackend {
                             for row in rows {
                                 let label = match row["state"].as_str() {
                                     Some("connected" | "needs_reauth") => {
-                                        #[cfg(target_os = "macos")]
+                                        #[cfg(feature = "desktop")]
                                         {
-                                            use shogun_integrations::token::TokenStore;
-                                            shogun_mcp::connections_api::listed_services()
-                                                .find(|service| Some(service.source_str()) == row["service"].as_str())
-                                                .and_then(|service| shogun_integrations::keychain::KeychainTokenStore::new("com.selectkk.shogun")
-                                                    .load(service).ok().flatten())
-                                                .and_then(|tokens| tokens.account_label)
+                                            crate::desktop::keychain::connection_account_label(row["service"].as_str())
                                         }
-                                        #[cfg(not(target_os = "macos"))]
+                                        #[cfg(not(feature = "desktop"))]
                                         { None::<String> }
                                     }
                                     _ => None,

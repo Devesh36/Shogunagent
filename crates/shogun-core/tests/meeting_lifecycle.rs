@@ -15,9 +15,10 @@
 //! until the ASR lane exists), so the balance is checkable now, before there is anything real to
 //! leave running.
 //!
-//! This target exercises the `db`-gated `daemon` module, so it is compiled only under the `db`
-//! feature (mirroring `context_slo.rs`); the pure-logic audio unit tests run without it.
-#![cfg(feature = "db")]
+//! This target exercises the `db`-gated `daemon` module and the Mac app's live meeting lane
+//! (`meeting::{statemachine, endwatch, gate}`, feature `desktop`, E1-T7), so it is compiled only
+//! with both; the pure-logic audio unit tests run without it.
+#![cfg(all(feature = "db", feature = "desktop"))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use shogun_core::daemon::{Clock, Db};
