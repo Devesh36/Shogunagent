@@ -10,6 +10,8 @@
 //   TYPESAFE_API_KEY    the operator's TypeSafe key for Jev form decisions (/v1/ai/form_decide, issue #1144; unset = that route answers 503)
 //   AGENT_POW_SECRET    HMAC key of the agent-registration proof-of-work challenges (README-agent-api.md; required once AGENT_API_ENABLED=1)
 //   STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET   card top-ups for the agent wallet (both or neither; unset = POST /v1/wallet/topup answers 503)
+//   ENTERPRISE_SECRET   E26 tenant-admin sessions and sealed SSO secrets (required once ENTERPRISE_ENABLED=1; DEPLOY.md §9.2)
+//   SHOGUN_SIDECAR_ADMIN_TOKEN   the sidecar operator bearer for Team sync, the tenant audit export and SCIM purges (optional)
 // Non-secrets are `vars` below. Every name is documented in src/boot.ts.
 // The agent API (plan E3 / E9) is OFF until `AGENT_API_ENABLED: "1"` and `PUBLIC_BASE_URL` are
 // added to `vars` and the agent tables are provisioned (sql/agent-keys.sql; DEPLOY.md §9).

@@ -323,6 +323,14 @@
     {
       "name": "approvals",
       "description": "Remote L2/L3 approvals: webhooks for the principal, the approval page and Slack for humans."
+    },
+    {
+      "name": "enterprise",
+      "description": "Tenants (operator), SSO for tenant admins (OIDC, SAML 2.0), the admin session routes and the tenant audit export. Served when ENTERPRISE_ENABLED=1."
+    },
+    {
+      "name": "scim",
+      "description": "SCIM 2.0 provisioning for enterprise tenants: users are principals, groups are Teams."
     }
   ],
   "paths": {
@@ -1888,6 +1896,1649 @@
         "x-anonymous": true
       }
     },
+    "/legal/dpa": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Data processing addendum (DRAFT pending legal review), rendered from docs/legal/dpa.md.",
+        "operationId": "get_legal_dpa",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/legal/zdr": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Zero-retention commitment (DRAFT pending legal review): every path that retains nothing, and the metadata kept.",
+        "operationId": "get_legal_zdr",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/legal/sla": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Service level agreement (DRAFT pending legal review): availability target, credits, exclusions, support tiers.",
+        "operationId": "get_legal_sla",
+        "responses": {
+          "200": {
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/admin/tenants": {
+      "post": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "Create a tenant (name, region, plan, SSO). An enterprise tenant's SCIM token is in the answer, once.",
+        "operationId": "post_v1_admin_tenants",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Same Idempotency-Key: the existing tenant; no token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tenant": {
+                      "$ref": "#/components/schemas/Tenant"
+                    },
+                    "scim_token": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^sct_"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "idempotency_key_required | invalid_name | unknown_region | invalid_plan | sso_requires_enterprise | invalid_sso | idp_host_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope | oauth_not_allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}": {
+      "get": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "A tenant, its admins and its member count.",
+        "operationId": "get_v1_admin_tenants_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tenant": {
+                      "$ref": "#/components/schemas/Tenant"
+                    },
+                    "admins": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "member_count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "tenant_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "Change name, plan or SSO (null removes it). The region is fixed.",
+        "operationId": "patch_v1_admin_tenants_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tenant": {
+                      "$ref": "#/components/schemas/Tenant"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "region_immutable | invalid_plan | sso_requires_enterprise | invalid_sso",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "tenant_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/principals": {
+      "post": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "Attach an existing principal. A principal belongs to at most one tenant.",
+        "operationId": "post_v1_admin_tenants_id_principals",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "principal_id"
+                ],
+                "properties": {
+                  "principal_id": {
+                    "type": "string",
+                    "pattern": "^prn_"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already attached.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "tenant_not_found | principal_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "principal_in_other_tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/admins": {
+      "post": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "Add a tenant admin by e-mail; the first SSO sign-in binds the IdP subject.",
+        "operationId": "post_v1_admin_tenants_id_admins",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "admin_exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/admins/{admin}": {
+      "delete": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "Remove a tenant admin; open sessions end at their next request.",
+        "operationId": "delete_v1_admin_tenants_id_admins_admin",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "admin",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "admin_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/admin/tenants/{id}/scim-token": {
+      "post": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "Rotate the tenant's SCIM bearer; the new one is shown once and the old one stops at once.",
+        "operationId": "post_v1_admin_tenants_id_scim_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "scim_token": {
+                      "type": "string",
+                      "pattern": "^sct_"
+                    },
+                    "scim_base_url": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "scim_requires_enterprise",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/sso/{tenant}/login": {
+      "get": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "Start a tenant admin sign-in: OIDC (code + PKCE S256) or SAML 2.0 (SP-initiated, HTTP-Redirect). Not for agents.",
+        "operationId": "get_sso_tenant_login",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "login_hint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "To the customer's IdP, with a sealed ten-minute flow cookie."
+          },
+          "400": {
+            "description": "sso_not_configured",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "wrong_region — next_action use_region_endpoint, with region and region_endpoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/sso/{tenant}/oidc/callback": {
+      "get": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "The IdP's redirect: code exchange, ID token validation (JWKS, iss, aud, nonce, skew), then the admin session cookie.",
+        "operationId": "get_sso_tenant_oidc_callback",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signed in; sets the HttpOnly, Secure, SameSite=Strict session cookie.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "flow_missing | state_mismatch",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not_an_admin | id_token_*",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/sso/{tenant}/saml/acs": {
+      "post": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "The IdP's POST: signed assertion only, audience, recipient, InResponseTo, replay cache; then the admin session cookie.",
+        "operationId": "post_sso_tenant_saml_acs",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signed in.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "saml_* | saml_replay | not_an_admin",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/sso/{tenant}/saml/metadata": {
+      "get": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "This service provider's SAML metadata for the tenant (entity id, ACS URL, WantAssertionsSigned).",
+        "operationId": "get_sso_tenant_saml_metadata",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/samlmetadata+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "tenant_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/tenant/me": {
+      "get": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "The signed-in tenant admin and the tenant.",
+        "operationId": "get_v1_tenant_me",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "admin": {
+                      "type": "object"
+                    },
+                    "tenant": {
+                      "$ref": "#/components/schemas/Tenant"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "admin_session_required — next_action sign_in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "wrong_region — next_action use_region_endpoint, with region and region_endpoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenantAdminSession": []
+          }
+        ]
+      }
+    },
+    "/v1/tenant/members": {
+      "get": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "The tenant's member principals with their SCIM state.",
+        "operationId": "get_v1_tenant_members",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "admin_session_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenantAdminSession": []
+          }
+        ]
+      }
+    },
+    "/v1/tenant/members/{id}/keys": {
+      "post": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "Issue an agent key (read / write / run; never admin) for a member principal. Shown once.",
+        "operationId": "post_v1_tenant_members_id_keys",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "read",
+                        "write",
+                        "run"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "pattern": "^sa_live_"
+                    },
+                    "key_id": {
+                      "type": "string"
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "member_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "member_inactive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenantAdminSession": []
+          }
+        ]
+      }
+    },
+    "/v1/tenant/audit/export": {
+      "get": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "Every member's sidecar audit export, concatenated: a header line per principal, its records byte for byte, an end line.",
+        "operationId": "get_v1_tenant_audit_export",
+        "parameters": [
+          {
+            "name": "since_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "until_ms",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "NDJSON stream.",
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "sidecar_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenantAdminSession": []
+          }
+        ]
+      }
+    },
+    "/v1/tenant/logout": {
+      "post": {
+        "tags": [
+          "enterprise"
+        ],
+        "summary": "End the admin session.",
+        "operationId": "post_v1_tenant_logout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "tenantAdminSession": []
+          }
+        ]
+      }
+    },
+    "/scim/v2/ServiceProviderConfig": {
+      "get": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "SCIM 2.0 service provider configuration (PATCH and filter supported; no bulk, sort or etag).",
+        "operationId": "get_scim_v2_ServiceProviderConfig",
+        "responses": {
+          "200": {
+            "description": "RFC 7643 §5",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      }
+    },
+    "/scim/v2/Schemas": {
+      "get": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "The User, Group and principal-extension schemas.",
+        "operationId": "get_scim_v2_Schemas",
+        "responses": {
+          "200": {
+            "description": "ListResponse",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      }
+    },
+    "/scim/v2/ResourceTypes": {
+      "get": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "User and Group.",
+        "operationId": "get_scim_v2_ResourceTypes",
+        "responses": {
+          "200": {
+            "description": "ListResponse",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      }
+    },
+    "/scim/v2/Users": {
+      "get": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "List users: filter userName eq / externalId eq, startIndex (1-based), count (≤ 200).",
+        "operationId": "get_scim_v2_Users",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "startIndex",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ListResponse",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalidFilter",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad token",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Tenant homed in another region",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "Provision a user: creates a principal under the tenant with no key yet (a tenant admin issues it).",
+        "operationId": "post_scim_v2_Users",
+        "requestBody": {
+          "description": "A SCIM User",
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The User, with the principal extension",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "uniqueness",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      }
+    },
+    "/scim/v2/Users/{id}": {
+      "get": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "One user.",
+        "operationId": "get_scim_v2_Users_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "Replace a user. active=false revokes every key and OAuth grant of the principal at once.",
+        "operationId": "put_scim_v2_Users_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A SCIM User",
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "uniqueness",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "PatchOp (Okta and Entra ID shapes). Deactivation revokes access immediately.",
+        "operationId": "patch_scim_v2_Users_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "PatchOp",
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalidSyntax | invalidValue | mutability",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "Delete: access ends now; a tombstone stays; the principal store is purged after SCIM_DELETE_GRACE_DAYS.",
+        "operationId": "delete_scim_v2_Users_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      }
+    },
+    "/scim/v2/Groups": {
+      "get": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "List groups (Teams): filter displayName eq / externalId eq; excludedAttributes=members.",
+        "operationId": "get_scim_v2_Groups",
+        "responses": {
+          "200": {
+            "description": "ListResponse",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "Create a group = a Team: members read each other's world state (E18 grants, pushed to the sidecar).",
+        "operationId": "post_scim_v2_Groups",
+        "requestBody": {
+          "description": "A SCIM Group",
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Group",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalidValue | tooMany",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "uniqueness",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sidecar unavailable; nothing changed",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      }
+    },
+    "/scim/v2/Groups/{id}": {
+      "get": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "One group.",
+        "operationId": "get_scim_v2_Groups_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Group",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScimError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "Replace a group's name and members.",
+        "operationId": "put_scim_v2_Groups_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A SCIM Group",
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Group",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "PatchOp on members and displayName (Okta and Entra ID shapes).",
+        "operationId": "patch_scim_v2_Groups_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "PatchOp",
+          "content": {
+            "application/scim+json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Group",
+            "content": {
+              "application/scim+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "scim"
+        ],
+        "summary": "Delete a group; grants its members no longer share elsewhere are revoked.",
+        "operationId": "delete_scim_v2_Groups_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ]
+      }
+    },
     "/v1/webhooks": {
       "post": {
         "tags": [
@@ -2776,6 +4427,18 @@
             }
           }
         }
+      },
+      "scimToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "sct_<token>",
+        "description": "An enterprise tenant's SCIM bearer (one per tenant, stored only as a SHA-256 hash; rotate with POST /v1/admin/tenants/{id}/scim-token)."
+      },
+      "tenantAdminSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-shogun_tenant_admin",
+        "description": "A tenant admin session from SSO (/sso/{tenant}/login): a signed cookie, HttpOnly, Secure, SameSite=Strict, 30 minutes."
       }
     },
     "parameters": {
@@ -3991,6 +5654,175 @@
             "pattern": "^(ch|py)_"
           },
           "ref": {
+            "type": "string"
+          }
+        }
+      },
+      "TenantRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "region": {
+            "type": "string",
+            "pattern": "^[a-z]{2}(-[a-z0-9]{1,16})?$",
+            "description": "Fixed at creation."
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "self-serve",
+              "enterprise"
+            ],
+            "default": "self-serve"
+          },
+          "sso": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Enterprise only.",
+            "properties": {
+              "protocol": {
+                "type": "string",
+                "enum": [
+                  "oidc",
+                  "saml"
+                ]
+              },
+              "enforced": {
+                "type": "boolean",
+                "description": "Members cannot consent to OAuth clients by pasting a key."
+              },
+              "oidc": {
+                "type": "object",
+                "properties": {
+                  "issuer": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "client_id": {
+                    "type": "string"
+                  },
+                  "client_secret": {
+                    "type": "string",
+                    "writeOnly": true,
+                    "description": "Sealed at rest; never returned."
+                  }
+                }
+              },
+              "saml": {
+                "type": "object",
+                "properties": {
+                  "idp_entity_id": {
+                    "type": "string"
+                  },
+                  "sso_url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "certificates": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "description": "PEM RSA certificate or public key"
+                    },
+                    "maxItems": 4
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Tenant": {
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "name",
+          "region",
+          "plan",
+          "served_here"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "pattern": "^tnt_"
+          },
+          "name": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "self-serve",
+              "enterprise"
+            ]
+          },
+          "served_here": {
+            "type": "boolean"
+          },
+          "region_endpoint": {
+            "type": "string",
+            "format": "uri"
+          },
+          "sso": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "scim": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "base_url": {
+                "type": "string"
+              },
+              "token_set": {
+                "type": "boolean"
+              }
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ScimError": {
+        "type": "object",
+        "required": [
+          "schemas",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "schemas": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "scimType": {
+            "type": "string"
+          },
+          "detail": {
             "type": "string"
           }
         }

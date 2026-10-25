@@ -398,6 +398,21 @@ Conventions:
 | GET, POST | `/oauth/authorize` | none (consent page) | Authorization code + PKCE S256; the person pastes the principal's key once |
 | POST | `/oauth/token`, `/oauth/revoke` | none (public client + PKCE) | Code exchange, rotated refresh, revocation |
 | GET | `/privacy`, `/terms` | none | Privacy policy and terms (DRAFT for legal review) |
+| GET | `/legal/dpa`, `/legal/zdr`, `/legal/sla` | none | Data processing addendum, zero-retention commitment, SLA (DRAFT for legal review) |
+| POST | `/v1/admin/tenants` | `admin` key, Idempotency-Key | Create a tenant (E26); an enterprise tenant's SCIM token once |
+| GET, PATCH | `/v1/admin/tenants/{id}` | `admin` key | Read a tenant; change name, plan, SSO (region is fixed) |
+| POST | `/v1/admin/tenants/{id}/principals` | `admin` key | Attach a principal (at most one tenant per principal) |
+| POST, DELETE | `/v1/admin/tenants/{id}/admins[/{admin}]` | `admin` key | Add or remove a tenant admin (by e-mail) |
+| POST | `/v1/admin/tenants/{id}/scim-token` | `admin` key | Rotate the SCIM bearer |
+| GET | `/sso/{tenant}/login` | none (a browser) | Tenant admin sign-in: OIDC (code + PKCE) or SAML 2.0 |
+| GET | `/sso/{tenant}/oidc/callback` | the sealed flow cookie | The IdP's redirect → admin session cookie |
+| POST | `/sso/{tenant}/saml/acs` | the sealed flow cookie | The IdP's POST → admin session cookie |
+| GET | `/sso/{tenant}/saml/metadata` | none | SP metadata for the IdP |
+| GET | `/v1/tenant/me`, `/v1/tenant/members` | admin session | The admin, the tenant, its members |
+| POST | `/v1/tenant/members/{id}/keys` | admin session | Issue a member's agent key (fills the key slot SCIM opened) |
+| GET | `/v1/tenant/audit/export` | admin session | Every member's audit export, concatenated (NDJSON) |
+| POST | `/v1/tenant/logout` | admin session | End the session |
+| * | `/scim/v2/{ServiceProviderConfig,Schemas,ResourceTypes,Users,Groups}` | tenant SCIM bearer `sct_…` | SCIM 2.0 provisioning |
 | ALL | `/mcp` | by unit (see below) | The metered MCP Streamable HTTP proxy |
 | POST | `/v1/webhooks` | `write` | Register an approval webhook (`approval.created`, `approval.decided`) |
 | GET | `/v1/webhooks` | `read` | The principal's approval webhooks (no secrets) |
@@ -666,6 +681,103 @@ until E15 adds per-principal webhooks; shapes in `docs/api/billing.md`).
   [`docs/api/oauth.md`](../../docs/api/oauth.md).
 - Operations (schema, Stripe events, the overage price, the admin key, `AGENT_OAUTH_SECRET`):
   `DEPLOY.md` §9.1.
+
+## 8. Enterprise: tenants, SSO, SCIM, regions, audit export (E26)
+
+Served when `ENTERPRISE_ENABLED=1` (with the agent API on). Code: `src/enterprise/`
+(`app.ts` routes, `oidc.ts`, `saml.ts`, `scim.ts`, `region.ts`, `store.ts`, `crypto.ts`,
+`fetch-guard.ts`, `sidecar-ops.ts`); schema `sql/enterprise.sql`; operations in `DEPLOY.md` §9.2.
+Contract drafts: `/legal/dpa`, `/legal/zdr`, `/legal/sla`.
+
+**Tenants and admins.** A tenant is an organization: `name`, `region` (us | eu | jp | …, fixed at
+creation), `plan` (`self-serve` | `enterprise`) and, for enterprise, an SSO configuration. The
+operator creates it with an `admin` key:
+
+```bash
+curl -X POST "$BASE/v1/admin/tenants" -H "authorization: Bearer $ADMIN_KEY" -H "idempotency-key: acme-1" \
+  -H 'content-type: application/json' \
+  -d '{"name":"Acme","region":"eu","plan":"enterprise",
+       "sso":{"protocol":"oidc","enforced":true,
+              "oidc":{"issuer":"https://acme.okta.com","client_id":"0oa…","client_secret":"…"}}}'
+# 201 {"tenant":{…,"sso":{"login_url":".../sso/tnt_…/login","oidc":{"redirect_uri":".../sso/tnt_…/oidc/callback",…}}},
+#      "scim_token":"sct_…"}          ← shown once; stored as a SHA-256 hash
+```
+
+Then `POST /v1/admin/tenants/{id}/admins {"email": "it@acme.example"}` names the people who
+administer it. Tenant admins are not agent keys: they hold no key, they sign in at
+`/sso/{tenant}/login` with the customer's IdP, and the first sign-in binds their IdP subject (by a
+verified e-mail for OIDC; by the NameID or an e-mail attribute for SAML). A principal belongs to at
+most one tenant (`POST /v1/admin/tenants/{id}/principals` attaches an existing one; `409
+principal_in_other_tenant` otherwise).
+
+**OIDC.** Authorization code with PKCE S256. The issuer's discovery document must name the same
+`issuer`; the ID token is verified against its JWKS (by `kid`, one refetch for rotation), with
+`alg` limited to RS/PS/ES (never `none` or HMAC), `iss` exact, `aud` containing the client id (and
+`azp` when there are several), `exp` / `iat` / `nbf` within `SSO_CLOCK_SKEW_SECS` (default 120),
+and the `nonce` sealed in the flow cookie. The client secret is sealed at rest (AES-256-GCM under
+a key derived from `ENTERPRISE_SECRET`) and never returned. Every fetch to the IdP (discovery,
+JWKS, token) goes through the same SSRF guard as CIMD fetches.
+
+**SAML 2.0.** SP-initiated: `/sso/{tenant}/login` sends an AuthnRequest (HTTP-Redirect) and the IdP
+posts to `/sso/{tenant}/saml/acs`. Give the IdP the metadata at `/sso/{tenant}/saml/metadata`
+(entity id `<base>/sso/{tenant}/saml/metadata`, ACS `<base>/sso/{tenant}/saml/acs`) and give the
+operator the IdP's entity id, SSO URL and signing certificate(s). Accepted: exactly one assertion,
+itself signed (enveloped, one reference to its own ID; a signed Response around an unsigned
+assertion is refused), RSA-SHA256/512 and SHA-256/512 only, verified against the configured
+certificates (never `KeyInfo`), every value read from the signed bytes, `Issuer`, audience,
+recipient, `InResponseTo`, validity window with skew, and the assertion id spent in a replay cache
+until it expires. Encrypted assertions and IdP-initiated sign-in are not supported. Library:
+`xml-crypto` 6.4.0 over `@xmldom/xmldom` 0.8.15 — both run on Workers (`nodejs_compat`); the
+workerd test suite signs and verifies an assertion, so SAML is served on Workers, not behind a
+Node-only flag.
+
+**Admin session.** A completed sign-in sets `__Host-shogun_tenant_admin`: a signed cookie
+(`HttpOnly; Secure; SameSite=Strict; Path=/`), 30 minutes, re-checked on each request against the
+admin row, so removing an admin ends their session at once. The sign-in itself rides a sealed,
+ten-minute `__Host-shogun_sso_flow` cookie (`SameSite=None`, because the SAML IdP returns with a
+cross-site POST) that holds the state, nonce and PKCE verifier or the request id.
+
+**SSO enforcement.** With `"enforced": true`, the tenant's principals cannot connect OAuth clients
+by pasting an agent key on `/oauth/authorize` (403 on the consent page). Their keys are issued by a
+tenant admin instead (`POST /v1/tenant/members/{id}/keys`, scopes read / write / run, never
+admin, shown once).
+
+**SCIM 2.0.** Base `<base>/scim/v2`, bearer `sct_…` from tenant creation or
+`POST /v1/admin/tenants/{id}/scim-token`. Tested with request shapes from Okta and Entra ID.
+
+| SCIM | ShogunAgent |
+|---|---|
+| `POST /Users` | A new principal under the tenant (`id` = principal id), no key yet: the key slot is open until a tenant admin issues one |
+| `GET /Users?filter=userName eq "…"` | Exact, case-insensitive match; `externalId eq` too; `startIndex` (1-based) and `count` (≤ 200) per RFC 7644 |
+| `active: false` by `PATCH` or `PUT` (Okta `{"op":"replace","value":{"active":false}}`, Entra `{"op":"Replace","path":"active","value":"False"}`) | Every key of the principal and every OAuth grant minted from them is revoked immediately; reactivation does not bring them back |
+| `DELETE /Users/{id}` | Access revoked now; the user leaves its groups; a tombstone (ids and times) stays; the principal store is purged by the sweep after `SCIM_DELETE_GRACE_DAYS` (default 30) |
+| `POST /Groups`, `PATCH` members | A Team (E18): every pair of members gets a world-read grant both ways, pushed to the sidecar (`POST /v1/teams`, `/v1/acl/grant`, `/v1/acl/revoke`); a grant is revoked only when two people share no other group. At most 30 members per group |
+
+Unknown attributes (for example Entra's enterprise extension) are accepted and ignored; nothing
+beyond userName, name, e-mails, external id and active is stored, and no SCIM body is logged.
+
+**Regions.** A deployment serves one region (`SHOGUN_REGION`). A request whose principal belongs to
+a tenant in another region is refused before anything is read or booked:
+
+```json
+421 {"error":{"code":"wrong_region","message":"This principal is served in region eu. Send the request to https://eu.api.example instead; …",
+              "next_action":"use_region_endpoint","region":"eu","region_endpoint":"https://eu.api.example"}}
+```
+
+The endpoint comes from `SHOGUN_REGION_ENDPOINTS`. Regional deployments are separated completely:
+each has its own Worker, Postgres, sidecar fleet and KMS keys; they share no database and never
+call each other, so there is no cross-region data path. A tenant's region cannot be changed in
+place (`400 region_immutable`): moving means creating the tenant in the new region and moving each
+principal with export and import; the old deployment keeps a routing stub (the tenant row and its
+memberships, ids only) so old keys get the 421 instead of a bare 401. SCIM, SSO and the admin
+routes of a tenant homed elsewhere answer the same 421.
+
+**Audit export.** `GET /v1/tenant/audit/export[?since_ms=&until_ms=]` (admin session) streams
+NDJSON: a header line, then for each member principal
+`{"type":"principal","principal_id":"prn_…","status":200}` followed by that principal's sidecar
+export (`GET {sidecar}/v1/audit/export?principal=…`) byte for byte, and a final
+`{"type":"end","principals":N,"failed":M}`. A member whose export failed gets its header with the
+status and error and no body. The gateway never parses the records.
 
 ---
 

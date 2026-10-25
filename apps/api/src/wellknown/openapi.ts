@@ -31,6 +31,8 @@ const components: Json = {
       description: "OAuth 2.1 for MCP clients (docs/api/oauth.md): authorization code with PKCE S256; the client_id is the URL of a Client ID Metadata Document; no dynamic registration. Access tokens (sat_…) act as the consenting key, with at most its scopes and never admin.",
       flows: { authorizationCode: { authorizationUrl: "/oauth/authorize", tokenUrl: "/oauth/token", refreshUrl: "/oauth/token", scopes: { read: "Read state and memory (free)", write: "Ingest and write notes (metered)", run: "Run tools (metered; L3 waits for approval)" } } },
     },
+    scimToken: { type: "http", scheme: "bearer", bearerFormat: "sct_<token>", description: "An enterprise tenant's SCIM bearer (one per tenant, stored only as a SHA-256 hash; rotate with POST /v1/admin/tenants/{id}/scim-token)." },
+    tenantAdminSession: { type: "apiKey", in: "cookie", name: "__Host-shogun_tenant_admin", description: "A tenant admin session from SSO (/sso/{tenant}/login): a signed cookie, HttpOnly, Secure, SameSite=Strict, 30 minutes." },
   },
   parameters: {
     McpMethod: { name: "Mcp-Method", in: "header", required: true, schema: { type: "string" }, description: "The JSON-RPC method (MCP 2026-07-28 Streamable HTTP). Anything but tools/call is free protocol traffic." },
@@ -193,6 +195,31 @@ const components: Json = {
         reason: { type: "string", enum: ["goodwill", "dispute", "service_credit", "refund", "chargeback", "correction"] }, charge_id: { type: "string", pattern: "^(ch|py)_" }, ref: { type: "string" },
       },
     },
+    TenantRequest: {
+      type: "object",
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 200 }, region: { type: "string", pattern: "^[a-z]{2}(-[a-z0-9]{1,16})?$", description: "Fixed at creation." },
+        plan: { type: "string", enum: ["self-serve", "enterprise"], default: "self-serve" },
+        sso: {
+          type: ["object", "null"], description: "Enterprise only.",
+          properties: {
+            protocol: { type: "string", enum: ["oidc", "saml"] }, enforced: { type: "boolean", description: "Members cannot consent to OAuth clients by pasting a key." },
+            oidc: { type: "object", properties: { issuer: { type: "string", format: "uri" }, client_id: { type: "string" }, client_secret: { type: "string", writeOnly: true, description: "Sealed at rest; never returned." } } },
+            saml: { type: "object", properties: { idp_entity_id: { type: "string" }, sso_url: { type: "string", format: "uri" }, certificates: { type: "array", items: { type: "string", description: "PEM RSA certificate or public key" }, maxItems: 4 } } },
+          },
+        },
+      },
+    },
+    Tenant: {
+      type: "object", required: ["tenant_id", "name", "region", "plan", "served_here"],
+      properties: {
+        tenant_id: { type: "string", pattern: "^tnt_" }, name: { type: "string" }, region: { type: "string" }, plan: { type: "string", enum: ["self-serve", "enterprise"] },
+        served_here: { type: "boolean" }, region_endpoint: { type: "string", format: "uri" },
+        sso: { type: ["object", "null"] }, scim: { type: ["object", "null"], properties: { base_url: { type: "string" }, token_set: { type: "boolean" } } },
+        created_at: { type: "string", format: "date-time" }, updated_at: { type: "string", format: "date-time" },
+      },
+    },
+    ScimError: { type: "object", required: ["schemas", "status", "detail"], properties: { schemas: { type: "array", items: { type: "string" } }, status: { type: "string" }, scimType: { type: "string" }, detail: { type: "string" } } },
     DisputeRequest: { type: "object", required: ["reason"], properties: { reason: { type: "string", minLength: 1, maxLength: 1000 } } },
     Dispute: { type: "object", required: ["dispute_id", "receipt_id", "status", "ts"], properties: { dispute_id: { type: "string", pattern: "^dsp_" }, receipt_id: { type: "string" }, status: { type: "string", enum: ["open", "resolved", "rejected"] }, ts: { type: "string", format: "date-time" } } },
     DryRun: { type: "object", required: ["dry_run", "quote", "usage", "latency_ms", "next_action"], properties: { result: { type: "null" }, dry_run: { type: "boolean", enum: [true] }, quote: ref("Usage"), usage: ref("Usage"), balance_micro_usd: micro("Spendable now"), sufficient: { type: "boolean" }, latency_ms: { type: "integer" }, next_action: { type: "null" } } },
@@ -208,12 +235,12 @@ const components: Json = {
 };
 
 interface Route {
-  method: "get" | "post" | "patch" | "delete" | "all";
+  method: "get" | "post" | "put" | "patch" | "delete" | "all";
   path: string;
   tag: string;
   summary: string;
   description?: string;
-  security: "none" | "key" | "stripe" | "pow";
+  security: "none" | "key" | "stripe" | "pow" | "scim" | "session";
   scope?: "read" | "write" | "run" | "admin" | "any";
   /** Takes the agent key itself, never an OAuth access token. */
   keyOnly?: boolean;
@@ -221,6 +248,48 @@ interface Route {
   requestBody?: Json;
   responses: Record<string, Json>;
   servedBy?: "apps/api" | "apps/router";
+}
+
+/** The enterprise lane (E26; enterprise/app.ts, enterprise/scim.ts). Served when ENTERPRISE_ENABLED=1. */
+function enterpriseRoutes(): Route[] {
+  const id = (name: string): Json => ({ name, in: "path", required: true, schema: { type: "string" } });
+  const html = (description: string): Json => ({ description, content: { "text/html": { schema: { type: "string" } } } });
+  const scimBody = (description: string): Json => ({ description, content: { "application/scim+json": { schema: { type: "object" } } } });
+  const scimError = (description: string): Json => ({ description, content: { "application/scim+json": { schema: ref("ScimError") } } });
+  const regionRefused = errorResponse("wrong_region — next_action use_region_endpoint, with region and region_endpoint");
+  return [
+    { method: "post", path: "/v1/admin/tenants", tag: "enterprise", security: "key", scope: "admin", summary: "Create a tenant (name, region, plan, SSO). An enterprise tenant's SCIM token is in the answer, once.", parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }], requestBody: jsonBody(ref("TenantRequest")), responses: { "201": jsonBody({ type: "object", properties: { tenant: ref("Tenant"), scim_token: { type: ["string", "null"], pattern: "^sct_" }, created: { type: "boolean" } } }), "200": jsonBody({ type: "object" }, "Same Idempotency-Key: the existing tenant; no token."), "400": errorResponse("idempotency_key_required | invalid_name | unknown_region | invalid_plan | sso_requires_enterprise | invalid_sso | idp_host_refused"), "403": errorResponse("insufficient_scope | oauth_not_allowed") } },
+    { method: "get", path: "/v1/admin/tenants/{id}", tag: "enterprise", security: "key", scope: "admin", summary: "A tenant, its admins and its member count.", parameters: [id("id")], responses: { "200": jsonBody({ type: "object", properties: { tenant: ref("Tenant"), admins: { type: "array", items: { type: "object" } }, member_count: { type: "integer" } } }), "404": errorResponse("tenant_not_found") } },
+    { method: "patch", path: "/v1/admin/tenants/{id}", tag: "enterprise", security: "key", scope: "admin", summary: "Change name, plan or SSO (null removes it). The region is fixed.", parameters: [id("id")], requestBody: jsonBody(ref("TenantRequest")), responses: { "200": jsonBody({ type: "object", properties: { tenant: ref("Tenant") } }), "400": errorResponse("region_immutable | invalid_plan | sso_requires_enterprise | invalid_sso"), "404": errorResponse("tenant_not_found") } },
+    { method: "post", path: "/v1/admin/tenants/{id}/principals", tag: "enterprise", security: "key", scope: "admin", summary: "Attach an existing principal. A principal belongs to at most one tenant.", parameters: [id("id")], requestBody: jsonBody({ type: "object", required: ["principal_id"], properties: { principal_id: { type: "string", pattern: "^prn_" } } }), responses: { "201": jsonBody({ type: "object" }), "200": jsonBody({ type: "object" }, "Already attached."), "404": errorResponse("tenant_not_found | principal_not_found"), "409": errorResponse("principal_in_other_tenant") } },
+    { method: "post", path: "/v1/admin/tenants/{id}/admins", tag: "enterprise", security: "key", scope: "admin", summary: "Add a tenant admin by e-mail; the first SSO sign-in binds the IdP subject.", parameters: [id("id")], requestBody: jsonBody({ type: "object", required: ["email"], properties: { email: { type: "string", format: "email" } } }), responses: { "201": jsonBody({ type: "object" }), "409": errorResponse("admin_exists") } },
+    { method: "delete", path: "/v1/admin/tenants/{id}/admins/{admin}", tag: "enterprise", security: "key", scope: "admin", summary: "Remove a tenant admin; open sessions end at their next request.", parameters: [id("id"), id("admin")], responses: { "200": jsonBody({ type: "object" }), "404": errorResponse("admin_not_found") } },
+    { method: "post", path: "/v1/admin/tenants/{id}/scim-token", tag: "enterprise", security: "key", scope: "admin", summary: "Rotate the tenant's SCIM bearer; the new one is shown once and the old one stops at once.", parameters: [id("id")], responses: { "201": jsonBody({ type: "object", properties: { scim_token: { type: "string", pattern: "^sct_" }, scim_base_url: { type: "string" } } }), "400": errorResponse("scim_requires_enterprise") } },
+    { method: "get", path: "/sso/{tenant}/login", tag: "enterprise", security: "none", summary: "Start a tenant admin sign-in: OIDC (code + PKCE S256) or SAML 2.0 (SP-initiated, HTTP-Redirect). Not for agents.", parameters: [id("tenant"), { name: "login_hint", in: "query", required: false, schema: { type: "string" } }], responses: { "302": { description: "To the customer's IdP, with a sealed ten-minute flow cookie." }, "400": html("sso_not_configured"), "421": regionRefused } },
+    { method: "get", path: "/sso/{tenant}/oidc/callback", tag: "enterprise", security: "none", summary: "The IdP's redirect: code exchange, ID token validation (JWKS, iss, aud, nonce, skew), then the admin session cookie.", parameters: [id("tenant")], responses: { "200": html("Signed in; sets the HttpOnly, Secure, SameSite=Strict session cookie."), "400": html("flow_missing | state_mismatch"), "403": html("not_an_admin | id_token_*") } },
+    { method: "post", path: "/sso/{tenant}/saml/acs", tag: "enterprise", security: "none", summary: "The IdP's POST: signed assertion only, audience, recipient, InResponseTo, replay cache; then the admin session cookie.", parameters: [id("tenant")], responses: { "200": html("Signed in."), "403": html("saml_* | saml_replay | not_an_admin") } },
+    { method: "get", path: "/sso/{tenant}/saml/metadata", tag: "enterprise", security: "none", summary: "This service provider's SAML metadata for the tenant (entity id, ACS URL, WantAssertionsSigned).", parameters: [id("tenant")], responses: { "200": { content: { "application/samlmetadata+xml": { schema: { type: "string" } } } }, "404": errorResponse("tenant_not_found") } },
+    { method: "get", path: "/v1/tenant/me", tag: "enterprise", security: "session", summary: "The signed-in tenant admin and the tenant.", responses: { "200": jsonBody({ type: "object", properties: { admin: { type: "object" }, tenant: ref("Tenant") } }), "401": errorResponse("admin_session_required — next_action sign_in"), "421": regionRefused } },
+    { method: "get", path: "/v1/tenant/members", tag: "enterprise", security: "session", summary: "The tenant's member principals with their SCIM state.", responses: { "200": jsonBody({ type: "object" }), "401": errorResponse("admin_session_required") } },
+    { method: "post", path: "/v1/tenant/members/{id}/keys", tag: "enterprise", security: "session", summary: "Issue an agent key (read / write / run; never admin) for a member principal. Shown once.", parameters: [id("id")], requestBody: jsonBody({ type: "object", properties: { scopes: { type: "array", items: { type: "string", enum: ["read", "write", "run"] } } } }), responses: { "201": jsonBody({ type: "object", properties: { key: { type: "string", pattern: "^sa_live_" }, key_id: { type: "string" }, scopes: { type: "array", items: { type: "string" } } } }), "404": errorResponse("member_not_found"), "409": errorResponse("member_inactive") } },
+    { method: "get", path: "/v1/tenant/audit/export", tag: "enterprise", security: "session", summary: "Every member's sidecar audit export, concatenated: a header line per principal, its records byte for byte, an end line.", parameters: [{ name: "since_ms", in: "query", required: false, schema: { type: "integer" } }, { name: "until_ms", in: "query", required: false, schema: { type: "integer" } }], responses: { "200": { description: "NDJSON stream.", content: { "application/x-ndjson": { schema: { type: "string" } } } }, "503": errorResponse("sidecar_unavailable") } },
+    { method: "post", path: "/v1/tenant/logout", tag: "enterprise", security: "session", summary: "End the admin session.", responses: { "200": jsonBody({ type: "object" }) } },
+    { method: "get", path: "/scim/v2/ServiceProviderConfig", tag: "scim", security: "scim", summary: "SCIM 2.0 service provider configuration (PATCH and filter supported; no bulk, sort or etag).", responses: { "200": scimBody("RFC 7643 §5") } },
+    { method: "get", path: "/scim/v2/Schemas", tag: "scim", security: "scim", summary: "The User, Group and principal-extension schemas.", responses: { "200": scimBody("ListResponse") } },
+    { method: "get", path: "/scim/v2/ResourceTypes", tag: "scim", security: "scim", summary: "User and Group.", responses: { "200": scimBody("ListResponse") } },
+    { method: "get", path: "/scim/v2/Users", tag: "scim", security: "scim", summary: "List users: filter userName eq / externalId eq, startIndex (1-based), count (≤ 200).", parameters: [{ name: "filter", in: "query", required: false, schema: { type: "string" } }, { name: "startIndex", in: "query", required: false, schema: { type: "integer", minimum: 1 } }, { name: "count", in: "query", required: false, schema: { type: "integer", minimum: 0, maximum: 200 } }], responses: { "200": scimBody("ListResponse"), "400": scimError("invalidFilter"), "401": scimError("Bad token"), "421": scimError("Tenant homed in another region") } },
+    { method: "post", path: "/scim/v2/Users", tag: "scim", security: "scim", summary: "Provision a user: creates a principal under the tenant with no key yet (a tenant admin issues it).", requestBody: scimBody("A SCIM User"), responses: { "201": scimBody("The User, with the principal extension"), "409": scimError("uniqueness") } },
+    { method: "get", path: "/scim/v2/Users/{id}", tag: "scim", security: "scim", summary: "One user.", parameters: [id("id")], responses: { "200": scimBody("User"), "404": scimError("Not found") } },
+    { method: "put", path: "/scim/v2/Users/{id}", tag: "scim", security: "scim", summary: "Replace a user. active=false revokes every key and OAuth grant of the principal at once.", parameters: [id("id")], requestBody: scimBody("A SCIM User"), responses: { "200": scimBody("User"), "409": scimError("uniqueness") } },
+    { method: "patch", path: "/scim/v2/Users/{id}", tag: "scim", security: "scim", summary: "PatchOp (Okta and Entra ID shapes). Deactivation revokes access immediately.", parameters: [id("id")], requestBody: scimBody("PatchOp"), responses: { "200": scimBody("User"), "400": scimError("invalidSyntax | invalidValue | mutability") } },
+    { method: "delete", path: "/scim/v2/Users/{id}", tag: "scim", security: "scim", summary: "Delete: access ends now; a tombstone stays; the principal store is purged after SCIM_DELETE_GRACE_DAYS.", parameters: [id("id")], responses: { "204": { description: "Deleted." }, "404": scimError("Not found") } },
+    { method: "get", path: "/scim/v2/Groups", tag: "scim", security: "scim", summary: "List groups (Teams): filter displayName eq / externalId eq; excludedAttributes=members.", responses: { "200": scimBody("ListResponse") } },
+    { method: "post", path: "/scim/v2/Groups", tag: "scim", security: "scim", summary: "Create a group = a Team: members read each other's world state (E18 grants, pushed to the sidecar).", requestBody: scimBody("A SCIM Group"), responses: { "201": scimBody("Group"), "400": scimError("invalidValue | tooMany"), "409": scimError("uniqueness"), "503": scimError("Sidecar unavailable; nothing changed") } },
+    { method: "get", path: "/scim/v2/Groups/{id}", tag: "scim", security: "scim", summary: "One group.", parameters: [id("id")], responses: { "200": scimBody("Group"), "404": scimError("Not found") } },
+    { method: "put", path: "/scim/v2/Groups/{id}", tag: "scim", security: "scim", summary: "Replace a group's name and members.", parameters: [id("id")], requestBody: scimBody("A SCIM Group"), responses: { "200": scimBody("Group") } },
+    { method: "patch", path: "/scim/v2/Groups/{id}", tag: "scim", security: "scim", summary: "PatchOp on members and displayName (Okta and Entra ID shapes).", parameters: [id("id")], requestBody: scimBody("PatchOp"), responses: { "200": scimBody("Group") } },
+    { method: "delete", path: "/scim/v2/Groups/{id}", tag: "scim", security: "scim", summary: "Delete a group; grants its members no longer share elsewhere are revoked.", parameters: [id("id")], responses: { "204": { description: "Deleted." } } },
+  ];
 }
 
 function routes(table: ToolTable, ctx: WellknownContext): Route[] {
@@ -291,6 +360,12 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     // --- E23: legal pages ---
     { method: "get", path: "/privacy", tag: "well-known", security: "none", summary: "Privacy policy (DRAFT pending legal review), rendered from docs/legal/privacy-policy.md.", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
     { method: "get", path: "/terms", tag: "well-known", security: "none", summary: "Terms of service (DRAFT pending legal review), rendered from docs/legal/terms.md.", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
+    // --- E26: the enterprise contract drafts ---
+    { method: "get", path: "/legal/dpa", tag: "well-known", security: "none", summary: "Data processing addendum (DRAFT pending legal review), rendered from docs/legal/dpa.md.", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
+    { method: "get", path: "/legal/zdr", tag: "well-known", security: "none", summary: "Zero-retention commitment (DRAFT pending legal review): every path that retains nothing, and the metadata kept.", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
+    { method: "get", path: "/legal/sla", tag: "well-known", security: "none", summary: "Service level agreement (DRAFT pending legal review): availability target, credits, exclusions, support tiers.", responses: { "200": { content: { "text/html": { schema: { type: "string" } } } } } },
+    // --- E26: enterprise tenants (operator), SSO and tenant admin routes (humans), SCIM (the customer's IdP) ---
+    ...enterpriseRoutes(),
     // --- remote approvals (E15): webhooks for agents; the page, Slack and the notification are for humans and the core ---
     { method: "post", path: "/v1/webhooks", tag: "approvals", security: "key", scope: "write", summary: "Register an HTTPS endpoint for approval.created / approval.decided. Deliveries are signed (X-Shogun-Signature: t=<unix>,v1=HMAC-SHA256(secret, \"<t>.<body>\")), retried with backoff, and carry the redacted summary only. The secret is shown once.", requestBody: jsonBody({ type: "object", required: ["url"], properties: { url: { type: "string", format: "uri" }, events: { type: "array", items: { type: "string", enum: ["approval.created", "approval.decided"] } } } }), responses: { "201": jsonBody({ type: "object", properties: { id: { type: "string" }, url: { type: "string" }, events: { type: "array", items: { type: "string" } }, secret: { type: "string" } } }), "400": errorResponse("invalid_url | invalid_events | invalid_json"), "409": errorResponse("too_many_webhooks") } },
     { method: "get", path: "/v1/webhooks", tag: "approvals", security: "key", scope: "read", summary: "The principal's approval webhooks (no secrets).", responses: { "200": jsonBody({ type: "object" }) } },
@@ -335,7 +410,7 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       security: route.security === "key"
         ? [{ agentKey: route.scope && route.scope !== "any" ? [route.scope] : [] },
           ...(route.scope !== "admin" && !route.keyOnly ? [{ oauth: route.scope && route.scope !== "any" ? [route.scope] : [] }] : [])]
-        : [],
+        : route.security === "scim" ? [{ scimToken: [] }] : route.security === "session" ? [{ tenantAdminSession: [] }] : [],
       ...(route.security === "none" ? { "x-anonymous": true } : {}),
       ...(route.security === "pow" ? { "x-proof-of-work": true } : {}),
       ...(route.security === "stripe" ? { "x-webhook-signature": "Stripe-Signature" } : {}),
@@ -372,6 +447,8 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       { name: "mcp", description: "The metered MCP Streamable HTTP proxy." },
       { name: "router", description: "discover / inspect / run (apps/router)." },
       { name: "approvals", description: "Remote L2/L3 approvals: webhooks for the principal, the approval page and Slack for humans." },
+      { name: "enterprise", description: "Tenants (operator), SSO for tenant admins (OIDC, SAML 2.0), the admin session routes and the tenant audit export. Served when ENTERPRISE_ENABLED=1." },
+      { name: "scim", description: "SCIM 2.0 provisioning for enterprise tenants: users are principals, groups are Teams." },
     ],
     paths,
     components,
