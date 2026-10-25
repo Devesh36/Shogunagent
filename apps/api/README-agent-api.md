@@ -421,7 +421,7 @@ admin, shown once).
 | `POST /Users` | A new principal under the tenant (`id` = principal id), no key yet: the key slot is open until a tenant admin issues one |
 | `GET /Users?filter=userName eq "…"` | Exact, case-insensitive match; `externalId eq` too; `startIndex` (1-based) and `count` (≤ 200) per RFC 7644 |
 | `active: false` by `PATCH` or `PUT` (Okta `{"op":"replace","value":{"active":false}}`, Entra `{"op":"Replace","path":"active","value":"False"}`) | Every key of the principal and every OAuth grant minted from them is revoked immediately; reactivation does not bring them back |
-| `DELETE /Users/{id}` | Access revoked now; the user leaves its groups; a tombstone (ids and times) stays; the principal store is purged by the sweep after `SCIM_DELETE_GRACE_DAYS` (default 30) |
+| `DELETE /Users/{id}` | Access revoked now; the user leaves its groups; a tombstone (ids and times) stays; the principal store is purged by the sweep after `SCIM_DELETE_GRACE_DAYS` (default 30): the sweep calls the sidecar's `DELETE /v1/principals/{id}` (operator bearer), which closes the store, removes the KMS-wrapped key first, then the store files and the principal's directory, drops it from every team, and appends a content-free line to `principal-purges.jsonl`. Idempotent; a store still in use answers `409 principal_busy` and the purge stays due for the next sweep |
 | `POST /Groups`, `PATCH` members | A Team (E18): every pair of members gets a world-read grant both ways, pushed to the sidecar (`POST /v1/teams`, `/v1/acl/grant`, `/v1/acl/revoke`); a grant is revoked only when two people share no other group. At most 30 members per group |
 
 Unknown attributes (for example Entra's enterprise extension) are accepted and ignored; nothing

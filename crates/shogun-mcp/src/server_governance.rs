@@ -8,6 +8,7 @@
 //! | `POST /v1/approvals/{id}/decide`       | the gateway (token) or the operator (admin bearer) |
 //! | `POST /v1/acl/grant`, `/v1/acl/revoke` | the operator (admin bearer)           |
 //! | `GET  /v1/teams`, `POST /v1/teams`     | the operator (admin bearer), multi-principal only |
+//! | `DELETE /v1/principals/{id}`           | the operator (admin bearer), multi-principal only (E39) |
 //!
 //! An agent's bearer on any of them is `403 human_only`: an agent never approves its own L3 and
 //! never grants itself access.
@@ -509,6 +510,26 @@ fn teams(state: &AppState, req: &Incoming<'_>) -> (u16, String) {
                 Err(refusal) => refusal,
             }
         }
+    }
+}
+
+/// `DELETE /v1/principals/{id}` (E39): the operator purges a principal's store after a SCIM
+/// delete's grace period. Admin bearer only (an agent key is `403 human_only`); multi-principal
+/// only; idempotent (`200` with `purged: false` when nothing was left). Any other DELETE is 405.
+pub(super) fn purge_principal(state: &AppState, bearer: Option<&str>, path: &str, request_id: &str) -> (u16, String) {
+    let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
+    let ["v1", "principals", id] = segments.as_slice() else {
+        return (405, r#"{"error":"method_not_allowed"}"#.to_string());
+    };
+    if !state.admin_ok(bearer) {
+        return state.not_admin(bearer, "Purging a principal");
+    }
+    let Some(resolver) = &state.principals else {
+        return error(404, "principals_unavailable", "Principals exist only in multi-principal mode.");
+    };
+    match resolver.purge_principal(id, request_id, (state.clock)()) {
+        Ok(report) => (200, report.to_string()),
+        Err(refusal) => refusal,
     }
 }
 

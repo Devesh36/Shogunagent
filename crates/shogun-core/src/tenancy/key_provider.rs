@@ -42,6 +42,16 @@ pub mod vault;
 /// Resolve the key a principal's file is encrypted with.
 pub trait KeyProvider: Send + Sync {
     fn key_for(&self, principal: &PrincipalId) -> Result<DbKey, TenancyError>;
+
+    /// The file that holds `principal`'s (wrapped) key, which a purge removes first so the store
+    /// is unreadable even if removing the rest fails (E39). `None`: the key is not a file this
+    /// server owns (an environment key).
+    fn key_file(&self, _principal: &PrincipalId) -> Option<PathBuf> {
+        None
+    }
+
+    /// Drop anything held in memory for `principal` (an unwrapped key cache). Default: nothing.
+    fn forget(&self, _principal: &PrincipalId) {}
 }
 
 /// Keys from the environment: `SHOGUN_DB_KEY_<PRINCIPAL>` (the principal's
@@ -224,6 +234,14 @@ impl KmsKeyProvider {
 }
 
 impl KeyProvider for KmsKeyProvider {
+    fn key_file(&self, principal: &PrincipalId) -> Option<PathBuf> {
+        Some(self.wrapped_path(principal))
+    }
+
+    fn forget(&self, principal: &PrincipalId) {
+        self.cache.lock().unwrap_or_else(PoisonError::into_inner).remove(principal);
+    }
+
     fn key_for(&self, principal: &PrincipalId) -> Result<DbKey, TenancyError> {
         if let Some(key) = self.cached(principal) {
             return Ok(key);
@@ -489,6 +507,27 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// E39: a purge removes the wrapped data key first (crypto-shredding the store), forgets the
+    /// cached unwrapped key, and removes the store; the principal then starts over with a new key.
+    #[test]
+    fn a_purge_removes_the_wrapped_key_and_the_store() {
+        let root = TempRoot::new("purge");
+        let kms = Arc::new(FakeWrapper::new());
+        let provider: Arc<dyn KeyProvider> = Arc::new(KmsKeyProvider::new(&root.0, kms));
+        let clock: crate::daemon::Clock = Arc::new(|| 1_700_000_000_000);
+        let store = super::super::PrincipalStore::new(&root.0, provider.clone(), clock, 2);
+        let alice = PrincipalId::parse("alice").unwrap();
+        let first = provider.key_for(&alice).unwrap().to_hex();
+        store.open(&alice).unwrap();
+        let wrapped = root.0.join("alice").join("alice.key.wrapped");
+        assert!(wrapped.is_file());
+        let report = store.purge(&alice).unwrap();
+        assert_eq!(report, super::super::PurgeReport { store_removed: true, key_removed: true });
+        assert!(!wrapped.exists() && !root.0.join("alice").exists());
+        // The cached key is gone too: a new store gets a new data key.
+        assert_ne!(provider.key_for(&alice).unwrap().to_hex(), first);
     }
 
     #[test]

@@ -102,6 +102,26 @@ impl TeamRegistry {
         Ok(())
     }
 
+    /// Take `principal` out of every team (a purged principal, E39); a team left empty is
+    /// removed. `true` when it was on any team. Persisted atomically.
+    pub fn remove_member(&self, principal: &PrincipalId) -> Result<bool, TenancyError> {
+        let changed = {
+            let mut teams = self.teams.lock().map_err(|_| TenancyError::Unavailable("team registry lock".into()))?;
+            let mut changed = false;
+            teams.retain(|_, team| {
+                let before = team.members.len();
+                team.members.retain(|m| m != principal);
+                changed |= team.members.len() != before;
+                !team.members.is_empty()
+            });
+            changed
+        };
+        if changed {
+            self.save()?;
+        }
+        Ok(changed)
+    }
+
     /// Whether `a` and `b` share a team (and are different principals).
     pub fn teammates(&self, a: &PrincipalId, b: &PrincipalId) -> bool {
         if a == b {

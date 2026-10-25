@@ -122,6 +122,15 @@ pub trait BackendResolver: Send + Sync {
         None
     }
 
+    /// Remove `principal`'s store for good (`DELETE /v1/principals/<id>`, admin; E39, after a SCIM
+    /// delete's grace period): close its handle, remove its key file, store files and directory,
+    /// take it out of every team, and record the purge (ids, flags, time, request id — no content)
+    /// in the operator's purge log. Idempotent: nothing left to remove is a success. `Err` carries
+    /// the status and body (409 while a request still holds the store). Default: not available.
+    fn purge_principal(&self, _principal: &str, _request_id: &str, _now_ms: i64) -> Result<serde_json::Value, (u16, String)> {
+        Err((404, r#"{"error":"principals_unavailable","message":"Principals exist only in multi-principal mode.","next_action":null}"#.to_string()))
+    }
+
     /// Define or replace a team (`POST /v1/teams`, admin). Default: not available.
     fn set_team(&self, _tenant: &str, _team: &str, _members: &[String]) -> Result<serde_json::Value, (u16, String)> {
         Err((404, r#"{"error":"teams_unavailable","message":"Teams exist only in multi-principal mode."}"#.to_string()))
@@ -569,6 +578,11 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     let request_id = crate::governance_api::request_id(
         req.headers().get("x-request-id").and_then(|v| v.to_str().ok()),
     );
+    // E39: `DELETE /v1/principals/<id>`, the operator's purge. The only DELETE this server answers.
+    if *req.method() == axum::http::Method::DELETE {
+        let (status, body) = governance::purge_principal(&state, token.as_deref(), &path, &request_id);
+        return render_with(status, body, &request_id, None);
+    }
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
     // E26: the operator's hash-chained audit export, streamed (no agent bearer reaches it).

@@ -631,3 +631,50 @@ fn a_handoff_crosses_principals_only_through_a_team_grant_and_lands_in_scratch()
     let cross_accept = post_json(port, "/v1/handoff/accept?principal=alice", TOKEN_B, &accept);
     assert_eq!(cross_accept.status, 403, "{}", cross_accept.body);
 }
+
+/// E39: `DELETE /v1/principals/<id>` is the operator's purge after a SCIM delete's grace period.
+/// An agent key cannot call it; the admin credential removes the principal's directory (store,
+/// write-ahead files) and team memberships, records the purge without content, and a repeat is a
+/// success that removes nothing. Another principal's store is untouched.
+#[test]
+fn the_operator_purges_a_principal_store_idempotently() {
+    let root = TempRoot::named("purge");
+    let (port, store) = boot_multi(root.0.clone());
+    let alice = PrincipalId::parse("alice").unwrap();
+    let bob = PrincipalId::parse("bob").unwrap();
+    ingest(port, TOKEN_A, "walrus budget review moved to Tuesday", "world", "p1");
+    ingest(port, TOKEN_B, "bob keeps his own walrus note", "world", "p2");
+    assert_eq!(post_json(port, "/v1/teams", ADMIN, &serde_json::json!({ "tenant": "acme", "team": "ops", "members": ["alice", "bob"] })).status, 200);
+    assert!(store.exists(&alice) && store.exists(&bob));
+
+    // Not an agent's call, and no other DELETE exists.
+    let by_agent = request(port, "DELETE", "/v1/principals/alice", Some(TOKEN_A), None).unwrap();
+    assert_eq!(by_agent.status, 403, "{}", by_agent.body);
+    assert_eq!(request(port, "DELETE", "/v1/principals/alice", None, None).unwrap().status, 401);
+    assert_eq!(request(port, "DELETE", "/v1/memory/notes", Some(ADMIN), None).unwrap().status, 405);
+    assert_eq!(request(port, "DELETE", "/v1/principals/Not.Valid", Some(ADMIN), None).unwrap().status, 400);
+    assert!(store.exists(&alice), "nothing was removed by a refused call");
+
+    let purged = request(port, "DELETE", "/v1/principals/alice", Some(ADMIN), None).unwrap();
+    assert_eq!(purged.status, 200, "{}", purged.body);
+    let body = json(&purged.body);
+    assert_eq!((body["purged"].as_bool(), body["store_removed"].as_bool(), body["left_teams"].as_bool()), (Some(true), Some(true), Some(true)), "{body}");
+    assert!(!root.0.join("alice").exists(), "alice's directory is gone");
+    assert!(store.exists(&bob), "bob's store is untouched");
+    let teams = request(port, "GET", "/v1/teams", Some(ADMIN), None).unwrap();
+    assert!(!teams.body.contains("alice"), "{}", teams.body);
+
+    // Idempotent.
+    let again = request(port, "DELETE", "/v1/principals/alice", Some(ADMIN), None).unwrap();
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(json(&again.body)["purged"], false);
+
+    // The purge log names the principal, what was removed and the request, never a row.
+    let log = std::fs::read_to_string(root.0.join(shogun_core::tenancy::multi::PURGE_LOG)).unwrap();
+    assert_eq!(log.lines().count(), 2, "{log}");
+    assert!(log.contains("\"principal\":\"alice\""), "{log}");
+    assert!(!log.contains("walrus"), "the purge log carries no content: {log}");
+    // Bob's reads still work.
+    let bob_search = request(port, "GET", "/v1/memory/search?q=walrus", Some(TOKEN_B), None).unwrap();
+    assert!(bob_search.body.contains("bob keeps his own walrus note"), "{}", bob_search.body);
+}
