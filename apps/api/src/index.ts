@@ -86,6 +86,7 @@ async function openStore(): Promise<RelayStore> {
       if (config.agent?.payouts) await store.payouts.checkSchema();
       if (config.agent?.x402) await store.x402.checkSchema();
       if (config.agent?.enterprise) await store.enterprise.checkSchema();
+      if (config.agent?.ingestHooks) await store.ingestHooks.checkSchema();
     } catch (e) {
       refuse(e instanceof Error ? e.message : "shared store unavailable");
     }

@@ -51,6 +51,16 @@ const components: Json = {
     "Retry-After": { schema: { type: "integer" }, description: "Seconds. Honour it; do not spin." },
   },
   schemas: {
+    IngestHook: {
+      type: "object", required: ["hook_id", "provider", "url", "status"],
+      properties: {
+        hook_id: { type: "string", pattern: "^hk_" }, provider: { type: "string" }, url: { type: "string", format: "uri", description: "Where the provider delivers (Gmail: the shared push endpoint)." },
+        status: { type: "string", enum: ["active", "awaiting_verification"] }, created_at: { type: "string" }, rotated_at: { type: ["string", "null"] }, last_delivery_at: { type: ["string", "null"] },
+        previous_secret_valid_until: { type: ["string", "null"] },
+        secret: { type: "string", description: "github, on create / rotate only" }, channel_id: { type: "string" }, channel_token: { type: "string", description: "google_calendar, on create / rotate only" },
+        verification_token: { type: "string", description: "notion, on GET while awaiting verification" }, setup: { type: "string" }, replayed: { type: "boolean" },
+      },
+    },
     Error: {
       type: "object", required: ["error"],
       properties: {
@@ -257,7 +267,7 @@ interface Route {
   tag: string;
   summary: string;
   description?: string;
-  security: "none" | "key" | "stripe" | "pow" | "service" | "scim" | "session";
+  security: "none" | "key" | "stripe" | "pow" | "service" | "scim" | "session" | "provider";
   scope?: "read" | "write" | "run" | "admin" | "any";
   /** Takes the agent key itself, never an OAuth access token. */
   keyOnly?: boolean;
@@ -354,6 +364,31 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
       requestBody: jsonBody(ref("HandoffRequest")),
       responses: { "200": jsonBody(ref("HandoffResponse")), "400": errorResponse("missing_task | missing_to_agent | invalid_to_agent | invalid_from_agent | invalid_budget_tokens | invalid_ttl_seconds | invalid_request (from the core)"), "403": errorResponse("insufficient_scope"), "421": errorResponse("wrong_shard"), "503": errorResponse("upstream_unavailable | recall_unavailable | memory_update_pending | principal_not_provisioned, with Retry-After where it applies") },
     },
+    // --- E44: provider webhooks into memory (ingest-hooks/app.ts) ---
+    {
+      method: "post", path: "/v1/ingest-hooks", tag: "ingest", security: "key", scope: "write",
+      summary: "Register an ingest hook: a URL a provider (GitHub, Linear, Slack, Notion, Google Calendar, Gmail) delivers webhooks to. Deliveries become memory.ingest_webhook calls on the principal's core, metered as ingest per stored event.",
+      description: "github and google_calendar: the gateway makes the secret / channel token and shows it here once (a replay under the same Idempotency-Key shows it again). linear and slack: send the provider's signing_secret; it is sealed and never shown. notion: the hook waits for Notion's verification_token, which GET /v1/ingest-hooks/{id} then shows. gmail: send mailbox; pushes route by an HMAC of it.",
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }],
+      requestBody: jsonBody({ type: "object", required: ["provider"], additionalProperties: false, properties: { provider: { type: "string", enum: ["github", "linear", "slack", "notion", "google_calendar", "gmail"] }, signing_secret: { type: "string", minLength: 16, maxLength: 256, description: "linear, slack" }, mailbox: { type: "string", description: "gmail" } } }),
+      responses: { "201": jsonBody(ref("IngestHook")), "200": jsonBody(ref("IngestHook"), "A replayed create (same Idempotency-Key)"), "400": errorResponse("invalid_provider | invalid_signing_secret | invalid_mailbox | invalid_idempotency_key | invalid_json"), "409": errorResponse("too_many_hooks | mailbox_taken | idempotency_key_reused"), "503": errorResponse("gmail_push_unconfigured | store_unavailable") },
+    },
+    { method: "get", path: "/v1/ingest-hooks", tag: "ingest", security: "key", scope: "read", summary: "The principal's ingest hooks (no secrets). Free.", responses: { "200": jsonBody({ type: "object", properties: { hooks: { type: "array", items: ref("IngestHook") } } }) } },
+    { method: "get", path: "/v1/ingest-hooks/{id}", tag: "ingest", security: "key", scope: "write", summary: "One ingest hook; for a notion hook still awaiting verification, the verification_token Notion sent (paste it into Notion's Verify form).", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^hk_[A-Za-z0-9_-]{22}$" } }], responses: { "200": jsonBody(ref("IngestHook")), "404": errorResponse("hook_not_found") } },
+    { method: "post", path: "/v1/ingest-hooks/{id}/rotate", tag: "ingest", security: "key", scope: "write", summary: "A new secret (github / google_calendar: shown once; linear / slack: send the new signing_secret; notion: wait for a new verification_token). The previous one keeps verifying for 24 hours.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^hk_[A-Za-z0-9_-]{22}$" } }], requestBody: jsonBody({ type: "object", properties: { signing_secret: { type: "string" } } }), responses: { "200": jsonBody(ref("IngestHook")), "400": errorResponse("invalid_signing_secret | nothing_to_rotate"), "404": errorResponse("hook_not_found") } },
+    { method: "delete", path: "/v1/ingest-hooks/{id}", tag: "ingest", security: "key", scope: "write", summary: "Remove an ingest hook; its sealed secret and mailbox route are erased. Deliveries to it are refused from now on.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^hk_[A-Za-z0-9_-]{22}$" } }], responses: { "204": { description: "Removed" }, "404": errorResponse("hook_not_found") } },
+    ...(["github", "linear", "slack", "notion", "google_calendar"] as const).map((provider): Route => ({
+      method: "post", path: `/v1/ingest-hooks/${provider}/{hook}`, tag: "ingest", security: "provider",
+      summary: `A ${provider} delivery, verified by the provider's signature scheme and relayed to the principal's core as memory.ingest_webhook. Not for agents.`,
+      description: "The body (at most 1 MiB) is held in memory only until its signature verifies, then relayed encoded; nothing from it is stored, logged or echoed. The answer is a fixed acknowledgement with the usage headers. Handshakes (GitHub ping, Slack url_verification, Notion's verification_token, Calendar sync) are free. A bad signature costs nothing and counts against a per-IP and per-hook failure budget (429 past it).",
+      parameters: [{ name: "hook", in: "path", required: true, schema: { type: "string", pattern: "^hk_[A-Za-z0-9_-]{22}$" } }],
+      responses: { "200": jsonBody({ type: "object", properties: { received: { type: "boolean" }, stored_events: { type: "integer" }, refused: { type: "boolean" }, challenge: { type: "string" } } }), "401": errorResponse("invalid_signature"), "402": errorResponse("payment_required | cap_exceeded (the principal's wallet)"), "413": errorResponse("body_too_large"), "429": errorResponse("too_many_failures, with Retry-After"), "503": errorResponse("upstream_unavailable — the provider retries; the delivery id makes it safe") },
+    })),
+    {
+      method: "post", path: "/v1/ingest-hooks/gmail", tag: "ingest", security: "provider",
+      summary: "Gmail push notifications (Pub/Sub push with a Google-signed OIDC token for the configured audience and service account), routed by mailbox and relayed as a typed change (history id) to memory.ingest_webhook. Not for agents.",
+      responses: { "200": jsonBody({ type: "object", properties: { received: { type: "boolean" }, routed: { type: "boolean" }, stored_events: { type: "integer" } } }), "401": errorResponse("invalid_signature"), "429": errorResponse("too_many_failures"), "503": errorResponse("gmail_push_unconfigured | verification_unavailable | upstream_unavailable") },
+    },
     // --- E19: statements, commits, operator billing ---
     {
       method: "get", path: "/v1/statements", tag: "billing", security: "key", scope: "read",
@@ -449,6 +484,7 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       ...(route.security === "pow" ? { "x-proof-of-work": true } : {}),
       ...(route.security === "stripe" ? { "x-webhook-signature": "Stripe-Signature" } : {}),
       ...(route.security === "service" ? { "x-service-token": "ROUTER_SETTLEMENT_TOKEN" } : {}),
+      ...(route.security === "provider" ? { "x-webhook-signature": "the provider's own scheme, per hook (docs/api/ingest-sources.md)" } : {}),
       ...(route.servedBy ? { "x-served-by": route.servedBy } : {}),
     };
     const methods = route.method === "all" ? ["get", "post", "delete"] : [route.method];
@@ -477,6 +513,7 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
       { name: "wallet", description: "Prepaid micro-USD wallet (Stripe card rail)." },
       { name: "billing", description: "Quotes, receipts, disputes, statements, commits." },
       { name: "a2a", description: "State-of-work handoff between agents (docs/api/handoff.md)." },
+      { name: "ingest", description: "Provider webhooks into the principal's memory (docs/api/ingest-sources.md). Served when INGEST_HOOKS_SECRET is set." },
       { name: "admin", description: "Operator routes (admin key only): commits, credits and refunds, dispute resolution." },
       { name: "oauth", description: "OAuth 2.1 + Client ID Metadata Documents for MCP clients. No dynamic registration." },
       { name: "mcp", description: "The metered MCP Streamable HTTP proxy." },

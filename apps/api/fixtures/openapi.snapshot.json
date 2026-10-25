@@ -305,6 +305,10 @@
       "description": "State-of-work handoff between agents (docs/api/handoff.md)."
     },
     {
+      "name": "ingest",
+      "description": "Provider webhooks into the principal's memory (docs/api/ingest-sources.md). Served when INGEST_HOOKS_SECRET is set."
+    },
+    {
       "name": "admin",
       "description": "Operator routes (admin key only): commits, credits and refunds, dispute resolution."
     },
@@ -1241,6 +1245,886 @@
             ]
           }
         ]
+      }
+    },
+    "/v1/ingest-hooks": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "Register an ingest hook: a URL a provider (GitHub, Linear, Slack, Notion, Google Calendar, Gmail) delivers webhooks to. Deliveries become memory.ingest_webhook calls on the principal's core, metered as ingest per stored event.",
+        "description": "github and google_calendar: the gateway makes the secret / channel token and shows it here once (a replay under the same Idempotency-Key shows it again). linear and slack: send the provider's signing_secret; it is sealed and never shown. notion: the hook waits for Notion's verification_token, which GET /v1/ingest-hooks/{id} then shows. gmail: send mailbox; pushes route by an HMAC of it.",
+        "operationId": "post_v1_ingest_hooks",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "provider"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "github",
+                      "linear",
+                      "slack",
+                      "notion",
+                      "google_calendar",
+                      "gmail"
+                    ]
+                  },
+                  "signing_secret": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 256,
+                    "description": "linear, slack"
+                  },
+                  "mailbox": {
+                    "type": "string",
+                    "description": "gmail"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A replayed create (same Idempotency-Key)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestHook"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestHook"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_provider | invalid_signing_secret | invalid_mailbox | invalid_idempotency_key | invalid_json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "too_many_hooks | mailbox_taken | idempotency_key_reused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "gmail_push_unconfigured | store_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          },
+          {
+            "oauth": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "The principal's ingest hooks (no secrets). Free.",
+        "operationId": "get_v1_ingest_hooks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "hooks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/IngestHook"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/ingest-hooks/{id}": {
+      "get": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "One ingest hook; for a notion hook still awaiting verification, the verification_token Notion sent (paste it into Notion's Verify form).",
+        "operationId": "get_v1_ingest_hooks_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^hk_[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestHook"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "hook_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          },
+          {
+            "oauth": [
+              "write"
+            ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "Remove an ingest hook; its sealed secret and mailbox route are erased. Deliveries to it are refused from now on.",
+        "operationId": "delete_v1_ingest_hooks_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^hk_[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed"
+          },
+          "404": {
+            "description": "hook_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          },
+          {
+            "oauth": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/ingest-hooks/{id}/rotate": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "A new secret (github / google_calendar: shown once; linear / slack: send the new signing_secret; notion: wait for a new verification_token). The previous one keeps verifying for 24 hours.",
+        "operationId": "post_v1_ingest_hooks_id_rotate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^hk_[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "signing_secret": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestHook"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_signing_secret | nothing_to_rotate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "hook_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          },
+          {
+            "oauth": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/ingest-hooks/github/{hook}": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "A github delivery, verified by the provider's signature scheme and relayed to the principal's core as memory.ingest_webhook. Not for agents.",
+        "description": "The body (at most 1 MiB) is held in memory only until its signature verifies, then relayed encoded; nothing from it is stored, logged or echoed. The answer is a fixed acknowledgement with the usage headers. Handshakes (GitHub ping, Slack url_verification, Notion's verification_token, Calendar sync) are free. A bad signature costs nothing and counts against a per-IP and per-hook failure budget (429 past it).",
+        "operationId": "post_v1_ingest_hooks_github_hook",
+        "parameters": [
+          {
+            "name": "hook",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^hk_[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    },
+                    "stored_events": {
+                      "type": "integer"
+                    },
+                    "refused": {
+                      "type": "boolean"
+                    },
+                    "challenge": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required | cap_exceeded (the principal's wallet)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "body_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many_failures, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable — the provider retries; the delivery id makes it safe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-webhook-signature": "the provider's own scheme, per hook (docs/api/ingest-sources.md)"
+      }
+    },
+    "/v1/ingest-hooks/linear/{hook}": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "A linear delivery, verified by the provider's signature scheme and relayed to the principal's core as memory.ingest_webhook. Not for agents.",
+        "description": "The body (at most 1 MiB) is held in memory only until its signature verifies, then relayed encoded; nothing from it is stored, logged or echoed. The answer is a fixed acknowledgement with the usage headers. Handshakes (GitHub ping, Slack url_verification, Notion's verification_token, Calendar sync) are free. A bad signature costs nothing and counts against a per-IP and per-hook failure budget (429 past it).",
+        "operationId": "post_v1_ingest_hooks_linear_hook",
+        "parameters": [
+          {
+            "name": "hook",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^hk_[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    },
+                    "stored_events": {
+                      "type": "integer"
+                    },
+                    "refused": {
+                      "type": "boolean"
+                    },
+                    "challenge": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required | cap_exceeded (the principal's wallet)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "body_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many_failures, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable — the provider retries; the delivery id makes it safe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-webhook-signature": "the provider's own scheme, per hook (docs/api/ingest-sources.md)"
+      }
+    },
+    "/v1/ingest-hooks/slack/{hook}": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "A slack delivery, verified by the provider's signature scheme and relayed to the principal's core as memory.ingest_webhook. Not for agents.",
+        "description": "The body (at most 1 MiB) is held in memory only until its signature verifies, then relayed encoded; nothing from it is stored, logged or echoed. The answer is a fixed acknowledgement with the usage headers. Handshakes (GitHub ping, Slack url_verification, Notion's verification_token, Calendar sync) are free. A bad signature costs nothing and counts against a per-IP and per-hook failure budget (429 past it).",
+        "operationId": "post_v1_ingest_hooks_slack_hook",
+        "parameters": [
+          {
+            "name": "hook",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^hk_[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    },
+                    "stored_events": {
+                      "type": "integer"
+                    },
+                    "refused": {
+                      "type": "boolean"
+                    },
+                    "challenge": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required | cap_exceeded (the principal's wallet)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "body_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many_failures, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable — the provider retries; the delivery id makes it safe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-webhook-signature": "the provider's own scheme, per hook (docs/api/ingest-sources.md)"
+      }
+    },
+    "/v1/ingest-hooks/notion/{hook}": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "A notion delivery, verified by the provider's signature scheme and relayed to the principal's core as memory.ingest_webhook. Not for agents.",
+        "description": "The body (at most 1 MiB) is held in memory only until its signature verifies, then relayed encoded; nothing from it is stored, logged or echoed. The answer is a fixed acknowledgement with the usage headers. Handshakes (GitHub ping, Slack url_verification, Notion's verification_token, Calendar sync) are free. A bad signature costs nothing and counts against a per-IP and per-hook failure budget (429 past it).",
+        "operationId": "post_v1_ingest_hooks_notion_hook",
+        "parameters": [
+          {
+            "name": "hook",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^hk_[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    },
+                    "stored_events": {
+                      "type": "integer"
+                    },
+                    "refused": {
+                      "type": "boolean"
+                    },
+                    "challenge": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required | cap_exceeded (the principal's wallet)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "body_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many_failures, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable — the provider retries; the delivery id makes it safe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-webhook-signature": "the provider's own scheme, per hook (docs/api/ingest-sources.md)"
+      }
+    },
+    "/v1/ingest-hooks/google_calendar/{hook}": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "A google_calendar delivery, verified by the provider's signature scheme and relayed to the principal's core as memory.ingest_webhook. Not for agents.",
+        "description": "The body (at most 1 MiB) is held in memory only until its signature verifies, then relayed encoded; nothing from it is stored, logged or echoed. The answer is a fixed acknowledgement with the usage headers. Handshakes (GitHub ping, Slack url_verification, Notion's verification_token, Calendar sync) are free. A bad signature costs nothing and counts against a per-IP and per-hook failure budget (429 past it).",
+        "operationId": "post_v1_ingest_hooks_google_calendar_hook",
+        "parameters": [
+          {
+            "name": "hook",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^hk_[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    },
+                    "stored_events": {
+                      "type": "integer"
+                    },
+                    "refused": {
+                      "type": "boolean"
+                    },
+                    "challenge": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required | cap_exceeded (the principal's wallet)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "body_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many_failures, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable — the provider retries; the delivery id makes it safe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-webhook-signature": "the provider's own scheme, per hook (docs/api/ingest-sources.md)"
+      }
+    },
+    "/v1/ingest-hooks/gmail": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "Gmail push notifications (Pub/Sub push with a Google-signed OIDC token for the configured audience and service account), routed by mailbox and relayed as a typed change (history id) to memory.ingest_webhook. Not for agents.",
+        "operationId": "post_v1_ingest_hooks_gmail",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    },
+                    "routed": {
+                      "type": "boolean"
+                    },
+                    "stored_events": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many_failures",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "gmail_push_unconfigured | verification_unavailable | upstream_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-webhook-signature": "the provider's own scheme, per hook (docs/api/ingest-sources.md)"
       }
     },
     "/v1/statements": {
@@ -5814,6 +6698,78 @@
       }
     },
     "schemas": {
+      "IngestHook": {
+        "type": "object",
+        "required": [
+          "hook_id",
+          "provider",
+          "url",
+          "status"
+        ],
+        "properties": {
+          "hook_id": {
+            "type": "string",
+            "pattern": "^hk_"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Where the provider delivers (Gmail: the shared push endpoint)."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "awaiting_verification"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "rotated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_delivery_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previous_secret_valid_until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secret": {
+            "type": "string",
+            "description": "github, on create / rotate only"
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "channel_token": {
+            "type": "string",
+            "description": "google_calendar, on create / rotate only"
+          },
+          "verification_token": {
+            "type": "string",
+            "description": "notion, on GET while awaiting verification"
+          },
+          "setup": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "required": [

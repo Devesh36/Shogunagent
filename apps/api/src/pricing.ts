@@ -6,7 +6,8 @@
  *
  * Units (amounts are integer micro-USD, 1 USD = 1,000,000):
  * - `ingest`   — $0.50 per 1,000 events (500 µ$ per event): `memory.ingest`, `memory.append_note`,
- *                `handoff.accept`.
+ *                `handoff.accept`, `memory.ingest_webhook` (E44: a provider delivery through the
+ *                ingest hooks, ingest-hooks/app.ts).
  * - `model_op` — $0.10 per 1,000 model-invoking operations (100 µ$ each): the default for any
  *                `tools/call` the table does not list as free, ingest or run.
  * - `run`      — a router tool run: the provider's price plus `RUN_MARKUP_BPS` (5%), rounded up, once
@@ -64,7 +65,7 @@ const FREE_PREFIXES = ["state.", "approvals."] as const;
 
 /** E35: `handoff.accept` stores the handoff in the receiver's scratch through the ingest path,
  * settled per event the core stored (its `Mcp-Quantity`). */
-export const INGEST_TOOLS: ReadonlySet<string> = new Set(["memory.ingest", "memory.append_note", "handoff.accept"]);
+export const INGEST_TOOLS: ReadonlySet<string> = new Set(["memory.ingest", "memory.append_note", "handoff.accept", "memory.ingest_webhook"]);
 
 export const RUN_TOOLS: ReadonlySet<string> = new Set(["router.run", "actions.execute"]);
 
