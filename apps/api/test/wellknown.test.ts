@@ -213,7 +213,7 @@ describe("/openapi.json (E10-T6 scaffolding)", () => {
       "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server", "/oauth/authorize", "/oauth/token", "/oauth/revoke",
       "/privacy", "/terms",
       // E29: the open catalog (apps/router) and provider payouts
-      "/v1/catalog", "/v1/catalog/{tool_id}", "/catalog", "/v1/internal/router/settlements", "/v1/providers/me", "/v1/providers/me/connect",
+      "/v1/catalog", "/v1/catalog/{tool_id}", "/catalog", "/v1/internal/router/settlements", "/v1/internal/router/connector-token", "/v1/providers/me", "/v1/providers/me/connect",
       "/v1/providers/connect/return", "/v1/providers/connect/refresh", "/v1/providers/me/statements", "/v1/admin/providers",
       "/v1/admin/providers/{id}/adjustments", "/v1/admin/providers/{id}/disputes/{entry}/resolve", "/v1/admin/payouts/run",
       // E26

@@ -4773,6 +4773,148 @@
         "x-service-token": "ROUTER_SETTLEMENT_TOKEN"
       }
     },
+    "/v1/internal/router/connector-token": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "The router fetches the calling principal's access token for one first-party connector run (E48, docs/api/connector-tokens.md): the principal comes from the caller's key in X-Caller-Authorization (run scope), never from the body; the token is used for one vendor request and dropped. Free. Not for agents.",
+        "operationId": "post_v1_internal_router_connector_token",
+        "parameters": [
+          {
+            "name": "X-Caller-Authorization",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Bearer <the caller's agent key or OAuth token>, forwarded by the router; verified, never stored."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "slot",
+                  "provider_id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "slot": {
+                    "type": "string",
+                    "enum": [
+                      "gmail-tokenset",
+                      "gcal-tokenset",
+                      "github-tokenset",
+                      "linear-tokenset",
+                      "slack-tokenset"
+                    ]
+                  },
+                  "provider_id": {
+                    "type": "string",
+                    "enum": [
+                      "gmail",
+                      "calendar",
+                      "github",
+                      "linear",
+                      "slack"
+                    ]
+                  },
+                  "run_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "access_token",
+                    "token_type",
+                    "expires_at"
+                  ],
+                  "properties": {
+                    "access_token": {
+                      "type": "string"
+                    },
+                    "token_type": {
+                      "type": "string",
+                      "enum": [
+                        "Bearer"
+                      ]
+                    },
+                    "expires_at": {
+                      "type": "integer",
+                      "description": "Unix milliseconds."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_connector_token_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_token | invalid_key | missing_key | key_revoked | key_expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "connector_not_connected (next_action authenticate)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "connector_token_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-service-token": "ROUTER_SETTLEMENT_TOKEN"
+      }
+    },
     "/v1/internal/router/settlements": {
       "post": {
         "tags": [
@@ -6350,6 +6492,8 @@
           "name",
           "unit",
           "quantity",
+          "reserved_quantity",
+          "settled_quantity",
           "cost_micro_usd",
           "reserved_micro_usd",
           "settled",
@@ -6376,7 +6520,19 @@
             "type": "string"
           },
           "quantity": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The quantity reserved (same as reserved_quantity)."
+          },
+          "reserved_quantity": {
+            "type": "integer",
+            "description": "The quantity quoted and reserved for the call."
+          },
+          "settled_quantity": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The quantity the call settled at (what the core reported, at most reserved_quantity; 0 for a failed or refused call). Null while in flight, and on receipts settled before it was recorded."
           },
           "cost_micro_usd": {
             "type": "integer",

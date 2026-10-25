@@ -60,7 +60,7 @@ describe("GET /v1/receipts and disputes", () => {
     expect(all.receipts).toHaveLength(3);
     expect(all.receipts[1]).toEqual({
       id: expect.stringMatching(/^rcpt_/), key_id: keyId, method: "tools/call", name: "memory.ingest", unit: "ingest", quantity: 3,
-      cost_micro_usd: 3 * RATE_MICROS.ingest, reserved_micro_usd: null, settled: true, funding: "wallet", ts: "2026-10-25T12:00:05.000Z",
+      reserved_quantity: 3, settled_quantity: 3, cost_micro_usd: 3 * RATE_MICROS.ingest, reserved_micro_usd: null, settled: true, funding: "wallet", ts: "2026-10-25T12:00:05.000Z",
     });
     expect(all.next_since).toBe("2026-10-25T12:00:10.001Z");
     const since = (await (await authed(rig, key, "/v1/receipts?since=2026-10-25T12:00:05Z")).json()) as { receipts: Array<{ name: string }> };
@@ -74,6 +74,34 @@ describe("GET /v1/receipts and disputes", () => {
     // Another principal sees none of them.
     const other = await registerAgent(rig, {}, "203.0.113.50");
     expect(((await (await authed(rig, other.key, "/v1/receipts")).json()) as { receipts: unknown[] }).receipts).toEqual([]);
+  });
+
+  it("shows the reserved and the settled quantity (E48): what the core reported, 0 on a failure, all of a free call", async () => {
+    const rig = makeAgentRig();
+    const { key } = await registerAgent(rig);
+    // The core took 2 of the 5 reserved events.
+    rig.upstream.quantity = "2";
+    await mcp(rig, key, { "mcp-method": "tools/call", "mcp-name": "memory.ingest", "mcp-quantity": "5" });
+    // A core that claims more than was reserved is capped at the reservation.
+    rig.setNow(new Date("2026-10-25T12:00:01Z"));
+    rig.upstream.quantity = "9";
+    await mcp(rig, key, { "mcp-method": "tools/call", "mcp-name": "memory.ingest", "mcp-quantity": "4" });
+    // A non-2xx settles nothing.
+    rig.setNow(new Date("2026-10-25T12:00:02Z"));
+    rig.upstream.status = 500;
+    rig.upstream.quantity = "echo";
+    await mcp(rig, key, { "mcp-method": "tools/call", "mcp-name": "memory.ingest", "mcp-quantity": "3" });
+    // A free read is recorded at its reserved quantity.
+    rig.setNow(new Date("2026-10-25T12:00:03Z"));
+    rig.upstream.status = 200;
+    await mcp(rig, key, { "mcp-method": "tools/call", "mcp-name": "memory.search" });
+    const { receipts } = (await (await authed(rig, key, "/v1/receipts")).json()) as { receipts: Array<Record<string, unknown>> };
+    expect(receipts.map((r) => [r.name, r.reserved_quantity, r.settled_quantity, r.cost_micro_usd])).toEqual([
+      ["memory.ingest", 5, 2, 2 * RATE_MICROS.ingest],
+      ["memory.ingest", 4, 4, 4 * RATE_MICROS.ingest],
+      ["memory.ingest", 3, 0, 0],
+      ["memory.search", 1, 1, 0],
+    ]);
   });
 
   it("opens one dispute per receipt, on the principal's own receipts only", async () => {

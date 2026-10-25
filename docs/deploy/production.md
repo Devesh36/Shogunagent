@@ -151,24 +151,25 @@ psql "<relay connection string as shogun_relay>" -v ON_ERROR_STOP=1 -c 'SET sear
 | 5 | `apps/api/sql/asr-provider-usage.sql` | `shogun_relay` | with 3 | provider counter floors; after 3 |
 | 6 | `apps/api/sql/agent-keys.sql` | `shogun_relay` | before `AGENT_API_ENABLED=1` | principals, keys (hashed), wallet, receipts, E19 billing tables |
 | 7 | `apps/api/sql/agent-keys-permissions.sql` | `shogun_relay` | with 6 | after 6 |
-| 8 | `apps/api/sql/agent-oauth.sql` | `shogun_relay` | before `AGENT_OAUTH_SECRET` is set; before 16 | after 6 (references principals) |
-| 9 | `apps/api/sql/agent-oauth-permissions.sql` | `shogun_relay` | with 8 | after 8 |
-| 10 | `apps/api/sql/approval-webhooks.sql` | `shogun_relay` | before `SHOGUN_APPROVAL_SIGNING_KEY` is set | outbound approval webhooks |
-| 11 | `apps/api/sql/approval-webhooks-permissions.sql` | `shogun_relay` | with 10 | RLS on, nothing for `PUBLIC` / `anon` / `authenticated`; after 10 (E48) |
-| 12 | `apps/api/sql/provider-payouts.sql` | `shogun_relay` | before `PAYOUTS_STATE_SECRET` is set | provider ledger (E29) |
-| 13 | `apps/api/sql/provider-payouts-permissions.sql` | `shogun_relay` | with 12 | after 12 (E48) |
-| 14 | `apps/api/sql/x402-payments.sql` | `shogun_relay` | **only** if `X402_ENABLED=1`, which stays off (§9) | x402 replay guard |
-| 15 | `apps/api/sql/x402-payments-permissions.sql` | `shogun_relay` | with 14 | after 14 (E48) |
-| 16 | `apps/api/sql/enterprise.sql` | `shogun_relay` | before `ENTERPRISE_ENABLED=1` | after 6 and 8 |
-| 17 | `apps/api/sql/enterprise-permissions.sql` | `shogun_relay` | with 16 | after 16 |
-| 18 | `apps/api/sql/live-store.sql` | `shogun_relay` | before `LIVE_AI_ENABLED=1` | live lane admission (#1101) |
-| 19 | `apps/api/sql/live-store-access.sql` | `shogun_relay` | with 18 | after 18; re-runnable since E48 |
-| 20 | `apps/api/sql/connector-tokens.sql` | `shogun_relay` | before the connector-token route (`docs/api/connector-tokens.md`) is served | hosted connector token store; nothing reads it yet |
-| 21 | `apps/api/sql/connector-tokens-permissions.sql` | `shogun_relay` | with 20 | after 20 (E48) |
-| 22 | `apps/router/sql/settlement-outbox.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | the durable outbox (E33) |
-| 23 | `apps/router/sql/settlement-outbox-permissions.sql` | router role | with 22 | after 22 |
-| 24 | `apps/router/sql/run-idempotency.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | cross-isolate run idempotency (E48); without it every metered run is refused `503` (the store fails closed) |
-| 25 | `apps/router/sql/run-idempotency-permissions.sql` | router role | with 24 | after 24 |
+| 8 | `apps/api/sql/agent-receipts-settled-quantity.sql` | `shogun_relay` | with 6, **before** deploying a gateway built with E48 (its `checkSchema` reads the column) | receipts record the settled quantity next to the reserved one; after 6 |
+| 9 | `apps/api/sql/agent-oauth.sql` | `shogun_relay` | before `AGENT_OAUTH_SECRET` is set; before 17 | after 6 (references principals) |
+| 10 | `apps/api/sql/agent-oauth-permissions.sql` | `shogun_relay` | with 9 | after 9 |
+| 11 | `apps/api/sql/approval-webhooks.sql` | `shogun_relay` | before `SHOGUN_APPROVAL_SIGNING_KEY` is set | outbound approval webhooks |
+| 12 | `apps/api/sql/approval-webhooks-permissions.sql` | `shogun_relay` | with 11 | RLS on, nothing for `PUBLIC` / `anon` / `authenticated`; after 11 (E48) |
+| 13 | `apps/api/sql/provider-payouts.sql` | `shogun_relay` | before `PAYOUTS_STATE_SECRET` is set | provider ledger (E29) |
+| 14 | `apps/api/sql/provider-payouts-permissions.sql` | `shogun_relay` | with 13 | after 13 (E48) |
+| 15 | `apps/api/sql/x402-payments.sql` | `shogun_relay` | **only** if `X402_ENABLED=1`, which stays off (§9) | x402 replay guard |
+| 16 | `apps/api/sql/x402-payments-permissions.sql` | `shogun_relay` | with 15 | after 15 (E48) |
+| 17 | `apps/api/sql/enterprise.sql` | `shogun_relay` | before `ENTERPRISE_ENABLED=1` | after 6 and 9 |
+| 18 | `apps/api/sql/enterprise-permissions.sql` | `shogun_relay` | with 17 | after 17 |
+| 19 | `apps/api/sql/live-store.sql` | `shogun_relay` | before `LIVE_AI_ENABLED=1` | live lane admission (#1101) |
+| 20 | `apps/api/sql/live-store-access.sql` | `shogun_relay` | with 19 | after 19; re-runnable since E48 |
+| 21 | `apps/api/sql/connector-tokens.sql` | `shogun_relay` | before the connector-token route (`docs/api/connector-tokens.md`) is served | hosted connector token store; read by that route (E48) only in a runtime that supplies a KMS key wrapper, which none does yet |
+| 22 | `apps/api/sql/connector-tokens-permissions.sql` | `shogun_relay` | with 21 | after 21 (E48) |
+| 23 | `apps/router/sql/settlement-outbox.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | the durable outbox (E33) |
+| 24 | `apps/router/sql/settlement-outbox-permissions.sql` | router role | with 23 | after 23 |
+| 25 | `apps/router/sql/run-idempotency.sql` | router role | before the router's `ROUTER_WALLET_URL` is set | cross-isolate run idempotency (E48); without it every metered run is refused `503` (the store fails closed) |
+| 26 | `apps/router/sql/run-idempotency-permissions.sql` | router role | with 25 | after 25 |
 
 Applying a file for a lane that stays off is harmless; leaving one out for a lane that is switched
 on makes that lane's `checkSchema` refuse. Every file may be re-run: `live-store-access.sql` creates
@@ -236,11 +237,38 @@ $ROUTER hyperdrive create shogunagent-router-outbox --caching-disabled \
    pnpm --filter @shogun-ai/api deploy
    ```
 
-   This repository has no deploy workflow (`apps/api/DEPLOY.md` §5 describes ShogunAI's
-   `deploy-relay.yml`, which was not migrated). Deploys run from the owner's machine with their own
-   Cloudflare login until a manual-only workflow is added (owner decision; it would follow the rules
-   of `docs/release.md`: `workflow_dispatch` only, `main` only, `environment: release`).
+   Or from GitHub with the manual workflow `.github/workflows/deploy.yml` (§3.1). It has never been
+   run; until the owner sets up its environments, deploy from the owner's machine as above.
 4. Run the smoke checks of §7.1 (relay rows).
+
+### 3.1 The manual deploy workflow (`.github/workflows/deploy.yml`)
+
+Actions → *deploy* → Run workflow on `main`, with:
+
+| Input | Values | Meaning |
+|---|---|---|
+| `component` | `relay`, `router` | `apps/api` (Worker `shogunai-relay`) or `apps/router` (Worker `shogunagent-router`) |
+| `environment` | `staging`, `production` | the target, and the GitHub environment the deploy job runs in |
+| `confirm` | empty (default) or `deploy-<component>-<environment>` | anything but the exact phrase is a dry run: `wrangler deploy --dry-run`, nothing uploaded |
+
+What it does: refuses any ref but `main`; runs the component's typecheck, tests and bundle check
+(the router also rebuilds its catalog); then, in the chosen environment (which waits for that
+environment's required reviewers), refuses a config that still holds `REPLACE_WITH`, and runs
+`wrangler deploy --dry-run` or, with the confirm phrase, `wrangler deploy`, followed by a health
+check when `DEPLOY_HEALTH_URL` is set. It never sets Worker secrets (`wrangler secret put` stays a
+manual step, §5), never applies SQL (§3 step 2) and never touches Hyperdrive (check
+`caching.disabled: true` yourself, step 3). `scripts/check-workflow-yaml.py` (CI) fails if the
+workflow gains a trigger other than `workflow_dispatch`, a write permission, a confirm default, a
+secret read outside the chosen environment, or an ungated `wrangler deploy`.
+
+One-time setup (owner): create the GitHub environments `staging` and `production`, each with the
+owner as a required reviewer and `main` as the only deployment branch, and in each the secrets
+`CLOUDFLARE_API_TOKEN` (scoped as in §2) and `CLOUDFLARE_ACCOUNT_ID`, and optionally the variable
+`DEPLOY_HEALTH_URL` (e.g. `https://<api host>/healthz`, or the router's `/v1/health`). The
+`staging` environment also holds the variable `WRANGLER_STAGING_CONFIG`: the whole staging
+`wrangler.jsonc` of §6 for the component being deployed (one component per run; the workflow refuses
+a staging config whose `name` is the production Worker's). Production deploys the committed
+`wrangler.jsonc`.
 
 ### Step 6 — Relay lanes, one at a time
 
@@ -286,8 +314,11 @@ Each lane: apply its SQL (step 2), set its secrets, add its `vars` in a PR, depl
    variables: the first-party connectors (`caller_connector` auth, E48) fetch the calling
    principal's own token per run from the relay's `POST /v1/internal/router/connector-token`
    (`docs/api/connector-tokens.md`), and the development flag is ignored (logged
-   `dev_shared_credentials_ignored`). The relay side of that route is not built yet, so those tools
-   answer `connector_not_connected` and stay unlisted in the hosted catalog until it ships (§9).
+   `dev_shared_credentials_ignored`). The relay serves that route (E48, with
+   `ROUTER_SETTLEMENT_TOKEN`), but it opens the sealed `connector_tokens` rows only in a runtime that
+   supplies a KMS key wrapper, and none does yet: until then every caller gets
+   `connector_not_connected` and the relay logs `connector_vault_unconfigured`. Keep those tools out
+   of the hosted catalog until it does (§9).
 5. After the first request, `wrangler tail` shows the boot words (fixed, one per decision):
    `wallet_wired_with_outbox`, `idempotency_postgres`, `connector_credentials_per_caller`. Any of
    `wallet_outbox_missing`, `idempotency_in_memory`, `wallet_in_memory_dev` or
@@ -485,8 +516,10 @@ token for the slot below from the relay (`docs/api/connector-tokens.md`):
 
 | Name | Where | Notes |
 |---|---|---|
-| `CLOUDFLARE_API_TOKEN` | operator shell or a future deploy workflow's secret | scoped as in §2 |
+| `CLOUDFLARE_API_TOKEN` | operator shell, or a secret of the GitHub environments `staging` / `production` (§3.1) | scoped as in §2 |
 | `CLOUDFLARE_ACCOUNT_ID` | same | |
+| `WRANGLER_STAGING_CONFIG` | variable of the GitHub environment `staging` (§3.1) | the staging `wrangler.jsonc` of §6 for the component deployed; never the production `name` |
+| `DEPLOY_HEALTH_URL` | variable of each GitHub environment (§3.1), optional | checked after a real deploy |
 | `SHOGUN_CONFORMANCE_URL` | `packages/conformance` | the deployed `/mcp` |
 | `SHOGUN_CONFORMANCE_TOKEN` | same | the demo principal's `sa_live_` key; never committed |
 | `SHOGUN_CONFORMANCE_WRITES` | same | `1` only against a store that may hold test rows |
@@ -654,11 +687,15 @@ Owner decisions still open:
       `docs/decisions/0002-x402.md`); `x402-payments.sql` not required.
 - [ ] **Worker → sidecar path** (§1) and E34 live, so `/mcp` stops answering 503.
 - [ ] **Per-principal connector credentials** for the router's first-party Gmail, Calendar, GitHub,
-      Linear and Slack tools: the router side is built (E48, `caller_connector`); the relay's
-      `POST /v1/internal/router/connector-token` (`docs/api/connector-tokens.md`) is not. Ship it, or
+      Linear and Slack tools: the router side (E48, `caller_connector`) and the relay's
+      `POST /v1/internal/router/connector-token` (`docs/api/connector-tokens.md`) are built, but no
+      runtime supplies the KMS key wrapper that opens `connector_tokens` rows, nothing writes those
+      rows (the hosted connect flow), and no OAuth refresh path is wired. Until all three exist,
       leave those tools out of the hosted catalog at launch.
-- [ ] **A deploy workflow** for the two Workers (manual, `main` only, `environment: release`), or a
-      written decision to keep deploying from the owner's machine.
+- [ ] **The deploy workflow** (`.github/workflows/deploy.yml`, §3.1) is written and has never run:
+      create the `staging` and `production` environments with their reviewers, secrets and
+      variables, then do one dry run per component and environment before the first real deploy;
+      or decide in writing to keep deploying from the owner's machine.
 - [ ] **OpenAI directory credit rule** resolved (`docs/directories/openai-credit-rule.md`).
 - [ ] **RLS for the remaining relay tables** — files written (E48: `approval-webhooks-`,
       `provider-payouts-`, `x402-payments-`, `connector-tokens-permissions.sql`); apply them (§3 step

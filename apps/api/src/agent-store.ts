@@ -46,7 +46,13 @@ export interface Receipt {
   method: string;
   name?: string;
   unit: MeterUnit;
+  /** The quantity reserved (quoted) for the call. */
   quantity: number;
+  /** The quantity the call settled at (E48): what the core or the router reported, at most
+   * `quantity`; 0 for a failed or refused call. Undefined until settled, and on rows settled
+   * before the column existed (sql/agent-receipts-settled-quantity.sql). A free call is written
+   * settled at its reserved quantity. */
+  settledQuantity?: number;
   /** Held at reservation. */
   estimateMicros: number;
   /** The settled figure (0 until settled, and for free calls). Discounted when a commit applied. */
@@ -149,8 +155,10 @@ export interface AgentStore {
   reserve(input: ReserveInput): Promise<ReserveOutcome>;
   /** Replace the held estimate with `actualMicros`, once. A settled or unknown receipt is left
    * alone. `listMicros` is the same figure at list price (default `actualMicros`); a commit-funded
-   * receipt draws `actualMicros` down its commit instead of the wallet. */
-  settle(receiptId: string, actualMicros: number, listMicros?: number): Promise<void>;
+   * receipt draws `actualMicros` down its commit instead of the wallet. `settledQuantity` is the
+   * quantity the call settled at (`settledQuantityFor`: default the reserved quantity when
+   * something was charged, 0 when nothing was), capped at the reserved quantity. */
+  settle(receiptId: string, actualMicros: number, listMicros?: number, settledQuantity?: number): Promise<void>;
   /** Booked micro-USD (held estimates plus settled cost) on a cap counter. */
   periodSpend(subject: string, period: string): Promise<number>;
 
@@ -231,6 +239,14 @@ export function capCounters(input: Pick<ReserveInput, "keyId" | "principalId" | 
 }
 
 /** A reservation is well-formed only as non-negative safe integers. */
+/** The quantity a receipt records at settlement (E48): the reported `settled` figure when it is a
+ * non-negative integer, capped at the reserved `reserved`; otherwise the reserved quantity when
+ * something was charged and 0 when nothing was. */
+export function settledQuantityFor(reserved: number, actualMicros: number, settled?: number): number {
+  if (settled !== undefined && Number.isSafeInteger(settled) && settled >= 0) return Math.min(settled, reserved);
+  return actualMicros > 0 ? reserved : 0;
+}
+
 export function validReserve(input: ReserveInput): boolean {
   const caps = [input.caps.key.day, input.caps.key.month, input.caps.principal.day, input.caps.principal.month];
   return Number.isSafeInteger(input.micros) && input.micros >= 0 &&
@@ -382,7 +398,7 @@ export class InMemoryAgentStore implements AgentStore {
         settled: false, day: input.day, month: input.month, ts: input.ts,
       };
       if (input.micros === 0) {
-        this.receiptRows.set(input.receiptId, { ...receipt, settled: true });
+        this.receiptRows.set(input.receiptId, { ...receipt, settled: true, settledQuantity: input.quantity });
         return { kind: "ok" };
       }
       const w = this.walletRow(input.principalId);
@@ -405,11 +421,12 @@ export class InMemoryAgentStore implements AgentStore {
     });
   }
 
-  settle(receiptId: string, actualMicros: number, listMicros: number = actualMicros): Promise<void> {
+  settle(receiptId: string, actualMicros: number, listMicros: number = actualMicros, settledQuantity?: number): Promise<void> {
     return this.enqueue(() => {
       const r = this.receiptRows.get(receiptId);
       if (!r || r.settled || !Number.isSafeInteger(actualMicros) || actualMicros < 0) return;
       r.settled = true;
+      r.settledQuantity = settledQuantityFor(r.quantity, actualMicros, settledQuantity);
       r.costMicros = actualMicros;
       r.listCostMicros = Number.isSafeInteger(listMicros) && listMicros >= actualMicros ? listMicros : actualMicros;
       const commit = r.commitId !== undefined ? this.commits.get(r.commitId) : undefined;

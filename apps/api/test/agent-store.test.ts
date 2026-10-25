@@ -9,7 +9,7 @@ import { InMemoryAgentStore, capSubjectKey, capSubjectPrincipal, type AgentStore
 import { DEFAULT_CAPS, type CapSet } from "../src/caps.js";
 import { sqliteDouble } from "./sql-double.js";
 
-export const AGENT_SQL = readFileSync(new URL("../sql/agent-keys.sql", import.meta.url), "utf8");
+export const AGENT_SQL = readFileSync(new URL("../sql/agent-keys.sql", import.meta.url), "utf8") + "\n" + readFileSync(new URL("../sql/agent-receipts-settled-quantity.sql", import.meta.url), "utf8");
 
 const backends: Array<[string, () => AgentStore]> = [
   ["in-memory", () => new InMemoryAgentStore()],
@@ -101,8 +101,23 @@ describe.each(backends)("AgentStore on %s", (_name, open) => {
     const store = open();
     expect(await store.reserve(reserve({ receiptId: "free", micros: 0, unit: "read", name: "memory.search", quantity: 1 }))).toEqual({ kind: "ok" });
     expect(await store.wallet("prn_a")).toEqual({ principalId: "prn_a", balanceMicros: 0, reservedMicros: 0 });
-    expect(await store.receipt("free")).toEqual(expect.objectContaining({ settled: true, costMicros: 0, estimateMicros: 0, unit: "read" }));
+    expect(await store.receipt("free")).toEqual(expect.objectContaining({ settled: true, costMicros: 0, estimateMicros: 0, unit: "read", quantity: 1, settledQuantity: 1 }));
     expect(await store.periodSpend(capSubjectKey("ak_a"), DAY)).toBe(0);
+  });
+
+  it("records the settled quantity next to the reserved one, capped at the reservation (E48)", async () => {
+    const store = open();
+    await store.credit("prn_a", "grant", 100_000, "signup_grant", TS);
+    for (const id of ["q_partial", "q_over", "q_default", "q_zero"]) expect(await store.reserve(reserve({ receiptId: id, quantity: 10, micros: 5_000 }))).toEqual({ kind: "ok" });
+    expect((await store.receipt("q_partial"))?.settledQuantity).toBeUndefined();
+    await store.settle("q_partial", 2_000, 2_000, 4);
+    await store.settle("q_over", 5_000, 5_000, 25);
+    await store.settle("q_default", 5_000);
+    await store.settle("q_zero", 0);
+    // A second settle changes nothing, quantity included.
+    await store.settle("q_partial", 5_000, 5_000, 10);
+    const got = await Promise.all(["q_partial", "q_over", "q_default", "q_zero"].map((id) => store.receipt(id)));
+    expect(got.map((r) => [r?.quantity, r?.settledQuantity, r?.costMicros])).toEqual([[10, 4, 2_000], [10, 10, 5_000], [10, 10, 5_000], [10, 0, 0]]);
   });
 
   it("checks the four cap counters in the same transaction and books the estimate on all of them", async () => {
@@ -187,5 +202,10 @@ describe("SqlAgentStore failure policy", () => {
   it("checkSchema names a missing table and nothing else", async () => {
     const store = new SqlAgentStore(sqliteDouble());
     await expect(store.checkSchema()).rejects.toThrow(`agent store table missing or unreadable: ${AGENT_STORE_TABLES[0]}`);
+  });
+
+  it("checkSchema names the settled-quantity file when its column is missing (E48)", async () => {
+    const store = new SqlAgentStore(sqliteDouble(readFileSync(new URL("../sql/agent-keys.sql", import.meta.url), "utf8")));
+    await expect(store.checkSchema()).rejects.toThrow("agent store columns missing: agent_receipts (apply sql/agent-receipts-settled-quantity.sql)");
   });
 });

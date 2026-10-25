@@ -100,6 +100,48 @@ spec:
               value: {{ printf "http://127.0.0.1:%v" .Values.sidecar.port | quote }}
             - name: SHOGUN_REGION
               value: {{ .Values.region | quote }}
+            {{- if $secret }}
+            # E34: the sidecar's secrets under the names the gateway reads (same Secret keys).
+            - name: SHOGUN_SIDECAR_PRINCIPAL_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: SHOGUN_PRINCIPAL_TOKENS
+                  optional: true
+            - name: SHOGUN_SIDECAR_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: SHOGUN_ADMIN_TOKEN
+                  optional: true
+            {{- end }}
+            {{- if gt (int .Values.replicaCount) 1 }}
+            # E34: this pod's shard, from the StatefulSet pod index (deploy/README.md section 5.2).
+            - name: SHOGUN_POD_INDEX
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+            - name: SHOGUN_SHARD
+              value: {{ printf "$(SHOGUN_POD_INDEX)/%d" (int .Values.replicaCount) | quote }}
+            {{- end }}
+            {{- with .Values.gateway.otel }}
+            {{- if .endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .endpoint | quote }}
+            {{- end }}
+            {{- if .tracesEndpoint }}
+            - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+              value: {{ .tracesEndpoint | quote }}
+            {{- end }}
+            {{- if .serviceName }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .serviceName | quote }}
+            {{- end }}
+            {{- if .samplerArg }}
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: {{ .samplerArg | quote }}
+            {{- end }}
+            {{- end }}
             {{- range $name, $value := .Values.gateway.env }}
             - name: {{ $name }}
               value: {{ $value | quote }}

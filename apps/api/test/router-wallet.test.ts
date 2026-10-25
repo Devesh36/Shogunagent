@@ -99,7 +99,7 @@ describe("the router's wallet (E32): one charge, one take", () => {
     expect(out.body.usage.cost_micro_usd).toBe(1365);
     expect(await available(rig, "prn_a")).toEqual({ balance: 1_000_000 - 1365, reserved: 0 });
     const receipt = await rig.store.receipt(routerReceiptId(out.body.run_id));
-    expect(receipt).toMatchObject({ settled: true, costMicros: 1365, listCostMicros: 1365, unit: "run", name: "router.run", principalId: "prn_a" });
+    expect(receipt).toMatchObject({ settled: true, costMicros: 1365, listCostMicros: 1365, unit: "run", name: "router.run", principalId: "prn_a", quantity: 1, settledQuantity: 1 });
     expect((await rig.store.receipts("prn_a", 0, 100)).length).toBe(1);
     const [day] = await payouts.accruals("monid", "2026-10-01", "2026-11-01");
     expect(day).toMatchObject({ payee: "passthrough", runs: 1, okRuns: 1, providerMicros: 1300, takeMicros: 65 });
@@ -127,7 +127,7 @@ describe("the router's wallet (E32): one charge, one take", () => {
     const empty = routerFor(rig, () => ({ status: 200, body: { status: "succeeded", output: { results: [] } } }), "empty");
     expect((await run(empty.deps, { input: { tool_id: SEARCH, input: { query: "x" }, idempotency_key: "e" }, bearer: new Secret(key) })).status).toBe(200);
     expect(await available(rig, "prn_f")).toEqual({ balance: 1_000_000, reserved: 0 });
-    expect((await rig.store.receipts("prn_f", 0, 10)).map((r) => [r.settled, r.costMicros])).toEqual([[true, 0], [true, 0]]);
+    expect((await rig.store.receipts("prn_f", 0, 10)).map((r) => [r.settled, r.costMicros, r.settledQuantity])).toEqual([[true, 0, 0], [true, 0, 0]]);
   });
 
   it("a short wallet is the wallet's own 402, and the provider is never called", async () => {

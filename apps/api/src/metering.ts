@@ -300,10 +300,11 @@ export async function reserveCall(
   return { ok: true, receiptId, price };
 }
 
-/** Settle a reservation at `actualMicros` (`listMicros` at list price), once, on both ledgers,
+/** Settle a reservation at `actualMicros` (`listMicros` at list price) and `settledQuantity`
+ * units (E48; default: all of the reservation when charged, none when not), once, on both ledgers,
  * and emit `wallet.low_balance` when this charge took the wallet under the threshold. Never throws. */
-export async function settleCall(deps: MeteringDeps, receiptId: string, actualMicros: number, listMicros: number = actualMicros, principal?: Pick<AgentPrincipal, "principalId">, funding: "wallet" | "commit" | "x402" = "wallet"): Promise<void> {
-  await deps.store.settle(receiptId, actualMicros, listMicros).catch(() => deps.log("agent_settle_failure"));
+export async function settleCall(deps: MeteringDeps, receiptId: string, actualMicros: number, listMicros: number = actualMicros, principal?: Pick<AgentPrincipal, "principalId">, funding: "wallet" | "commit" | "x402" = "wallet", settledQuantity?: number): Promise<void> {
+  await deps.store.settle(receiptId, actualMicros, listMicros, settledQuantity).catch(() => deps.log("agent_settle_failure"));
   if (deps.usage && deps.spendBreaker) await deps.usage.settleSpend(receiptId, actualMicros).catch(() => deps.log("spend_settle_failure"));
   if (deps.notifier && principal && funding === "wallet" && actualMicros > 0) {
     const threshold = deps.lowBalanceThresholdMicros ?? LOW_BALANCE_THRESHOLD_MICROS;
@@ -406,7 +407,7 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
     const quantity = billable ? settledQuantity(upstream, quote.quantity) : quote.quantity;
     if (billable && upstream.status >= 200 && upstream.status < 300 && upstream.headers.get(HEADER_QUANTITY) === null) c.set("relayLogEvent", "settle_quantity_missing");
     const { charged, list } = settledPrice(reserved.price, billable ? settledListCost(quote, quantity) : 0);
-    await settleCall(deps, reserved.receiptId, charged, list, principal, reserved.price.terms?.funding ?? "wallet");
+    await settleCall(deps, reserved.receiptId, charged, list, principal, reserved.price.terms?.funding ?? "wallet", billable ? quantity : 0);
     const headers = new Headers(upstream.headers);
     const approvalToken = headers.get("x-shogun-approval-token");
     headers.delete("x-shogun-approval-token");
@@ -517,7 +518,7 @@ async function x402Call(
     }
   }
   const charged = settled.success ? price.charged : 0;
-  await settleCall(deps, receiptId, charged, settled.success ? quote.cost_micro_usd : 0, principal, "x402");
+  await settleCall(deps, receiptId, charged, settled.success ? quote.cost_micro_usd : 0, principal, "x402", settled.success ? quote.quantity : 0);
   await x402.store.mark(decoded.hash, settled.success ? "settled" : ok ? "failed" : "unsettled", now().getTime()).catch(() => undefined);
   c.set("relayLogEvent", settled.success ? "x402_settled" : ok ? "x402_settle_failed" : "upstream_failure");
   const headers = new Headers(upstream.headers);

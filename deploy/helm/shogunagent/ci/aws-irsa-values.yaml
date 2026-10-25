@@ -21,3 +21,8 @@ networkPolicy:
     llmRelayCidrs: ["198.51.100.0/24"]
     kmsCidrs: ["10.20.0.0/24"]
     databaseCidrs: ["10.30.0.10/32"]
+gateway:
+  otel:
+    endpoint: https://otel-collector.example.co.jp
+    serviceName: shogunagent-gateway-apne1
+    samplerArg: "0.25"

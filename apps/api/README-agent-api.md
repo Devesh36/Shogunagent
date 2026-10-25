@@ -6,7 +6,7 @@ E3 / E9 / §7. The licence-token routes (`/v1/batch`, `/v1/review`, …) are unc
 in `DEPLOY.md`.
 
 Everything here is served only when `AGENT_API_ENABLED=1` (see `src/boot.ts` for the variables).
-The store is `sql/agent-keys.sql` (apply like `shared-store.sql`; then `agent-keys-permissions.sql`).
+The store is `sql/agent-keys.sql` (apply like `shared-store.sql`; then `agent-receipts-settled-quantity.sql` and `agent-keys-permissions.sql`).
 
 Conventions:
 
@@ -250,12 +250,16 @@ curl -s "$BASE/v1/receipts?since=2026-10-25T00:00:00Z&limit=100" -H "Authorizati
 ```json
 { "receipts": [
     { "id": "rcpt_…", "key_id": "ak_…", "method": "tools/call", "name": "memory.ingest", "unit": "ingest", "quantity": 12,
-      "cost_micro_usd": 6000, "reserved_micro_usd": null, "settled": true, "ts": "2026-10-25T12:00:05.000Z" } ],
+      "reserved_quantity": 12, "settled_quantity": 10,
+      "cost_micro_usd": 5000, "reserved_micro_usd": null, "settled": true, "ts": "2026-10-25T12:00:05.000Z" } ],
   "next_since": "2026-10-25T12:00:05.001Z" }
 ```
 
 `since` is ISO-8601 or epoch milliseconds; page with `next_since`. `reserved_micro_usd` is
-non-null only while a call is in flight.
+non-null only while a call is in flight. `reserved_quantity` (also `quantity`) is what was quoted
+and held; `settled_quantity` is what the call settled at: the quantity the core reported (at most
+the reservation), 1 for a router run that succeeded, 0 for a failed, refused or replayed call. It is
+`null` while the call is in flight, and on receipts settled before the gateway recorded it.
 
 ```sh
 curl -s -X POST $BASE/v1/receipts/rcpt_…/dispute -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
@@ -319,7 +323,7 @@ tables.
 
 ## Operations
 
-- Provision: `psql … -f apps/api/sql/agent-keys.sql` then `-f apps/api/sql/agent-keys-permissions.sql`.
+- Provision: `psql … -f apps/api/sql/agent-keys.sql`, `-f apps/api/sql/agent-receipts-settled-quantity.sql`, then `-f apps/api/sql/agent-keys-permissions.sql`.
 - Secrets (`wrangler secret put`): `AGENT_POW_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`;
   for remote approvals `SHOGUN_APPROVAL_SIGNING_KEY` (≥ 32 characters, the sidecar's value),
   `WEBHOOK_SIGNING_SECRET` (≥ 32 characters) and optionally `SLACK_BOT_TOKEN` +

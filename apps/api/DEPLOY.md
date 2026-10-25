@@ -229,15 +229,19 @@ licence bearer. If the dashboard shows invocation logs on, turn them off there t
 
 ## 5. Deploy
 
-Deploys are deliberate: the workflow **Deploy batch relay (Cloudflare Workers)**
-(`.github/workflows/deploy-relay.yml`) runs only from the Actions tab (`workflow_dispatch`, Linux
-only). Unchecked, it verifies (typecheck, the Node suite, the Workers-runtime suite, the bundle
-check); with **deploy** checked it also refuses a `wrangler.jsonc` that still holds a `REPLACE_WITH`
-placeholder, reads the Hyperdrive id out of it and fails unless `wrangler hyperdrive get` reports
-`caching.disabled: true` (§2), then uploads the Worker and confirms `/healthz`. It uses the
-repository secrets `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` the website's `deploy.yml`
-already has (the token needs Hyperdrive read for the guard) — the Anthropic key is never in GitHub.
-Every action in it is pinned to a commit SHA.
+Deploys are deliberate. In this repository the workflow is **deploy**
+(`.github/workflows/deploy.yml`; ShogunAI's `deploy-relay.yml`, which this section used to describe,
+was not migrated). It runs only from the Actions tab (`workflow_dispatch`, from `main`), deploys one
+Worker per run (`component`: `relay` for this Worker, or `router`) to one `environment` (`staging`
+or `production`, which is also the GitHub environment whose required reviewers must approve the
+run), and is a dry run (`wrangler deploy --dry-run`, nothing uploaded) unless `confirm` is typed as
+`deploy-relay-production` (or `-staging`). It first verifies (typecheck, the Node suite, the
+Workers-runtime suite, the bundle check), refuses a config that still holds a `REPLACE_WITH`
+placeholder, and after a real deploy checks `DEPLOY_HEALTH_URL` when that environment variable is
+set. It reads only the environment secrets `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`; the
+provider keys are never in GitHub. It does **not** check Hyperdrive: confirm `caching.disabled:
+true` with `wrangler hyperdrive get` yourself (§2). Setup and inputs: `docs/deploy/production.md`
+§3.1. It has never been run.
 
 From a laptop (same thing, your own Cloudflare login):
 
@@ -476,8 +480,10 @@ The `sa_` keys, wallet, 402, quote, receipts and the metered `/mcp` proxy (`READ
 are served only with `AGENT_API_ENABLED: "1"` in `vars`. Before the switch:
 
 1. Provision the tables, as the relay role with `search_path=relay`:
-   `psql "$RELAY_DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/sql/agent-keys.sql` then
-   `-f apps/api/sql/agent-keys-permissions.sql`. Idempotent, additive only.
+   `psql "$RELAY_DATABASE_URL" -v ON_ERROR_STOP=1 -f apps/api/sql/agent-keys.sql`, then
+   `-f apps/api/sql/agent-receipts-settled-quantity.sql` (E48: the settled quantity on receipts;
+   the agent store's boot check reads it) and `-f apps/api/sql/agent-keys-permissions.sql`.
+   Idempotent, additive only.
 2. Secrets: `wrangler secret put AGENT_POW_SECRET` (any ≥16-character random string; rotating it
    only invalidates unspent registration challenges) and, for card top-ups, `STRIPE_SECRET_KEY`
    and `STRIPE_WEBHOOK_SECRET` (both or neither; the webhook endpoint is

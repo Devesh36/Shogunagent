@@ -13,7 +13,7 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof
 
 export function toSqlite(text: string): string {
   return text
-    .replace(/::(?:text|bigint|float8|smallint|integer)\b/g, "")
+    .replace(/::(?:text|bigint|float8|smallint|integer|bytea)\b/g, "")
     .replace(/\s+FOR UPDATE\b/g, "")
     .replace(/\$(\d+)/g, "?$1");
 }
