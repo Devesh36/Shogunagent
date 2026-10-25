@@ -53,6 +53,12 @@ pub enum Command {
     Pack {
         query: String,
     },
+    /// `shogun ingest <json>` → `memory.ingest` (E4-T3): `body` is the request JSON (events or
+    /// turns, source, actor, thread_key, idempotency_key), validated at parse.
+    Ingest { body: String },
+    /// `shogun recall <query> [--budget-tokens N] [--include-scratch]` → `memory.recall`
+    /// (E4-T3): `body` is the request JSON, validated at parse.
+    Recall { body: String },
     People(ListOrGet),
     Projects(ListOrGet),
     Commitments(ListOrGet),
@@ -657,6 +663,8 @@ impl Command {
             Command::Events { .. } => Tool::MemoryGetEvents,
             Command::Session { .. } => Tool::MemoryReadSession,
             Command::Pack { .. } => Tool::MemoryGetContextPack,
+            Command::Ingest { .. } => Tool::MemoryIngest,
+            Command::Recall { .. } => Tool::MemoryRecall,
             Command::People(ListOrGet::List) => Tool::StatePeopleList,
             Command::People(ListOrGet::Get { .. }) => Tool::StatePeopleGet,
             Command::Projects(ListOrGet::List) => Tool::StateProjectsList,
@@ -866,6 +874,9 @@ COMMANDS:
                               answer it first (needs the app running; else keyword results)
     context                   Current context cache
     pack <query>              Grounded context pack (facts + evidence with provenance)
+    recall <query> [--budget-tokens N] [--include-scratch]
+                              What memory holds on a question, within a token budget
+    ingest <json>             Append events[] or turns[] under an idempotency_key (L1)
     people list|get <id>      People state
     projects list|get <id>    Projects state
     commitments list|get <id> Commitments state
