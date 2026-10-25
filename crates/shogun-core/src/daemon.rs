@@ -69,6 +69,8 @@ pub use mail_triage::MAIL_ARCHIVE_NEEDS_APPROVAL;
 mod relay_attempts;
 mod maintenance;
 mod meetings;
+mod export_v1;
+mod memory_fs;
 mod memory_import;
 mod memory_notes;
 mod chat_memory;

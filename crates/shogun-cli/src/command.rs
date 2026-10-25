@@ -59,6 +59,9 @@ pub enum Command {
     /// `shogun recall <query> [--budget-tokens N] [--include-scratch]` → `memory.recall`
     /// (E4-T3): `body` is the request JSON, validated at parse.
     Recall { body: String },
+    /// `shogun fs <json>` → `memory.fs` (E6-T2): one memory-tool command (`view`, `create`,
+    /// `str_replace`, `insert`, `delete`, `rename`) over `/memories`; `body` is validated at parse.
+    Fs { body: String },
     People(ListOrGet),
     Projects(ListOrGet),
     Commitments(ListOrGet),
@@ -300,6 +303,9 @@ pub enum StateCommand {
     /// `state create <commitments|open-loops> --description T …` — the shared `state.create` body.
     Create { body: String },
     Export,
+    /// `state export --format export-v1 [--differential | --since-cursor <ms>]` — the portable
+    /// JSON Lines export (E7); `body` is the `state.export` arguments, validated at parse.
+    ExportV1 { body: String },
     /// `state split <table> <id> --name T --event N…` — the shared `state.split` body.
     Split { body: String },
     /// `state evidence <table> <id>` — what a split chooses from.
@@ -679,6 +685,7 @@ impl Command {
             Command::Pack { .. } => Tool::MemoryGetContextPack,
             Command::Ingest { .. } => Tool::MemoryIngest,
             Command::Recall { .. } => Tool::MemoryRecall,
+            Command::Fs { .. } => Tool::MemoryFs,
             Command::People(ListOrGet::List) => Tool::StatePeopleList,
             Command::People(ListOrGet::Get { .. }) => Tool::StatePeopleGet,
             Command::Projects(ListOrGet::List) => Tool::StateProjectsList,
@@ -717,6 +724,7 @@ impl Command {
             Command::State(StateCommand::Delete { .. }) => Tool::StateDelete,
             Command::State(StateCommand::Create { .. }) => Tool::StateCreate,
             Command::State(StateCommand::Export) => Tool::StateExport,
+            Command::State(StateCommand::ExportV1 { .. }) => Tool::StateExport,
             Command::State(StateCommand::Split { .. }) => Tool::StateSplit,
             Command::State(StateCommand::Evidence { .. }) => Tool::StateSplitEvidence,
             Command::State(StateCommand::Merge { .. }) => Tool::StateMerge,

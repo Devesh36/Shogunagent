@@ -46,7 +46,7 @@ pub fn cost_class(tool: Tool) -> CostClass {
     match tool_level(tool) {
         ApiLevel::Read => CostClass::Free,
         ApiLevel::PerAction => CostClass::Run,
-        ApiLevel::Write(_) if matches!(tool, Tool::MemoryAppendNote | Tool::MemoryIngest) => CostClass::Ingest,
+        ApiLevel::Write(_) if matches!(tool, Tool::MemoryAppendNote | Tool::MemoryIngest | Tool::MemoryFs) => CostClass::Ingest,
         ApiLevel::Write(_) => CostClass::ModelOp,
     }
 }

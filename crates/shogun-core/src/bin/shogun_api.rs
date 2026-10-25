@@ -257,8 +257,35 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
     serve_on(listener, state.with_port(addr.port())).await
 }
 
+/// `shogun-api --dream-tick [--multi <root>]` (plan E5-T4): run the hourly Dream Cycle once for
+/// every principal under the multi-principal root (`--multi <root>`, else `SHOGUN_MULTI_ROOT`,
+/// else `./principals`) and exit. A principal with no new material since its cursor is not
+/// reviewed and costs no model call. This build reviews with the on-device local rules (no model,
+/// no egress) until a hosted Batch credential is wired per principal; the Batch-lane variant is
+/// `tenancy::dream_tick::hourly_tick_with_lane`. Prints one line of counts, never content.
+fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
+    use shogun_core::tenancy::{dream_tick, EnvKeyProvider, PrincipalStore};
+    let keys = EnvKeyProvider::from_env().unwrap_or_else(|e| {
+        eprintln!("{FACE}: {e}");
+        std::process::exit(1);
+    });
+    let clock = wall_clock();
+    let now = (clock)();
+    // One file open at a time: the tick visits each principal once. Same open policy as
+    // `--multi` (the sidecar owns these files); only files already on disk are visited.
+    let store = PrincipalStore::new(root, Arc::new(keys), clock, 1);
+    let principals = dream_tick::principals_on_disk(&store);
+    let report = dream_tick::hourly_tick_local(&store, &principals, now);
+    println!("{FACE}: dream tick: {}", dream_tick::summary(&report));
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    if std::env::args().skip(1).any(|arg| arg == "--dream-tick") {
+        let root = multi_root(std::env::args().skip(1)).unwrap_or_else(|| std::path::PathBuf::from("./principals"));
+        return dream_tick(root);
+    }
     if let Some(root) = multi_root(std::env::args().skip(1)) {
         return serve_multi(root).await;
     }

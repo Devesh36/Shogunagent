@@ -915,6 +915,26 @@ impl<B: MemoryBackend> McpServer<B> {
             };
         }
 
+        // state.export in export format v1 (E7): an additive `format` argument; without it the
+        // tool answers the Markdown export below, as before.
+        if tool == Tool::StateExport && crate::export_api::wants_v1(&args) {
+            return match crate::export_api::serve(&args, &self.backend) {
+                Ok(text) => result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": false })),
+                Err(crate::ingest_api::Refusal::BadArguments(message)) => error(id, -32602, &message),
+                Err(crate::ingest_api::Refusal::Unavailable(code)) => error(id, -32000, code),
+            };
+        }
+
+        // memory.fs (E6-T2): the memory tool's file operations; one parser, one backend call and
+        // one envelope for every face (`memfs_tool`).
+        if tool == Tool::MemoryFs {
+            return match crate::memfs_tool::serve(&args, &self.backend) {
+                Ok((text, failed)) => result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": failed })),
+                Err(crate::ingest_api::Refusal::BadArguments(message)) => error(id, -32602, &message),
+                Err(crate::ingest_api::Refusal::Unavailable(code)) => error(id, -32000, code),
+            };
+        }
+
         // memory.get_events / memory.read_session: one parser and one backend call for every
         // face (`activity_api`); answered flat, like memory.get_context.
         if crate::activity_api::is_activity_tool(tool) {
@@ -1933,6 +1953,7 @@ fn tool_title(tool: Tool) -> &'static str {
     match tool {
         Tool::MemoryIngest => "Ingest events or turns",
         Tool::MemoryRecall => "Recall within a budget",
+        Tool::MemoryFs => "Memory as files",
         Tool::MemoryNotesList => "List memory notes",
         Tool::MemoryNotesChange => "Change a memory note",
         Tool::MemorySearch => "Search memory",
@@ -2103,6 +2124,7 @@ pub fn tool_descriptor(tool: Tool) -> Value {
         // The core descriptions come from `core_tools::CORE` below; these are the fallbacks.
         Tool::MemoryIngest => ("Append events or turns to the event log under an idempotency key (L1).", crate::ingest_api::ingest_schema()),
         Tool::MemoryRecall => ("What memory holds on a question, within a token budget.", crate::ingest_api::recall_schema()),
+        Tool::MemoryFs => (crate::memfs_tool::DESCRIPTION, crate::memfs_tool::schema()),
         Tool::FormsInspect => ("Inspect the focused form in the running ShogunAI desktop and open its review window (L2). Captures nearby labeled blank text controls only; credentials/payment controls are skipped. Never submits.", json!({})),
         Tool::FormsPlan => ("Match exact supplied facts and bounded memory excerpts to blank fields using Jev (TypeSafe), through ShogunAI's server on its own key unless the user saved their own TypeSafe key (L1). Supply notes as one labelled fact per line. Decisions remain proposals requiring human review. Never fills or submits.", json!({"session_id":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":0},"instruction":{"type":"string","minLength":1,"maxLength":4000}})),
         Tool::FormsStatus => ("Read a live form session snapshot, proposed values, evidence and write results. The same token/client must own the session.", json!({"session_id":{"type":"integer","minimum":1}})),
@@ -2345,8 +2367,16 @@ same old events will not re-create it. Irreversible — only delete what the use
         Tool::StateExport => (
             "Export the world model: people, projects, commitments and open loops as Markdown \
 (one section per table, each row with confidence and source event ids) plus the same rows as \
-JSON. Rows below the fact band are marked possibly; low-confidence rows need include_low=true.",
-            json!({ "include_low": { "type": "boolean" } }),
+JSON. Rows below the fact band are marked possibly; low-confidence rows need include_low=true. \
+With format=export-v1 it returns the portable JSON Lines export instead (docs/api/export-v1.md): \
+entities, facts with validity, confidence and quotes, and tombstones; differential=true exports what \
+changed since the last differential export, since_cursor (unix ms) what changed after that time.",
+            json!({
+                "include_low": { "type": "boolean" },
+                "format": { "type": "string", "enum": ["markdown", "export-v1"], "default": "markdown" },
+                "differential": { "type": "boolean", "default": false },
+                "since_cursor": { "type": "integer", "minimum": 0 }
+            }),
         ),
         Tool::StateSplit => (
             "Split a wrong merge (L1): the record fused two different people (or projects). Moves \
@@ -2819,6 +2849,10 @@ Records an item was linked to are not touched. Only delete what the user asked t
     }
     if tool == Tool::MemoryRecall {
         descriptor["inputSchema"]["required"] = json!(["query"]);
+        descriptor["inputSchema"]["additionalProperties"] = json!(false);
+    }
+    if tool == Tool::MemoryFs {
+        descriptor["inputSchema"]["required"] = json!(["command"]);
         descriptor["inputSchema"]["additionalProperties"] = json!(false);
     }
     // The core set's descriptions are one agent-facing table (E4-T4, `core_tools::CORE`).

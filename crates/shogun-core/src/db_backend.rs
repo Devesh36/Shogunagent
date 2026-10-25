@@ -2463,6 +2463,22 @@ impl MemoryBackend for DbBackend {
         self.db.agent_recall(request)
     }
 
+    /// `memory.fs` (E6-T2): the memory tool's commands over `/memories`, as the call's writer.
+    fn memory_fs(
+        &self,
+        command: &shogun_mcp::memfs_tool::FsCommand,
+    ) -> Result<shogun_mcp::memfs_tool::FsReply, String> {
+        self.db.memory_fs(command)
+    }
+
+    /// `state.export` in export format v1 (E7).
+    fn export_v1(
+        &self,
+        request: &shogun_mcp::export_api::ExportRequest,
+    ) -> Result<shogun_mcp::export_api::ExportOutput, String> {
+        self.db.export_v1(request)
+    }
+
     fn memory_import(&self, operation: MemoryImportOperation) -> Result<String, String> {
         use shogun_memory::memory_import::Via;
         let value = match operation {
@@ -2735,6 +2751,8 @@ impl MemoryBackend for DbBackend {
             // Served by `ingest` / `recall` (E4-T3), never through the generic read channel.
             | Tool::MemoryIngest
             | Tool::MemoryRecall
+            // Served by `memory_fs` (E6-T2).
+            | Tool::MemoryFs
             | Tool::MemoryNotesList
             | Tool::MemoryNotesChange
             | Tool::ProfileSet

@@ -183,6 +183,8 @@ pub fn tool_handling(tool: Tool) -> ToolHandling {
         | Tool::MemoryAppendNote
         // An agent's own events join the log; they read nothing (E4-T3).
         | Tool::MemoryIngest
+        // The `/memories` tree is state rows and the caller's scratch: no meeting or screen text.
+        | Tool::MemoryFs
         | Tool::ActionsStatus
         | Tool::ActionsQuestions
         | Tool::ActionsAnswer

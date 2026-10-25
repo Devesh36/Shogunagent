@@ -241,6 +241,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Pack { query } => get(low(format!("/v1/memory/context_pack?q={}", encode(query)))),
         Command::Ingest { body } => post("/v1/memory/ingest".into(), body.clone()),
         Command::Recall { body } => post("/v1/memory/recall".into(), body.clone()),
+        Command::Fs { body } => post("/v1/memory/fs".into(), body.clone()),
         Command::People(w) => get(low(state_path("people", w))),
         Command::Projects(w) => get(low(state_path("projects", w))),
         Command::Commitments(w) => get(low(state_path("commitments", w))),
@@ -304,6 +305,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
             StateCommand::Delete { body } => post("/v1/state/delete".into(), body.clone()),
             StateCommand::Create { body } => post("/v1/state/create".into(), body.clone()),
             StateCommand::Export => get(low("/v1/state/export".to_string())),
+            StateCommand::ExportV1 { body } => post("/v1/export".into(), body.clone()),
             StateCommand::Split { body } => post("/v1/state/split".into(), body.clone()),
             // The table is a validated literal (`people` | `projects`), the id an integer.
             StateCommand::Evidence { table, id } => get(format!("/v1/state/{table}/{id}/evidence")),

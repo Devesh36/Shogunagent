@@ -185,7 +185,7 @@ Since 2026-10-14 the app connects the AI apps it finds with `read` access and no
 3. Neither: `core`. The generated **Add to ...** entries carry neither, so they list core.
 
 - `core` (always included): `memory.search` (with `limit`, `from_ms`/`to_ms`, `source_kind`), `memory.get_context`, `memory.get_periods` (stored hour/day/week/month summaries for a window), `memory.get_context_pack`, `memory.get_wrap`, `memory.append_note`, `profile.whoami`, `state.commitments.list`, `state.open_loops.list`, `state.people.list` / `.get`, `state.projects.list` / `.get`, `meeting.list` / `.search` / `.recap.get` / `.transcript.get`, `wiki.evidence`, `actions.execute`, `actions.status`.
-- Other groups: `import`, `state`, `meeting`, `mail`, `visual_recall`, `voice`, `skills`, `wiki`, `web`, `export`, `translate`, `settings`, `forms`. The full table is in [`docs/specs/mcp-tool-surface.md`](specs/mcp-tool-surface.md) §7.
+- Other groups: `files` (`memory.fs`: `/memories` as files, the memory tool's operations), `import`, `state`, `meeting`, `mail`, `visual_recall`, `voice`, `skills`, `wiki`, `web`, `export`, `translate`, `settings`, `forms`. The full table is in [`docs/specs/mcp-tool-surface.md`](specs/mcp-tool-surface.md) §7.
 - An unknown group id in the env var is ignored with one warning on stderr; in `--toolset` it is an error (the server refuses to start rather than list a different surface).
 
 **Listing is guidance, not a boundary.** A tool outside the listed set still works when called by name, at its own approval level, if the connection's scope (`read` / `full`) allows it. Scopes, grants and the L1/L2/L3 levels are the enforcement; REST and CLI never read toolsets.

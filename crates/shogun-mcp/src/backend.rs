@@ -690,6 +690,19 @@ pub trait MemoryBackend: Send + Sync {
     fn recall(&self, _request: &crate::ingest_api::RecallRequest) -> Result<crate::ingest_api::RecallOutcome, String> {
         Err("recall_unavailable".to_string())
     }
+
+    /// `memory.fs` (E6-T2): one memory-tool command over `/memories`. `Err` is a store fault (the
+    /// face answers `memory_fs_unavailable`); a contract error (missing path, duplicate
+    /// `old_str`, …) is an `Ok` reply with `is_error`.
+    fn memory_fs(&self, _command: &crate::memfs_tool::FsCommand) -> Result<crate::memfs_tool::FsReply, String> {
+        Err("memory_fs_unavailable".to_string())
+    }
+
+    /// `state.export` in export format v1 (E7): the JSON Lines export, full, from a time, or
+    /// differential from the stored cursor (which it then advances). `Err` is a store fault.
+    fn export_v1(&self, _request: &crate::export_api::ExportRequest) -> Result<crate::export_api::ExportOutput, String> {
+        Err("export_unavailable".to_string())
+    }
 }
 
 /// A shared backend is a backend (E4-T1): the HTTP transport's `McpServer` and the REST state
@@ -755,6 +768,12 @@ impl<T: MemoryBackend + ?Sized> MemoryBackend for std::sync::Arc<T> {
     }
     fn recall(&self, request: &crate::ingest_api::RecallRequest) -> Result<crate::ingest_api::RecallOutcome, String> {
         (**self).recall(request)
+    }
+    fn memory_fs(&self, command: &crate::memfs_tool::FsCommand) -> Result<crate::memfs_tool::FsReply, String> {
+        (**self).memory_fs(command)
+    }
+    fn export_v1(&self, request: &crate::export_api::ExportRequest) -> Result<crate::export_api::ExportOutput, String> {
+        (**self).export_v1(request)
     }
 }
 

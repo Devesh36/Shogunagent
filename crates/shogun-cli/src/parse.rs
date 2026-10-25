@@ -496,6 +496,14 @@ fn parse_command(positionals: &[String]) -> Result<Command, CliError> {
             shogun_mcp::ingest_api::ingest_request(&body).map_err(CliError::BadInput)?;
             Ok(Command::Ingest { body: body.to_string() })
         }
+        // E6-T2: one `memory.fs` command as JSON, validated by the shared parser.
+        "fs" => {
+            let raw = join(rest).ok_or(CliError::MissingArgument("<json>"))?;
+            let body: serde_json::Value =
+                serde_json::from_str(&raw).map_err(|_| CliError::BadInput("fs takes one JSON object".into()))?;
+            shogun_mcp::memfs_tool::parse(&body).map_err(CliError::BadInput)?;
+            Ok(Command::Fs { body: body.to_string() })
+        }
         "recall" => {
             let mut args = serde_json::Map::new();
             let mut words = Vec::new();
@@ -1424,6 +1432,36 @@ fn parse_state(rest: &[String]) -> Result<Command, CliError> {
             }
             Ok(Command::State(StateCommand::Create { body: body.to_string() }))
         }
+        // `--format export-v1` selects the portable JSON Lines export (E7); without it, Markdown.
+        Some("export") if rest.iter().any(|arg| arg == "--format") => {
+            let mut body = serde_json::Map::new();
+            let mut i = 1;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--format" => {
+                        let value = rest.get(i + 1).ok_or(CliError::MissingArgument("--format <markdown|export-v1>"))?;
+                        body.insert("format".into(), value.clone().into());
+                        i += 2;
+                    }
+                    "--differential" => {
+                        body.insert("differential".into(), true.into());
+                        i += 1;
+                    }
+                    "--since-cursor" => {
+                        let value = rest.get(i + 1).ok_or(CliError::MissingArgument("--since-cursor <ms>"))?;
+                        body.insert("since_cursor".into(), value.parse::<i64>().map_err(|_| CliError::BadId(value.clone()))?.into());
+                        i += 2;
+                    }
+                    other => return Err(CliError::UnknownSubcommand { command: "state export", got: other.to_string() }),
+                }
+            }
+            if body.get("format").and_then(serde_json::Value::as_str) == Some("markdown") {
+                return Ok(Command::State(StateCommand::Export));
+            }
+            let body = serde_json::Value::Object(body);
+            shogun_mcp::export_api::parse(&body).map_err(CliError::BadInput)?;
+            Ok(Command::State(StateCommand::ExportV1 { body: body.to_string() }))
+        }
         Some("export") => Ok(Command::State(StateCommand::Export)),
         Some("evidence") => {
             let (table, id) = splittable(rest)?;
@@ -2181,6 +2219,40 @@ mod tests {
     #[test]
     fn no_args_is_help() {
         assert_eq!(parse(&[]).unwrap().command, Command::Help);
+    }
+
+    /// E6-T2: `shogun fs <json>` is `memory.fs`, validated by the shared parser before it is sent.
+    #[test]
+    fn fs_takes_one_memory_tool_command() {
+        let inv = parse(&v(&["fs", r#"{"command":"view","path":"/memories"}"#])).unwrap();
+        assert_eq!(inv.command.tool(), Some(shogun_mcp::memory_api::Tool::MemoryFs));
+        let call = crate::wire::to_call(&inv.command, false).unwrap();
+        assert_eq!((call.method, call.path.as_str()), ("POST", "/v1/memory/fs"));
+        assert!(parse(&v(&["fs", r#"{"command":"view","path":"/etc/passwd"}"#])).is_err());
+        assert!(parse(&v(&["fs", "not json"])).is_err());
+        assert!(parse(&v(&["fs"])).is_err());
+    }
+
+    /// E7: `state export --format export-v1 [--differential | --since-cursor <ms>]` posts the
+    /// `state.export` arguments to `/v1/export`; without `--format` it stays the Markdown export.
+    #[test]
+    fn state_export_takes_the_v1_format_and_its_cursor_options() {
+        use crate::command::StateCommand;
+        assert_eq!(parse(&v(&["state", "export"])).unwrap().command, Command::State(StateCommand::Export));
+        assert_eq!(
+            parse(&v(&["state", "export", "--format", "markdown"])).unwrap().command,
+            Command::State(StateCommand::Export)
+        );
+        let inv = parse(&v(&["state", "export", "--format", "export-v1", "--differential"])).unwrap();
+        assert_eq!(inv.command.tool(), Some(shogun_mcp::memory_api::Tool::StateExport));
+        let call = crate::wire::to_call(&inv.command, false).unwrap();
+        assert_eq!((call.method, call.path.as_str()), ("POST", "/v1/export"));
+        let body: serde_json::Value = serde_json::from_str(&call.body.unwrap()).unwrap();
+        assert_eq!(body, serde_json::json!({ "format": "export-v1", "differential": true }));
+        assert!(parse(&v(&["state", "export", "--format", "export-v1", "--since-cursor", "12"])).is_ok());
+        assert!(parse(&v(&["state", "export", "--format", "export-v1", "--differential", "--since-cursor", "12"])).is_err());
+        assert!(parse(&v(&["state", "export", "--format", "xml"])).is_err());
+        assert!(parse(&v(&["state", "export", "--format", "export-v1", "--bogus"])).is_err());
     }
 
     #[test]

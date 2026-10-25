@@ -21,6 +21,10 @@ pub mod activity_api;
 pub mod core_tools;
 /// `memory.ingest` / `memory.recall`: one parser and envelope for every face (E4-T3).
 pub mod ingest_api;
+/// `state.export` in export format v1 (E7).
+pub mod export_api;
+/// `memory.fs` (E6-T2): the memory tool's file operations over `/memories`.
+pub mod memfs_tool;
 /// The stateless Streamable HTTP transport, as pure request → reply logic (E4-T1).
 pub mod mcp_http;
 /// MRTR and URL-mode elicitation: how L2 / L3 look on the MCP face (E4-T2).
