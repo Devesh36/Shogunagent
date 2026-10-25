@@ -50,7 +50,9 @@ export interface LogVars {
     // The agent routes (agent-app.ts / metering.ts): fixed words, never a value.
     | "agent_key_rejected" | "agent_registered" | "pow_rejected" | "register_rate_limited" | "payment_required" | "cap_exceeded"
     | "wallet_unavailable" | "capacity_exhausted" | "dry_run" | "run_price_unavailable" | "upstream_unavailable" | "upstream_failure"
-    | "stripe_unavailable" | "stripe_failure" | "topup_session_created" | "topup_credited" | "topup_duplicate" | "webhook_rejected";
+    | "stripe_unavailable" | "stripe_failure" | "topup_session_created" | "topup_credited" | "topup_duplicate" | "webhook_rejected"
+    // `POST /v1/handoff` (handoff.ts, plan E16).
+    | "handoff_built";
   /** Server-chosen provider and model of the accepted batch (ids, not content). */
   relayLogModel?: string;
   /** License id (an opaque token id, not user content). */
@@ -68,7 +70,7 @@ export function routeTemplate(pathname: string): string {
   // The agent routes (agent-app.ts). Ids in the path (`/v1/keys/{id}`, `/v1/receipts/{id}`) are
   // collapsed to their template.
   if (["/v1/agents", "/v1/agents/challenge", "/v1/agents/me", "/v1/wallet", "/v1/wallet/topup", "/v1/wallet/topup/done",
-    "/v1/stripe/webhook", "/v1/quote", "/v1/receipts", "/mcp", "/.well-known/pricing.json"].includes(pathname)) return pathname;
+    "/v1/stripe/webhook", "/v1/quote", "/v1/receipts", "/v1/handoff", "/mcp", "/.well-known/pricing.json"].includes(pathname)) return pathname;
   // The agent-readable documents (plan E10, wellknown/app.ts): fixed paths, no ids.
   if (["/.well-known/mcp/server-card.json", "/.well-known/agent-card.json", "/.well-known/status.json", "/.well-known/mcp-config",
     "/health", "/openapi.json", "/llms.txt", "/llms-full.txt"].includes(pathname)) return pathname;

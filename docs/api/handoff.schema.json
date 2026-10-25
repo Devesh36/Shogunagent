@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shogunagent.dev/schemas/handoff.schema.json",
+  "title": "ShogunAgent state-of-work handoff v1",
+  "description": "The state of work one agent hands to another with a task (A2A data part). Its entities and facts are a strict subset of export v1 records: every field they carry is the export v1 field of the same name and type, Low-confidence rows never travel, and every row carries at least one provenance pointer. See docs/api/handoff.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "handoff_id", "created_at", "expires_at", "from_agent", "to_agent", "task", "entities", "facts", "truncated"],
+  "properties": {
+    "format": { "const": "shogunagent-handoff/v1" },
+    "handoff_id": { "type": "string", "pattern": "^hof_[A-Za-z0-9-]{8,64}$" },
+    "created_at": { "$ref": "#/$defs/ms" },
+    "expires_at": { "$ref": "#/$defs/ms" },
+    "from_agent": { "$ref": "#/$defs/agentId" },
+    "to_agent": { "$ref": "#/$defs/agentId" },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "query", "thread_key"],
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "query": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "thread_key": { "type": ["string", "null"], "maxLength": 256 }
+      }
+    },
+    "entities": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/entity" } },
+    "facts": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/fact" } },
+    "truncated": { "type": "boolean", "description": "The recall behind the handoff was cut to its token budget." }
+  },
+  "$defs": {
+    "ms": { "type": "integer", "description": "Unix time in milliseconds" },
+    "msOrNull": { "type": ["integer", "null"] },
+    "intOrNull": { "type": ["integer", "null"] },
+    "stringOrNull": { "type": ["string", "null"] },
+    "agentId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:@/-]+$" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "band": { "type": "string", "enum": ["high", "medium"], "description": "export v1's band without low: Low-confidence rows never travel in a handoff." },
+    "namespace": { "type": "string", "pattern": "^(world|agent_scratch:.+)$" },
+    "provenance": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id", "quote"],
+        "properties": {
+          "event_id": { "type": "integer" },
+          "quote": { "$ref": "#/$defs/stringOrNull" }
+        }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "kind", "id", "name", "confidence", "band", "provenance"],
+      "properties": {
+        "type": { "const": "entity" },
+        "kind": { "type": "string", "enum": ["person", "project"] },
+        "id": { "type": "integer" },
+        "name": { "type": "string", "minLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "summary": { "$ref": "#/$defs/stringOrNull" },
+        "status": { "type": ["string", "null"], "enum": ["active", "waiting", "paused", "done", null] },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "band": { "$ref": "#/$defs/band" },
+        "valid_from": { "$ref": "#/$defs/ms" },
+        "valid_to": { "$ref": "#/$defs/msOrNull" },
+        "updated_at": { "$ref": "#/$defs/ms" },
+        "actor": { "$ref": "#/$defs/stringOrNull" },
+        "namespace": { "$ref": "#/$defs/namespace" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "kind", "id", "text", "confidence", "band", "provenance"],
+      "properties": {
+        "type": { "const": "fact" },
+        "kind": { "type": "string", "enum": ["commitment", "open_loop"] },
+        "id": { "type": "integer" },
+        "subtype": { "type": "string", "enum": ["mine", "theirs", "reply_needed", "waiting_on_them", "review_pending", "decision_pending", "follow_up", "other"] },
+        "text": { "type": "string", "minLength": 1 },
+        "status": { "type": "string", "enum": ["open", "done", "overdue", "cancelled", "closed"] },
+        "due_at": { "$ref": "#/$defs/msOrNull" },
+        "counterparty_id": { "$ref": "#/$defs/intOrNull" },
+        "project_id": { "$ref": "#/$defs/intOrNull" },
+        "confidence": { "$ref": "#/$defs/confidence" },
+        "band": { "$ref": "#/$defs/band" },
+        "valid_from": { "$ref": "#/$defs/ms" },
+        "valid_to": { "$ref": "#/$defs/msOrNull" },
+        "updated_at": { "$ref": "#/$defs/ms" },
+        "actor": { "$ref": "#/$defs/stringOrNull" },
+        "namespace": { "$ref": "#/$defs/namespace" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    }
+  }
+}

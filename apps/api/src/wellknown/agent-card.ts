@@ -24,6 +24,7 @@
  */
 import { createHash, createPrivateKey, createPublicKey, sign, verify, type KeyObject } from "node:crypto";
 
+import { HANDOFF_FORMAT, HANDOFF_PATH, HANDOFF_SCHEMA_URL } from "../handoff.js";
 import generatedSkills from "./agent-skills.generated.json" with { type: "json" };
 import { DISPLAY_NAME, DOCS_URL, LONG_DESCRIPTION, PROVIDER, VERSION, mcpUrl, origin, wellknownLinks, type WellknownContext } from "./identity.js";
 
@@ -89,6 +90,13 @@ export function agentCard(ctx: WellknownContext, skills: GeneratedSkills = AGENT
       pricing: links.pricing,
       status: links.status,
       server_card: links.server_card,
+      // E16: where and in what shape to hand this principal's state of work to another agent (the
+      // `handoff` skill above, derived from SKILL.md, says when).
+      handoff: {
+        url: `${origin(ctx)}${HANDOFF_PATH}`, method: "POST", scope: "read", format: HANDOFF_FORMAT, schema: HANDOFF_SCHEMA_URL,
+        a2a_part: { kind: "data", metadata: { schema: HANDOFF_SCHEMA_URL } },
+        accept: "Ingest a received handoff into your own agent_scratch namespace (SDK acceptHandoff / accept_handoff), never the principal's world.",
+      },
     },
   };
 }
