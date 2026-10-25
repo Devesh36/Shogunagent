@@ -56,6 +56,9 @@ pub mod daily_delivery;
 pub mod db_backend;
 #[cfg(feature = "db")]
 pub mod tenancy;
+/// The `/memories` virtual filesystem over the world model (E6).
+#[cfg(feature = "db")]
+pub mod memfs;
 #[cfg(all(feature = "desktop", any(feature = "db", feature = "net")))]
 pub mod plan_mirrors;
 pub mod settings_seal;

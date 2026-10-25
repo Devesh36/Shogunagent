@@ -107,6 +107,15 @@ pub(super) fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
                 level: Level::L1,
             },
         ),
+        // E6-T2: the memory tool's file operations (`memory.fs`), the MCP arguments as the body.
+        ["v1", "memory", "fs"] => method_is(
+            method,
+            Method::Post,
+            Routed::Write {
+                tool: Tool::MemoryFs,
+                level: Level::L1,
+            },
+        ),
         ["v1", "memory", "recall"] => method_is(
             method,
             Method::Post,

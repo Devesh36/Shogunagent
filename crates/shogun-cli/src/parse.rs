@@ -496,6 +496,14 @@ fn parse_command(positionals: &[String]) -> Result<Command, CliError> {
             shogun_mcp::ingest_api::ingest_request(&body).map_err(CliError::BadInput)?;
             Ok(Command::Ingest { body: body.to_string() })
         }
+        // E6-T2: one `memory.fs` command as JSON, validated by the shared parser.
+        "fs" => {
+            let raw = join(rest).ok_or(CliError::MissingArgument("<json>"))?;
+            let body: serde_json::Value =
+                serde_json::from_str(&raw).map_err(|_| CliError::BadInput("fs takes one JSON object".into()))?;
+            shogun_mcp::memfs_tool::parse(&body).map_err(CliError::BadInput)?;
+            Ok(Command::Fs { body: body.to_string() })
+        }
         "recall" => {
             let mut args = serde_json::Map::new();
             let mut words = Vec::new();
@@ -2181,6 +2189,18 @@ mod tests {
     #[test]
     fn no_args_is_help() {
         assert_eq!(parse(&[]).unwrap().command, Command::Help);
+    }
+
+    /// E6-T2: `shogun fs <json>` is `memory.fs`, validated by the shared parser before it is sent.
+    #[test]
+    fn fs_takes_one_memory_tool_command() {
+        let inv = parse(&v(&["fs", r#"{"command":"view","path":"/memories"}"#])).unwrap();
+        assert_eq!(inv.command.tool(), Some(shogun_mcp::memory_api::Tool::MemoryFs));
+        let call = crate::wire::to_call(&inv.command, false).unwrap();
+        assert_eq!((call.method, call.path.as_str()), ("POST", "/v1/memory/fs"));
+        assert!(parse(&v(&["fs", r#"{"command":"view","path":"/etc/passwd"}"#])).is_err());
+        assert!(parse(&v(&["fs", "not json"])).is_err());
+        assert!(parse(&v(&["fs"])).is_err());
     }
 
     #[test]

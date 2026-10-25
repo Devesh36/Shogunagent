@@ -117,6 +117,10 @@ pub enum Tool {
     /// assembly (facts + dated evidence) cut to `budget_tokens`, High facts as facts and Medium
     /// ones prefixed `possibly:`. A read; free (invariant 10).
     MemoryRecall,
+    /// `/memories` as files (E6-T2): Anthropic's `memory_20250818` operations over the world-model
+    /// projection and the caller's scratch files. Writes to the caller's scratch edit it; writes
+    /// elsewhere become `memory.ingest` events. Local, L1.
+    MemoryFs,
     ActionsExecute,
     /// Poll a body-free L3 approval outcome.
     ActionsStatus,
@@ -455,6 +459,7 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryAppendNote,
     Tool::MemoryIngest,
     Tool::MemoryRecall,
+    Tool::MemoryFs,
     Tool::ActionsExecute,
     Tool::ActionsStatus,
     Tool::ActionsQuestions,
@@ -615,6 +620,7 @@ impl Tool {
             Tool::MemoryAppendNote => "memory.append_note",
             Tool::MemoryIngest => "memory.ingest",
             Tool::MemoryRecall => "memory.recall",
+            Tool::MemoryFs => "memory.fs",
             Tool::ActionsExecute => "actions.execute",
             Tool::ActionsStatus => "actions.status",
             Tool::ActionsQuestions => "actions.questions",
@@ -857,6 +863,9 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         // An agent's events / turns appended to the event log under an idempotency key (E4-T3):
         // local, replayable, nothing leaves the device — L1 like a note (plan §7.1).
         Tool::MemoryIngest => ApiLevel::Write(Level::L1),
+        // `/memories` file operations (E6-T2): a view reads, a write edits the caller's own
+        // scratch or records an ingest event — local and reversible, L1 like `memory.ingest`.
+        Tool::MemoryFs => ApiLevel::Write(Level::L1),
         // Pausing narrows what SHOGUN reads and runs directly (L1). Ending the user's pause
         // starts reading the screen again: the same "removes a privacy boundary" reason
         // `CaptureExclusionsSet` is L3, so the ceiling is L3 and that half is queued for the
@@ -999,6 +1008,9 @@ pub enum ToolGroup {
     Export,
     /// Translating text and drafting replies (issue #279). Text only; nothing is sent.
     Translate,
+    /// The `/memories` virtual filesystem (`memory.fs`, E6): the world model as files plus the
+    /// caller's scratch files. Served by every build and listed by default (`all`).
+    Files,
     /// Preferences that mirror Settings panes, plus device / support status.
     Settings,
 }
@@ -1018,6 +1030,7 @@ pub const ALL_GROUPS: &[ToolGroup] = EVERY_GROUP;
 #[cfg(not(feature = "desktop"))]
 pub const ALL_GROUPS: &[ToolGroup] = &[
     ToolGroup::Core,
+    ToolGroup::Files,
     ToolGroup::Import,
     ToolGroup::State,
     ToolGroup::Skills,
@@ -1028,6 +1041,7 @@ pub const ALL_GROUPS: &[ToolGroup] = &[
 /// the table a test or a doc walks to name every tool's group.
 pub const EVERY_GROUP: &[ToolGroup] = &[
     ToolGroup::Core,
+    ToolGroup::Files,
     ToolGroup::Import,
     ToolGroup::State,
     ToolGroup::Meeting,
@@ -1087,6 +1101,7 @@ impl ToolGroup {
             ToolGroup::Web => "web",
             ToolGroup::Export => "export",
             ToolGroup::Translate => "translate",
+            ToolGroup::Files => "files",
             ToolGroup::Settings => "settings",
         }
     }
@@ -1129,6 +1144,7 @@ pub fn tool_group(tool: Tool) -> ToolGroup {
         | Tool::WikiEvidence
         | Tool::ActionsExecute
         | Tool::ActionsStatus => ToolGroup::Core,
+        Tool::MemoryFs => ToolGroup::Files,
         // Imports are user-reviewed flows (preview, then commit what the user chose) that write
         // to memory and carry the largest input schema; not an everyday mid-task tool.
         Tool::MemoryImportPreview
@@ -2679,6 +2695,7 @@ mod tests {
                             | Tool::MemoryNotesChange
                             | Tool::MemoryAppendNote
                             | Tool::MemoryIngest
+                            | Tool::MemoryFs
                             | Tool::CaptureSetPaused
                             | Tool::LessonsSetActive
                             | Tool::StateDisputesResolve

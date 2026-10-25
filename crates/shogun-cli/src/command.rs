@@ -59,6 +59,9 @@ pub enum Command {
     /// `shogun recall <query> [--budget-tokens N] [--include-scratch]` → `memory.recall`
     /// (E4-T3): `body` is the request JSON, validated at parse.
     Recall { body: String },
+    /// `shogun fs <json>` → `memory.fs` (E6-T2): one memory-tool command (`view`, `create`,
+    /// `str_replace`, `insert`, `delete`, `rename`) over `/memories`; `body` is validated at parse.
+    Fs { body: String },
     People(ListOrGet),
     Projects(ListOrGet),
     Commitments(ListOrGet),
@@ -679,6 +682,7 @@ impl Command {
             Command::Pack { .. } => Tool::MemoryGetContextPack,
             Command::Ingest { .. } => Tool::MemoryIngest,
             Command::Recall { .. } => Tool::MemoryRecall,
+            Command::Fs { .. } => Tool::MemoryFs,
             Command::People(ListOrGet::List) => Tool::StatePeopleList,
             Command::People(ListOrGet::Get { .. }) => Tool::StatePeopleGet,
             Command::Projects(ListOrGet::List) => Tool::StateProjectsList,

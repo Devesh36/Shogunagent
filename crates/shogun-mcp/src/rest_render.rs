@@ -317,6 +317,9 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
     if let Some(response) = ingest_response(&routed, req, backend) {
         return response;
     }
+    if let Some(response) = memory_fs_response(&routed, req, backend) {
+        return response;
+    }
     if let Some(response) = steer_response(&routed, req, backend) {
         return response;
     }
@@ -906,6 +909,31 @@ fn ingest_response<B: MemoryBackend + ?Sized>(
         .unwrap_or(serde_json::Value::Null);
     Some(match crate::ingest_api::serve(tool, &args, backend) {
         Ok(text) => (200, text),
+        Err(crate::ingest_api::Refusal::BadArguments(message)) => {
+            let code = message.split(':').next().unwrap_or("invalid_request").to_string();
+            (400, serde_json::json!({ "error": code, "message": message }).to_string())
+        }
+        Err(crate::ingest_api::Refusal::Unavailable(code)) => {
+            (503, serde_json::json!({ "error": code }).to_string())
+        }
+    })
+}
+
+/// `memory.fs` on REST (E6-T2): `POST /v1/memory/fs`, the MCP arguments as the body. A
+/// tool-level error (a missing path, a duplicate `old_str`) is still a 200 with `result.error`,
+/// as the memory tool answers it; a malformed body is 400. `None` for every other route.
+fn memory_fs_response<B: MemoryBackend + ?Sized>(
+    routed: &Routed,
+    req: &RestRequest,
+    backend: &B,
+) -> Option<(u16, String)> {
+    if !matches!(routed, Routed::Write { tool: Tool::MemoryFs, .. }) {
+        return None;
+    }
+    let args = serde_json::from_str::<serde_json::Value>(req.body.as_deref().unwrap_or("{}"))
+        .unwrap_or(serde_json::Value::Null);
+    Some(match crate::memfs_tool::serve(&args, backend) {
+        Ok((text, _)) => (200, text),
         Err(crate::ingest_api::Refusal::BadArguments(message)) => {
             let code = message.split(':').next().unwrap_or("invalid_request").to_string();
             (400, serde_json::json!({ "error": code, "message": message }).to_string())

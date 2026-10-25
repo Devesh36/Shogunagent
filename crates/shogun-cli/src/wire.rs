@@ -241,6 +241,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Pack { query } => get(low(format!("/v1/memory/context_pack?q={}", encode(query)))),
         Command::Ingest { body } => post("/v1/memory/ingest".into(), body.clone()),
         Command::Recall { body } => post("/v1/memory/recall".into(), body.clone()),
+        Command::Fs { body } => post("/v1/memory/fs".into(), body.clone()),
         Command::People(w) => get(low(state_path("people", w))),
         Command::Projects(w) => get(low(state_path("projects", w))),
         Command::Commitments(w) => get(low(state_path("commitments", w))),

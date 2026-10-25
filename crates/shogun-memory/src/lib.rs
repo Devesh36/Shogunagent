@@ -62,6 +62,7 @@ pub mod recompute;
 pub mod retention;
 pub mod people_quality;
 pub mod sanitize;
+pub mod scratch_files;
 pub mod screen_frames;
 pub mod search;
 pub mod search_documents;
@@ -442,7 +443,7 @@ pub fn open_in_memory() -> Result<Connection, MemoryError> {
 /// The highest migration bundled in `src/migrations`. Tests assert against this rather than a
 /// literal so that adding a migration updates one place, not five — and so a *drop* in version
 /// (a migration file lost in a merge) still fails loudly.
-pub const LATEST_SCHEMA_VERSION: u32 = 99;
+pub const LATEST_SCHEMA_VERSION: u32 = 100;
 
 /// The schema version the migrations bring the database to (max applied version), or `None`
 /// if no migrations are recorded.
