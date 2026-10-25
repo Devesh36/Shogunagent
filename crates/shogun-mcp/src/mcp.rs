@@ -532,7 +532,10 @@ impl<B: MemoryBackend> McpServer<B> {
         match method {
             "initialize" => id.map(|id| result(id, self.initialize(req.get("params")))),
             // notifications carry no id and get no response.
-            "notifications/initialized" | "notifications/cancelled" => None,
+            // A notification method sent WITH an id is a request (JSON-RPC 2.0 §4.1) and must be
+            // answered, or the client waits forever (found by the E38 property test): an empty
+            // result, as for `ping`.
+            "notifications/initialized" | "notifications/cancelled" => id.map(|id| result(id, json!({}))),
             "tools/list" => id.map(|id| match self.session_access() {
                 Some((scope, access, _)) => result(id, self.tools_list(scope, access)),
                 None => error(id, TOKEN_INVALID_CODE, self.session_invalid_message()),

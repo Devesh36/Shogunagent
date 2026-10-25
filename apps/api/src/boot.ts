@@ -76,6 +76,14 @@ import { FetchDeepgramGateway } from "./deepgram.js";
  *                              shipped price, and an unknown model never prices below
  *                              `UNKNOWN_MODEL_FLOOR`.
  * - METRICS_TOKEN            — optional bearer for GET /metrics (FR-SVC-06). Unset = 404.
+ *                              `?format=prometheus` (or `Accept: text/plain`) answers the E37
+ *                              Prometheus text (observability.ts).
+ * - OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_TRACES_ENDPOINT — optional, off by default:
+ *                              export body-free request spans to an OTLP/HTTP collector (E37,
+ *                              observability.ts `otlpConfigFromEnv`). https, or http to loopback.
+ * - OTEL_EXPORTER_OTLP_HEADERS — secret, optional: `k=v,k2=v2` sent to the collector only.
+ * - OTEL_SERVICE_NAME        — default `shogunagent-gateway`.
+ * - OTEL_TRACES_SAMPLER_ARG  — span sample ratio 0–1 (default 1).
  * - TYPESAFE_API_KEY         — the operator's TypeSafe key for Jev form decisions
  *                              (`POST /v1/ai/form_decide`, issue #1144 / #1101 D12). A secret,
  *                              same secrecy as the provider keys above. Optional at boot so a
@@ -185,6 +193,7 @@ import { releaseTrustedKeysFromEnv, type TrustedKeys } from "./auth.js";
 import { FetchAnthropicGateway, UpstreamError, type AnthropicGateway } from "./gateway.js";
 import { operational, type LogFn } from "./logging.js";
 import { RelayMetrics } from "./metrics.js";
+import { OtlpConfigError, OtlpTraceExporter, fetchOtlpPost, otlpConfigFromEnv, type OtlpConfig } from "./observability.js";
 import { batchProviderFromEnv, setBatchProvider, type BatchProvider } from "./models.js";
 import { openAiReviewer } from "./review.js";
 import { OpenAiBatchGateway, RoutingGateway } from "./openai-gateway.js";
@@ -297,6 +306,8 @@ export interface RelayConfig {
   settleMaxPerTick: number;
   settleRecheckSec: number;
   metricsToken?: string;
+  /** E37: the OTLP trace export, when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Absent = off. */
+  otlp?: OtlpConfig;
   /** The operator's TypeSafe key (Jev form decisions). Absent = the form route answers 503. */
   typesafeApiKey?: string;
   /** `RELAY_DENY_SUBJECTS`: licence ids / `account:<acc>` subjects refused before their tokens
@@ -596,6 +607,12 @@ export function relayConfigFromEnv(env: EnvRecord): RelayConfig {
   const settleEverySec = intFromEnv(env, "SETTLE_INTERVAL_SECONDS", DEFAULT_SETTLE_INTERVAL_SECONDS, 0, 86_400);
   const settleMaxPerTick = intFromEnv(env, "SETTLE_MAX_PER_TICK", DEFAULT_SETTLE_MAX_PER_TICK, 1, MAX_SETTLE_MAX_PER_TICK);
   const settleRecheckSec = intFromEnv(env, "SETTLE_RECHECK_SECONDS", DEFAULT_SETTLE_RECHECK_SECONDS, 0, 86_400);
+  let otlp: OtlpConfig | undefined;
+  try {
+    otlp = otlpConfigFromEnv(env, "shogunagent-gateway");
+  } catch (e) {
+    throw new BootError(e instanceof OtlpConfigError ? e.message : "invalid OTEL_EXPORTER_OTLP_* settings");
+  }
 
   // Per-licence daily spend budgets (audit 2026-10-10 H1). Always on: a licence is cents a day,
   // whatever the global breaker still has.
@@ -656,6 +673,7 @@ export function relayConfigFromEnv(env: EnvRecord): RelayConfig {
     asrEnabled: env.ASR_ENABLED === "1",
     ...(env.ASR_ALLOWED_SUBJECTS !== undefined ? { asrAllowedSubjects: env.ASR_ALLOWED_SUBJECTS.split(",").map(value => value.trim()).filter(Boolean) } : {}),
     ...(env.METRICS_TOKEN ? { metricsToken: env.METRICS_TOKEN } : {}),
+    ...(otlp ? { otlp } : {}),
     ...(env.TYPESAFE_API_KEY?.trim() ? { typesafeApiKey: env.TYPESAFE_API_KEY.trim() } : {}),
     ...(env.RELAY_DENY_SUBJECTS?.trim() ? { denySubjects: env.RELAY_DENY_SUBJECTS.split(",").map(value => value.trim()).filter(Boolean) } : {}),
     ...(agent ? { agent } : {}),
@@ -735,6 +753,8 @@ export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurs
  * but keeps one metrics window and one gateway per isolate). */
 export interface RelayShared {
   metrics?: RelayMetrics;
+  /** E37: the per-isolate span buffer (`newTraceExporter`), when OTLP export is on. */
+  traceExporter?: OtlpTraceExporter;
   gateway?: AnthropicGateway;
   /** The provider-side cleanup that rides the sweep (`providerGateways`). */
   orphanSweep?: () => Promise<number>;
@@ -754,6 +774,14 @@ export interface Relay {
   settlementDeps: SettlementDeps;
   metrics: RelayMetrics;
   gateway: AnthropicGateway;
+  /** E37: present when OTLP export is configured; the Node entry flushes it on a timer. */
+  traceExporter?: OtlpTraceExporter;
+}
+
+/** E37: the OTLP span exporter for a config, or `undefined` when export is off. One per Node
+ * process / Worker isolate, like the metrics window it reports its own failures into. */
+export function newTraceExporter(config: Pick<RelayConfig, "otlp">, metrics: RelayMetrics): OtlpTraceExporter | undefined {
+  return config.otlp ? new OtlpTraceExporter(config.otlp, fetchOtlpPost(config.otlp), metrics.ops) : undefined;
 }
 
 /** The in-process metrics window for a config (one per Node process, one per Worker isolate). */
@@ -782,6 +810,7 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
   const provided = shared.gateway ? { gateway: shared.gateway, orphanSweep: shared.orphanSweep } : providerGateways(config, log);
   const gateway = provided.gateway;
   const metrics = shared.metrics ?? newMetrics(config);
+  const traceExporter = shared.traceExporter ?? newTraceExporter(config, metrics);
   // E26: the operator client to the sidecar (teams, grants, audit export, purge), when configured.
   const enterpriseSidecar = config.agent?.enterprise?.sidecar ? httpEnterpriseSidecar(config.agent.enterprise.sidecar.url, config.agent.enterprise.sidecar.adminToken) : undefined;
   // E34: the hosted /mcp relay to the principal's sidecar, when configured.
@@ -806,6 +835,7 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
     ...(shared.now ? { now: shared.now } : {}),
     ...(config.spendBreaker ? { spendBreaker: config.spendBreaker } : {}),
     ...(config.metricsToken ? { metricsToken: config.metricsToken } : {}),
+    ...(traceExporter ? { traceExporter } : {}),
     ...(config.denySubjects ? { denySubjects: config.denySubjects } : {}),
     // The agent routes (E3 / E9): the agent store, the PoW and cap settings, Stripe when
     // configured, and the licence ledger + breaker so agent spend shares the company's day. The
@@ -917,6 +947,7 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
     settlementDeps,
     metrics,
     gateway,
+    ...(traceExporter ? { traceExporter } : {}),
   };
 }
 

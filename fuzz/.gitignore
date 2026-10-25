@@ -1,0 +1,6 @@
+target/
+corpus/
+artifacts/
+coverage/
+# Resolved fresh by cargo-fuzz on nightly; the main workspace lock is the audited one.
+Cargo.lock

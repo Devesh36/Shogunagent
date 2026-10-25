@@ -16,6 +16,7 @@
  * authority on spend.
  */
 import { logId } from "./logging.js";
+import { OpsMetrics } from "./observability.js";
 
 /** Histogram bucket upper bounds in ms. p95 is reported as the bucket bound it falls in — coarse,
  * but it answers "is it over 2 s" (the alert) without keeping every sample. */
@@ -81,6 +82,10 @@ export class RelayMetrics {
   private readonly routes = new Map<string, RouteStats>();
   private date = "";
   private plans = new Map<string, PlanDay>();
+  /** E37: per-label-set counters and latency histograms (route, method, status, `Mcp-Method`,
+   * `Mcp-Name`), rendered as Prometheus text. Lives here so it is shared exactly like this window
+   * (one per Node process / Worker isolate). */
+  readonly ops = new OpsMetrics();
 
   /** `planCaps` overrides the per-licence cap for a plan that has its own (the trial's). */
   constructor(

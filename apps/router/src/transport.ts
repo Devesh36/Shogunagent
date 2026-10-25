@@ -7,6 +7,8 @@
  *
  * `fetch` is called here and nowhere else in src/ (the ADR's TypeScript analogue of invariant 9).
  */
+import { createHash, timingSafeEqual } from "node:crypto";
+
 import type { Json, ProviderAuth, RunRequest } from "../connectors/types.js";
 import type { Secret } from "./secret.js";
 import type { RunSettlement } from "./settlement.js";
@@ -217,6 +219,63 @@ export function postgresConnector(connectionString: string): SqlConnector {
     } finally {
       await sql.end({ timeout: 1 }).catch(() => undefined);
     }
+  };
+}
+
+/** Parse `OTEL_EXPORTER_OTLP_HEADERS` (`k=v,k2=v2`, values URL-decoded). Throws a message that
+ * names the variable and never its value. */
+export function parseOtlpHeaders(raw: string | undefined): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const text = raw?.trim();
+  if (!text) return headers;
+  for (const pair of text.split(",")) {
+    const i = pair.indexOf("=");
+    const key = i > 0 ? pair.slice(0, i).trim().toLowerCase() : "";
+    let value: string | undefined;
+    try {
+      value = i > 0 ? decodeURIComponent(pair.slice(i + 1).trim()) : undefined;
+    } catch {
+      value = undefined;
+    }
+    if (!/^[a-z0-9-]+$/.test(key) || value === undefined || /[\r\n]/.test(value)) throw new TransportError("credential_missing", "invalid OTEL_EXPORTER_OTLP_HEADERS: expected k=v,k2=v2");
+    headers[key] = value;
+  }
+  return headers;
+}
+
+/**
+ * The OTLP span poster (E37): POSTs one OTLP JSON body of body-free spans to the operator's
+ * collector. Lives here for the same reason as the settlement poster: `OTEL_EXPORTER_OTLP_HEADERS`
+ * (the collector's credential) is read at send time and never leaves this function. Only the
+ * collector's status is read back.
+ */
+export function createOtlpPoster(opts: { env: CredentialEnv; url: string; fetch?: typeof fetch; timeoutMs?: number }): (body: string) => Promise<{ status: number }> {
+  const doFetch = opts.fetch ?? fetch;
+  return async (body) => {
+    const headers = parseOtlpHeaders(opts.env["OTEL_EXPORTER_OTLP_HEADERS"]);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 5_000);
+    try {
+      const res = await doFetch(opts.url, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body, signal: controller.signal });
+      await res.body?.cancel().catch(() => undefined);
+      return { status: res.status };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+/**
+ * The `/metrics` bearer check (E37): `ROUTER_METRICS_TOKEN` is a secret, so it is read here.
+ * `disabled` when unset (the route answers 404), else a constant-time digest comparison.
+ */
+export function createMetricsAuthorizer(env: CredentialEnv): (authorization: string | undefined) => "ok" | "unauthorized" | "disabled" {
+  const token = env["ROUTER_METRICS_TOKEN"];
+  const expected = token ? createHash("sha256").update(token).digest() : undefined;
+  return (authorization) => {
+    if (!expected) return "disabled";
+    const presented = (authorization ?? "").replace(/^Bearer\s+/i, "");
+    return timingSafeEqual(createHash("sha256").update(presented).digest(), expected) ? "ok" : "unauthorized";
   };
 }
 

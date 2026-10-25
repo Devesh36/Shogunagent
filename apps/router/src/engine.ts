@@ -5,12 +5,17 @@
 import type { Json } from "../connectors/types.js";
 import { discover, type PersonalContext } from "./discover.js";
 import { inspect } from "./inspect.js";
+import type { RouterOps } from "./observability.js";
 import { errorBody } from "./responses.js";
 import { run, type RunDeps } from "./run.js";
 import type { Secret } from "./secret.js";
 import { parseVerbInput, type VerbName } from "./verbs.js";
 
-export type RouterDeps = RunDeps;
+export type RouterDeps = RunDeps & {
+  /** E37: request metrics (Prometheus at `/metrics`) and the opt-in OTLP span export. Absent = a
+   * per-app metrics window and no `/metrics` route answer beyond 404. */
+  ops?: RouterOps;
+};
 
 export interface VerbResult {
   status: number;

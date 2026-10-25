@@ -7,6 +7,8 @@
 # scheduled for removal or relocation in docs/implementation-plan.md.
 [workspace]
 resolver = "2"
+# The cargo-fuzz targets (plan E38) are their own nightly-only workspace: see fuzz/README.md.
+exclude = ["fuzz"]
 members = [
     "crates/shogun-core",
     "crates/shogun-memory",
