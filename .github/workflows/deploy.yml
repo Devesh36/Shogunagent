@@ -1,0 +1,167 @@
+name: deploy
+
+# Manual-only deploy of one Cloudflare Worker (E48; runbook: docs/deploy/production.md §3 and §4).
+# - Runs only when started by hand (workflow_dispatch) from main. Nothing deploys on push, tag or PR;
+#   scripts/check-workflow-yaml.py fails if this workflow gains another trigger.
+# - component: `relay` (apps/api, Worker `shogunai-relay`) or `router` (apps/router, Worker
+#   `shogunagent-router`). environment: `staging` or `production`, which is also the GitHub
+#   environment the deploy job runs in: configure each with the owner as a required reviewer and
+#   `main` as the only deployment branch, so every run waits for an approval.
+# - Dry run by default: `wrangler deploy --dry-run` (bundle only, nothing uploaded) unless `confirm`
+#   is typed exactly as `deploy-<component>-<environment>`.
+# - Secrets by name only, from the chosen environment: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID.
+#   No provider key, database URL or Worker secret is in GitHub: Worker secrets are set with
+#   `wrangler secret put` by the owner (runbook §5).
+# - Staging deploys from the environment variable WRANGLER_STAGING_CONFIG (the whole staging
+#   wrangler.jsonc of runbook §6, kept out of git); production deploys the committed wrangler.jsonc.
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: "Worker to deploy"
+        required: true
+        type: choice
+        options: ["relay", "router"]
+      environment:
+        description: "Target (also the GitHub environment whose reviewers must approve)"
+        required: true
+        type: choice
+        options: ["staging", "production"]
+      confirm:
+        description: "Type deploy-<component>-<environment> to upload. Anything else (the default) is a dry run."
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.component }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify ${{ inputs.component }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Deploy from main only (this run is on ${GITHUB_REF})." >&2
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: typecheck, test, bundle check
+        env:
+          COMPONENT: ${{ inputs.component }}
+        run: |
+          set -euo pipefail
+          case "$COMPONENT" in
+            relay)
+              pnpm --filter @shogun-ai/api typecheck
+              pnpm --filter @shogun-ai/api test
+              pnpm --filter @shogun-ai/api check:bundle
+              ;;
+            router)
+              pnpm --filter @shogunagent/router typecheck
+              pnpm --filter @shogunagent/router test
+              pnpm --filter @shogunagent/router build:catalog
+              pnpm --filter @shogunagent/router check:bundle
+              ;;
+            *) echo "unknown component $COMPONENT" >&2; exit 1 ;;
+          esac
+
+  deploy:
+    name: ${{ inputs.confirm == format('deploy-{0}-{1}', inputs.component, inputs.environment) && 'deploy' || 'dry run' }} ${{ inputs.component }} to ${{ inputs.environment }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: main only
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Deploy from main only (this run is on ${GITHUB_REF})." >&2
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - id: target
+        name: resolve the Worker and its config
+        env:
+          COMPONENT: ${{ inputs.component }}
+          TARGET_ENV: ${{ inputs.environment }}
+          CONFIRM: ${{ inputs.confirm }}
+          STAGING_CONFIG: ${{ vars.WRANGLER_STAGING_CONFIG }}
+        run: |
+          set -euo pipefail
+          case "$COMPONENT" in
+            relay) dir=apps/api; filter=@shogun-ai/api; prod_name=shogunai-relay ;;
+            router) dir=apps/router; filter=@shogunagent/router; prod_name=shogunagent-router ;;
+            *) echo "unknown component $COMPONENT" >&2; exit 1 ;;
+          esac
+          if [ "$TARGET_ENV" = "production" ]; then
+            config=wrangler.jsonc
+          else
+            if [ -z "$STAGING_CONFIG" ]; then
+              echo "Set the staging environment variable WRANGLER_STAGING_CONFIG to the staging wrangler config (docs/deploy/production.md §6)." >&2
+              exit 1
+            fi
+            config=wrangler.staging.jsonc
+            printf '%s\n' "$STAGING_CONFIG" > "$dir/$config"
+            # A staging config must never carry the production Worker's name.
+            if grep -Eq "\"name\"[[:space:]]*:[[:space:]]*\"$prod_name\"" "$dir/$config"; then
+              echo "WRANGLER_STAGING_CONFIG names the production Worker ($prod_name); refusing." >&2
+              exit 1
+            fi
+          fi
+          if grep -q "REPLACE_WITH" "$dir/$config"; then
+            echo "$dir/$config still holds a REPLACE_WITH placeholder; refusing." >&2
+            exit 1
+          fi
+          if [ "$CONFIRM" = "deploy-$COMPONENT-$TARGET_ENV" ]; then mode=deploy; else mode=dry-run; fi
+          {
+            echo "dir=$dir"
+            echo "filter=$filter"
+            echo "config=$config"
+            echo "mode=$mode"
+          } >> "$GITHUB_OUTPUT"
+          echo "Target: $COMPONENT ($dir, $config) to $TARGET_ENV, mode $mode"
+      - name: wrangler deploy --dry-run (nothing uploaded)
+        if: steps.target.outputs.mode != 'deploy'
+        env:
+          FILTER: ${{ steps.target.outputs.filter }}
+          CONFIG: ${{ steps.target.outputs.config }}
+        run: pnpm --filter "$FILTER" exec wrangler deploy --config "$CONFIG" --dry-run --outdir dist/deploy-dry-run
+      - name: wrangler deploy
+        if: steps.target.outputs.mode == 'deploy'
+        env:
+          FILTER: ${{ steps.target.outputs.filter }}
+          CONFIG: ${{ steps.target.outputs.config }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm --filter "$FILTER" exec wrangler deploy --config "$CONFIG"
+      - name: health check
+        if: steps.target.outputs.mode == 'deploy' && vars.DEPLOY_HEALTH_URL != ''
+        env:
+          HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 10 "$HEALTH_URL" > /dev/null; then echo "healthy"; exit 0; fi
+            sleep 10
+          done
+          echo "$HEALTH_URL did not answer 2xx; roll back with wrangler rollback (docs/deploy/production.md §8)." >&2
+          exit 1
