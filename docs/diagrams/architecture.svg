@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="620" viewBox="0 0 1180 620" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">
+  <defs>
+    <pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#cfd6e1"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6577"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1180" height="620" fill="#ffffff"/>
+  <rect x="20" y="20" width="1140" height="560" fill="url(#dots)" stroke="#d9dfe8"/>
+
+  <!-- ===== RAW DATA ===== -->
+  <text x="48" y="60" fill="#5b6577" letter-spacing="2">RAW DATA</text>
+
+  <g stroke="#d9dfe8" fill="#f4f6f9">
+    <rect x="48" y="80" width="150" height="54"/>
+    <rect x="48" y="150" width="150" height="54"/>
+    <rect x="48" y="220" width="150" height="54"/>
+    <rect x="48" y="290" width="150" height="54"/>
+    <rect x="48" y="360" width="150" height="54"/>
+  </g>
+  <g fill="#1b2230">
+    <text x="60" y="102">AGENT TURNS</text>
+    <text x="60" y="120" fill="#5b6577" font-size="10">memory.ingest · /memories writes</text>
+    <text x="60" y="172">CONNECTORS</text>
+    <text x="60" y="190" fill="#5b6577" font-size="10">Gmail · Calendar · Slack · GitHub …</text>
+    <text x="60" y="242">ROUTER RUNS</text>
+    <text x="60" y="260" fill="#5b6577" font-size="10">tool × task × outcome</text>
+    <text x="60" y="312">DEVICE CAPTURE</text>
+    <text x="60" y="330" fill="#5b6577" font-size="10">ShogunAI Mac app (premium)</text>
+    <text x="60" y="382">IMPORTS</text>
+    <text x="60" y="400" fill="#5b6577" font-size="10">ChatGPT · Claude · Cursor exports</text>
+  </g>
+
+  <!-- feed lines into the engine -->
+  <g stroke="#9aa5b8" stroke-dasharray="3 3" fill="none">
+    <path d="M198,107 H230 V247 H262"/>
+    <path d="M198,177 H230"/>
+    <path d="M198,247 H230"/>
+    <path d="M198,317 H230"/>
+    <path d="M198,387 H230 V247"/>
+  </g>
+
+  <!-- ===== ENGINE ===== -->
+  <rect x="262" y="60" width="560" height="470" fill="#ffffff" stroke="#2c4a8a" stroke-width="1.5"/>
+  <text x="278" y="52" fill="#1b2230" letter-spacing="2" font-weight="600">SHOGUNAGENT · ONE STORE PER PRINCIPAL</text>
+
+  <!-- event log -->
+  <rect x="282" y="86" width="150" height="76" fill="#f4f6f9" stroke="#d9dfe8"/>
+  <text x="294" y="108" fill="#1b2230">EVENT LOG</text>
+  <text x="294" y="124" fill="#5b6577" font-size="10">append-only · dedup</text>
+  <text x="294" y="138" fill="#5b6577" font-size="10">redact · injection gate</text>
+  <text x="294" y="152" fill="#5b6577" font-size="10">actor + namespace</text>
+
+  <!-- dream cycle -->
+  <rect x="464" y="86" width="150" height="76" fill="#2c4a8a"/>
+  <text x="476" y="108" fill="#ffffff">DREAM CYCLE</text>
+  <text x="476" y="124" fill="#dbe3f5" font-size="10">hourly · sessionize</text>
+  <text x="476" y="138" fill="#dbe3f5" font-size="10">extract · consolidate</text>
+  <text x="476" y="152" fill="#dbe3f5" font-size="10">supersede · decay</text>
+
+  <!-- state -->
+  <rect x="646" y="86" width="156" height="76" fill="#f4f6f9" stroke="#d9dfe8"/>
+  <text x="658" y="108" fill="#1b2230">STATE</text>
+  <text x="658" y="124" fill="#5b6577" font-size="10">people · projects</text>
+  <text x="658" y="138" fill="#5b6577" font-size="10">commitments · open loops</text>
+  <text x="658" y="152" fill="#2c4a8a" font-size="10">quote + confidence</text>
+
+  <g stroke="#5b6577" fill="none" marker-end="url(#arrow)">
+    <path d="M432,124 H462"/>
+    <path d="M614,124 H644"/>
+  </g>
+
+  <!-- derived layer -->
+  <rect x="282" y="190" width="520" height="54" fill="#ffffff" stroke="#d9dfe8" stroke-dasharray="4 3"/>
+  <text x="294" y="212" fill="#1b2230">DERIVED</text>
+  <text x="294" y="230" fill="#5b6577" font-size="10">entity pages · period summaries · relations (valid_from / valid_to) · tool-run preferences · tombstones</text>
+  <path d="M724,162 V188" stroke="#5b6577" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- delivery shapes -->
+  <text x="282" y="286" fill="#5b6577" letter-spacing="2" font-size="11">DELIVERY SHAPES</text>
+  <g stroke="#d9dfe8" fill="#f4f6f9">
+    <rect x="282" y="298" width="160" height="60"/>
+    <rect x="462" y="298" width="160" height="60"/>
+    <rect x="642" y="298" width="160" height="60"/>
+  </g>
+  <g fill="#1b2230">
+    <text x="294" y="320">CONTEXT PACK</text>
+    <text x="294" y="336" fill="#5b6577" font-size="10">memory.recall · budget_tokens</text>
+    <text x="294" y="350" fill="#5b6577" font-size="10">High = fact · Medium = possibly:</text>
+    <text x="474" y="320">/memories FILES</text>
+    <text x="474" y="336" fill="#5b6577" font-size="10">INDEX.md · people/ · open_loops.md</text>
+    <text x="474" y="350" fill="#5b6577" font-size="10">memory_20250818 compatible</text>
+    <text x="654" y="320">MCP TOOLS · REST · CLI</text>
+    <text x="654" y="336" fill="#5b6577" font-size="10">21 frozen core names</text>
+    <text x="654" y="350" fill="#5b6577" font-size="10">Streamable HTTP · stateless</text>
+  </g>
+  <path d="M542,244 V296" stroke="#5b6577" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- permission gate -->
+  <rect x="282" y="394" width="520" height="60" fill="#fff7f4" stroke="#b5432a"/>
+  <text x="294" y="416" fill="#b5432a">PERMISSION GATE ON EVERY ACTION</text>
+  <text x="294" y="434" fill="#1b2230" font-size="10">L1 reads and local writes run now · L2 one-tap confirm (MRTR input_required) · L3 external send / payment = human approval URL</text>
+  <text x="294" y="447" fill="#5b6577" font-size="10">enforced by type; the same for every agent; reads are free</text>
+
+  <!-- metering strip -->
+  <rect x="282" y="470" width="520" height="40" fill="#f4f6f9" stroke="#d9dfe8"/>
+  <text x="294" y="488" fill="#1b2230">GATEWAY</text>
+  <text x="360" y="488" fill="#5b6577" font-size="10">agent keys · wallet + 402 · caps · metered from Mcp-Method / Mcp-Name headers only · bodies never stored</text>
+  <text x="294" y="503" fill="#5b6577" font-size="10">ROUTER  discover / inspect / run · price inside the score · first-party labeled · runs write back to the event log</text>
+
+  <!-- ===== INJECT ===== -->
+  <text x="860" y="60" fill="#5b6577" letter-spacing="2">INJECT VIA</text>
+  <g stroke="#d9dfe8" fill="#f4f6f9">
+    <rect x="860" y="80" width="270" height="44"/>
+    <rect x="860" y="136" width="270" height="44"/>
+    <rect x="860" y="192" width="270" height="44"/>
+    <rect x="860" y="248" width="270" height="44"/>
+  </g>
+  <g fill="#1b2230">
+    <text x="872" y="100">MCP (Claude Code · Cursor · Codex)</text>
+    <text x="872" y="116" fill="#5b6577" font-size="10">auto-installed read connection · SKILL.md</text>
+    <text x="872" y="156">withShogunAgent() middleware</text>
+    <text x="872" y="172" fill="#5b6577" font-size="10">recall before the call · ingest after</text>
+    <text x="872" y="212">memory tool filesystem</text>
+    <text x="872" y="228" fill="#5b6577" font-size="10">Anthropic memory_20250818 · zero integration</text>
+    <text x="872" y="268">A2A Agent Card handoff</text>
+    <text x="872" y="284" fill="#5b6577" font-size="10">typed state-of-work object · export v1</text>
+  </g>
+  <g stroke="#5b6577" fill="none" marker-end="url(#arrow)">
+    <path d="M822,328 H840 V102 H858"/>
+    <path d="M840,158 H858"/>
+    <path d="M840,214 H858"/>
+    <path d="M840,270 H858"/>
+  </g>
+
+  <!-- agents -->
+  <rect x="860" y="330" width="270" height="124" fill="#ffffff" stroke="#2c4a8a" stroke-width="1.5"/>
+  <text x="872" y="352" fill="#1b2230" font-weight="600">YOUR AGENTS' CONTEXT</text>
+  <text x="872" y="372" fill="#5b6577" font-size="10">many agents, many vendors, one principal</text>
+  <text x="872" y="392" fill="#1b2230" font-size="11">What is true now:</text>
+  <text x="872" y="408" fill="#5b6577" font-size="10">who · what was committed · what is pending</text>
+  <text x="872" y="424" fill="#5b6577" font-size="10">each fact with its source sentence</text>
+  <text x="872" y="440" fill="#2c4a8a" font-size="10">writes come back as events → state (loop)</text>
+  <path d="M995,454 V480 H822" stroke="#2c4a8a" stroke-dasharray="3 3" fill="none" marker-end="url(#arrow)"/>
+
+  <!-- local-first note -->
+  <text x="860" y="500" fill="#5b6577" font-size="10">LOCAL-FIRST: the same engine runs on the device;</text>
+  <text x="860" y="514" fill="#5b6577" font-size="10">hosted adds sync, remote approvals and the wallet.</text>
+  <text x="860" y="528" fill="#5b6577" font-size="10">Export is always free (export v1, tombstones).</text>
+
+  <!-- caption -->
+  <text x="48" y="560" fill="#5b6577" font-size="11">Figure 1. Raw data enters one encrypted store per principal; the Dream Cycle extracts, consolidates, supersedes and decays typed state with a quote and a confidence on every row;</text>
+  <text x="48" y="575" fill="#5b6577" font-size="11">agents receive it as a budgeted context pack, as files, or as tools, and every action passes the L1/L2/L3 gate. Agent writes and router runs flow back as events.</text>
+</svg>

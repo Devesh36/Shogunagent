@@ -44,6 +44,10 @@
 
 ## 3. 状態の取得と供給
 
+![図 1. 生データから ShogunAgent エンジンを経てエージェントの文脈へ](docs/diagrams/architecture.svg)
+
+*図 1. 生データは principal ごとの暗号化ストアに入り、Dream Cycle が全行に quote と confidence を持つ型付き状態に変える。エージェントは context pack・ファイル・ツールとして受け取り、全ての行動は L1/L2/L3 のゲートを通る。エージェントの書き込みとルーターの実行はイベントとして戻る。*
+
 取得は 5 系統で、全て同じ append-only の `event_log`（dedup、redaction、instruction-shaped ゲート）に落ちます。
 
 | 系統 | 中身 | 必要なもの |

@@ -43,6 +43,10 @@ It is not a memory API. "Agent memory" is a saturated category (Mem0, Zep, Letta
 
 ## 3. How state is acquired and delivered
 
+![Figure 1. Raw data to agent context through the ShogunAgent engine](docs/diagrams/architecture.svg)
+
+*Figure 1. Raw data enters one encrypted store per principal; the Dream Cycle turns it into typed state with a quote and a confidence on every row; agents receive it as a context pack, as files or as tools, and every action passes the L1/L2/L3 gate. Agent writes and router runs flow back as events.*
+
 Five acquisition paths, all landing in the same append-only `event_log` (dedup, redaction, instruction-shaped gate):
 
 | Path | Content | Requires |
