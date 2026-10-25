@@ -100,6 +100,7 @@ pub fn run(config: &BenchConfig) -> Result<BenchReport, RunError> {
     backend.recency_weight = config.recency_weight;
     backend.search_path = config.search_path;
     backend.embedder = config.embedder.clone();
+    backend.vector_cutoff = config.vector_cutoff;
     // Past the newest event in the corpus (see `ShogunBackend::now_ms`).
     backend.now_ms = generated.events.iter().map(|e| e.ts).max().unwrap_or(0) + 1;
     let initial_size = backend.size()?;

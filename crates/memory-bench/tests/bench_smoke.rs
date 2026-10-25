@@ -854,3 +854,25 @@ fn a_run_without_an_embedder_stays_lexical() {
     assert!(!report.mode.semantic);
     assert_eq!(report.embedding, None);
 }
+
+/// E24 regression guard for the per-model vector cutoff: with the deterministic test embedder the
+/// vector lane hands no unanswerable question any evidence at the embedder's own cutoff
+/// (`TEST_EMBEDDER_MAX_L2_DISTANCE`), while the e5 value the lane used for every model (1.0) did.
+/// Temporal recall and multi-session coverage keep their values with the lane on.
+#[test]
+fn the_vector_lane_abstains_at_its_models_cutoff() {
+    let with_test = |workload: &str, queries: usize, cutoff: Option<f32>| BenchConfig {
+        embedder: Some(memory_bench::embedding::BenchEmbedder::test()),
+        vector_cutoff: cutoff,
+        ..federated(workload, 2_000, queries)
+    };
+    let report = memory_bench::run(&with_test("abstention", 500, None)).expect("run");
+    assert!(report.mode.semantic);
+    assert_eq!(report.quality.false_evidence, 0, "{:?}", report.quality);
+    let e5 = memory_bench::run(&with_test("abstention", 500, Some(1.0))).expect("run");
+    assert!(e5.quality.false_evidence > 0, "the e5 cutoff hands chatter back as evidence: {:?}", e5.quality);
+    let temporal = memory_bench::run(&with_test("temporal", 12, None)).expect("run");
+    assert_eq!(temporal.quality.recall_at_1, Some(1.0), "{:?}", temporal.quality);
+    let multi = memory_bench::run(&with_test("multi-session", 48, None)).expect("run");
+    assert_eq!(multi.quality.coverage_at_5, Some(1.0), "{:?}", multi.quality);
+}

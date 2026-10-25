@@ -65,6 +65,10 @@ OPTIONS:
                         embedder (no model); with --features embed-local, a fetched model by
                         name (nomic-embed-text-v1.5) from SHOGUN_MODELS_DIR. Default: none
                         (lexical). The report names the model; never compare across models.
+    --vector-cutoff <F> Override the vector lane's relevance cutoff (largest L2 distance that
+                        counts as a semantic match, 0 < F <= 2). Default: the model's own
+                        (ModelSpec::max_l2_distance). For calibrating a model's cutoff on the
+                        abstention suite; recorded in the report when set.
     -h, --help          Show this help.
 
 REPRODUCIBILITY:
@@ -76,7 +80,7 @@ REPRODUCIBILITY:
 HARNESS (E12-T2 — the same-harness publication, docs/benchmarks/README.md):
     memory-bench harness [--seeds N] [--first-seed N] [--events N] [--k N] [--warmup N]
                          [--path hybrid|federated] [--db-dir DIR] [--out FILE]
-                         [--embedder NAME]
+                         [--embedder NAME] [--vector-cutoff F]
     Runs query_p95 (clean), temporal_recall_at_1, abstention_false_evidence and
     multi_session_coverage_at_5 over N seeds (default 10, from 42) at --events (default 100000)
     on the federated path (the daemon's), then writes benchmarks.json (default
@@ -93,6 +97,15 @@ EXAMPLES:
     memory-bench --workload temporal --events 50000 --queries 12 --path federated
     memory-bench harness --seeds 10 --events 100000 --out docs/benchmarks/benchmarks.json
 ";
+
+/// `--vector-cutoff`: a finite L2 distance in (0, 2] (unit vectors are at most 2 apart).
+fn parse_cutoff(value: &str) -> Result<f32, String> {
+    value
+        .parse::<f32>()
+        .ok()
+        .filter(|f| f.is_finite() && *f > 0.0 && *f <= 2.0)
+        .ok_or_else(|| format!("--vector-cutoff must be a distance in (0, 2], got {value:?}"))
+}
 
 /// Default location of the published artifact.
 const DEFAULT_HARNESS_OUT: &str = "docs/benchmarks/benchmarks.json";
@@ -114,6 +127,7 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
         search_path: memory_bench::backend::SearchPath::default(),
         slice: memory_bench::slicer::SliceConfig::default(),
         embedder: None,
+        vector_cutoff: None,
     };
 
     let mut i = 0;
@@ -167,6 +181,7 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
             "--db" => cfg.db_path = Some(value.clone()),
             "--out" => cfg.out_dir = Some(value.clone()),
             "--embedder" => cfg.embedder = Some(memory_bench::embedding::BenchEmbedder::parse(value)?),
+            "--vector-cutoff" => cfg.vector_cutoff = Some(parse_cutoff(value)?),
             other => return Err(format!("unknown flag {other:?}")),
         }
         i += 2;
@@ -215,6 +230,7 @@ fn parse_harness(args: &[String]) -> Result<Option<(HarnessConfig, String)>, Str
             "--db-dir" => cfg.db_dir = Some(value.clone()),
             "--out" => out = value.clone(),
             "--embedder" => cfg.embedder = Some(memory_bench::embedding::BenchEmbedder::parse(value)?),
+            "--vector-cutoff" => cfg.vector_cutoff = Some(parse_cutoff(value)?),
             other => return Err(format!("unknown harness flag {other:?}")),
         }
         i += 2;

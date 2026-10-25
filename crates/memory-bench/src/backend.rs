@@ -140,6 +140,8 @@ pub struct ShogunBackend {
     pub now_ms: i64,
     /// The vector lane (E24): embeds the corpus after ingest and every query. `None` = lexical.
     pub embedder: Option<crate::embedding::BenchEmbedder>,
+    /// The vector lane's cutoff override (`--vector-cutoff`); `None` = the model's own.
+    pub vector_cutoff: Option<f32>,
     conn: Connection,
     path: Option<PathBuf>,
 }
@@ -169,6 +171,7 @@ impl ShogunBackend {
             search_path: SearchPath::default(),
             now_ms: 0,
             embedder: None,
+            vector_cutoff: None,
         })
     }
 
@@ -182,6 +185,7 @@ impl ShogunBackend {
             search_path: SearchPath::default(),
             now_ms: 0,
             embedder: None,
+            vector_cutoff: None,
         })
     }
 
@@ -285,6 +289,7 @@ impl MemoryBackend for ShogunBackend {
                     to_ts: Some(self.now_ms),
                     depth: SearchDepth::WarmOnly,
                     abstain_below_floor: true,
+                    max_vector_distance: self.vector_cutoff,
                     ..Default::default()
                 };
                 let result = search::search_federated(

@@ -118,6 +118,12 @@ pub struct BenchConfig {
     /// names the model when set. Not serialized here: the report carries it as `embedding`.
     #[serde(skip)]
     pub embedder: Option<crate::embedding::BenchEmbedder>,
+    /// Override the vector lane's relevance cutoff (largest L2 distance that counts as a
+    /// semantic match; `--vector-cutoff`). `None` (the default) uses the model's own value
+    /// (`shogun_memory::embed::max_l2_distance_for`). For calibrating a model's cutoff; recorded
+    /// in the report only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vector_cutoff: Option<f32>,
 }
 
 /// Serialize a path as its final component. The report needs to say *that* a file-backed run
@@ -155,6 +161,7 @@ impl Default for BenchConfig {
             search_path: crate::backend::SearchPath::default(),
             slice: crate::slicer::SliceConfig::default(),
             embedder: None,
+            vector_cutoff: None,
         }
     }
 }
@@ -238,6 +245,7 @@ impl BenchConfig {
             search_path: crate::backend::SearchPath::default(),
             slice: crate::slicer::SliceConfig::default(),
             embedder: None,
+            vector_cutoff: None,
         }
     }
 }

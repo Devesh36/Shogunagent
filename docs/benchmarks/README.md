@@ -234,7 +234,8 @@ harness hands one embedder instance to every suite and seed, each per-run report
 stored as its 384-wide Matryoshka prefix). The store records the same id on every vector row and
 never ranks rows of two models against each other (V102, `shogun_memory::embedding_space`).
 
-One seed at 600 events (release build, in memory, this container), for orientation only:
+One seed at 600 events (release build, in memory, this container), for orientation only, before
+the per-model cutoff below:
 
 | arm | query p95 ms | temporal recall@1 | abstention false evidence | multi-session coverage@5 |
 |---|---:|---:|---:|---:|
@@ -242,11 +243,59 @@ One seed at 600 events (release build, in memory, this container), for orientati
 | `test` | 2.6 | 1.000 | 0.168 | 1.000 |
 | `nomic-embed-text-v1.5@384` | 21.9 | 1.000 | **1.000** | 1.000 |
 
-The abstention row is the open problem: the semantic relevance floor
-(`MAX_SEMANTIC_L2_DISTANCE = 1.0` in `search/federated.rs`, i.e. cosine ≥ 0.5) was set for e5,
-and nomic places unrelated text of the same domain inside it, so every unanswerable question
-returns a vector neighbour as evidence. The floor has to become per model (a property of the
-`ModelSpec`) before a hybrid file is published.
+### The per-model relevance cutoff
+
+The abstention rows above came from one semantic relevance floor for every model
+(`MAX_SEMANTIC_L2_DISTANCE = 1.0`, cosine ≥ 0.5, tuned for e5): nomic places unrelated text of the
+same domain inside it, so every unanswerable question returned a vector neighbour as evidence.
+The cutoff is now a property of the model: `ModelSpec::max_l2_distance`, looked up for the store's
+active space by `shogun_memory::embed::max_l2_distance_for` on every search
+(`FederatedSearchOptions::max_vector_distance` overrides it). A neighbour beyond it is not
+evidence, and below it the lane's quality falls linearly to 0 at the cutoff.
+
+| space | cutoff (L2) | cosine | how it was set |
+|---|---:|---:|---|
+| `multilingual-e5-small@384` | 1.00 | ≥ 0.50 | the value the lane was tuned with; unchanged |
+| `nomic-embed-text-v1.5@384` | **0.70** | ≥ 0.755 | conservative, favouring abstention; not measured here (the model cannot be fetched in CI) |
+| `shogun-test/concept-v1@384` (`--embedder test`) | **0.58** | ≥ 0.83 | calibrated below; CI's regression guard |
+| anything else (`unspecified`, the hashing mock) | 1.00 | ≥ 0.50 | default |
+
+Calibration of the test embedder (`--path federated --embedder test --vector-cutoff F`, release,
+in memory, 500 abstention questions, 12 temporal, 48 multi-session):
+
+| cutoff | abstention false evidence | temporal recall@1 | multi-session coverage@5 |
+|---:|---|---:|---:|
+| 1.00 – 0.66 | 0.168 (seeds 42–44, 600 events; 600 and 5,000 for 0.66–0.69) | 1.000 | 1.000 |
+| 0.64 | 0.014 – 0.042 (seed 42, 600 / 5,000 events) | — | — |
+| 0.60 – 0.62 | 0.000 – 0.014 (seeds 42–46, 600 – 20,000 events: non-zero on 43 and 44) | 1.000 | 1.000 |
+| **0.58** | **0.000** (seeds 42–46 at 2,000 and 20,000 events) | 1.000 | 1.000 |
+| 0.55 | 0.000 (the same ten runs) | — | — |
+
+0.58 is the largest value that was 0.000 everywhere it was run. The tests pin it from both sides:
+`bench_smoke::the_vector_lane_abstains_at_its_models_cutoff` (0 false evidence at the model's
+cutoff, more than 0 at 1.0, temporal and multi-session unchanged) and
+`federated_tests::the_vector_cutoff_is_the_active_models`; the paraphrase test still finds its
+answer through the vector lane. The golden search eval holds with the lane off (R@5 0.985,
+MRR 0.948, false-answerable 0.000, unchanged: the lexical path never reads the cutoff) and with it
+on (R@5 0.981, R@10 0.985, MRR 0.948, false-answerable 0.000).
+
+**Recalibrating nomic.** On a machine with the model (`shogun models fetch`, ONNX Runtime 1.22 in
+`ORT_DYLIB_PATH`, `SHOGUN_MODELS_DIR` set), build with `--features embed-local` and sweep:
+
+```bash
+for f in 0.80 0.75 0.70 0.65; do
+  memory-bench harness --embedder nomic-embed-text-v1.5 --vector-cutoff "$f" \
+    --seeds 3 --events 20000 --out "/tmp/nomic-$f.json"
+done
+```
+
+Keep the largest cutoff whose `abstention_false_evidence` is 0.000 on every seed while
+`temporal_recall_at_1` and `multi_session_coverage_at_5` hold, and set
+`NOMIC_MAX_L2_DISTANCE` in `crates/shogun-memory/src/embed.rs` to it (the report records
+`vector_cutoff` whenever the flag is set). Until then nomic's 0.70 errs toward abstaining: a
+paraphrase it drops is still reachable by the lexical lanes; a wrong neighbour returned as
+evidence is the failure this suite exists to catch. A hybrid `benchmarks.json` is published only
+after that run.
 - **Write cost is model spend only.** `write_cost_micro_usd` is `0.0` because ingestion makes no
   model call; it does not price CPU or storage.
 - **Not a certification.** `environment.in_memory` and `environment.profile` say what the run was;
