@@ -1413,6 +1413,7 @@ dependencies = [
  "shogun-core",
  "shogun-mcp",
  "shogun-memory",
+ "tokio",
 ]
 
 [[package]]

@@ -6,6 +6,8 @@
 //!   provenance validity);
 //! - [`adapter`]: the system adapter trait and the shipped adapters (ShogunAgent on local rules,
 //!   the "will" baseline, the oracle);
+//! - [`scripted`]: the scripted-review arm (E49): the engine's Batch lane answered by an offline,
+//!   deterministic script instead of a model, to measure the path to the actionable band;
 //! - [`harness`]: the runner and the results file (mean and 95% interval over seeds).
 //!
 //! No model, no network: every number this crate produces is exact arithmetic over a synthetic
@@ -15,3 +17,4 @@ pub mod adapter;
 pub mod gen;
 pub mod harness;
 pub mod score;
+pub mod scripted;

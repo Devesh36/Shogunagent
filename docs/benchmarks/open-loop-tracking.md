@@ -98,8 +98,10 @@ reports no confidence should report 1.0.
 ## Running it
 
 ```bash
-# The built-in adapters: ShogunAgent's engine on its local rules, the "will" baseline, the oracle.
+# The built-in adapters: ShogunAgent's engine on its local rules, the same engine with an offline
+# scripted reviewer on its Batch lane (not a model), the "will" baseline, the oracle.
 cargo run -p loop-bench --release -- run --adapter shogunagent   --seeds 5 --out shogunagent.json
+cargo run -p loop-bench --release -- run --adapter shogunagent-scripted-review --seeds 5 --out scripted.json
 cargo run -p loop-bench --release -- run --adapter will-baseline --seeds 5 --out baseline.json
 cargo run -p loop-bench --release -- run --adapter oracle        --seeds 5     # every metric 1
 
@@ -120,8 +122,22 @@ deterministic in its quality numbers; latency moves with the machine.
   MCP, REST and CLI faces use; `source` = channel, `thread_key` = thread). After each hour the
   hourly Dream Cycle runs on the **on-device local rules**
   (`shogun_core::tenancy::dream_tick::tick_principal_local`: no model, no network) — the lane a
-  server principal without a relay credential uses. At the end the state is read through
-  `state.export` with `format: "export-v2"`, every band, rows not superseded.
+  server principal without a relay credential uses. Its StateUpdate step reads the outcomes later
+  messages of a thread report for that thread's open rows (`shogun_memory::loop_updates`, E49).
+  At the end the state is read through `state.export` with `format: "export-v2"`, every band,
+  rows not superseded.
+- **`shogunagent-scripted-review`** (`ScriptedReviewAdapter`, `src/scripted.rs`, plan E49): the
+  same engine, ingest and read as `shogunagent`, but after each hour the hourly review runs
+  through the **Batch lane** (`tick_principal_with_lane`) and then the loop consolidator
+  (`shogun_core::dreamcycle::loops::consolidate_loops`), with the lane answered in process by an
+  **offline scripted reviewer — not a model**. Its window-review answer is the on-device rules run
+  over each numbered line, anchored on that line as the answer contract asks; its consolidator
+  answer re-lists every new signal with its exact quote at confidence 0.9 and applies every
+  outcome it is shown ("Outcomes noticed in later messages") through that outcome's own quote.
+  It reads only the input of each call, never the gold. Every check the engine runs on a real
+  answer (exact span of a shown event, confidence ≥ 0.84, at most six items, quoted resolutions)
+  runs unchanged. It measures the route to the actionable band, not model quality; results files
+  name it, and it reports 0 model calls.
 - **`will-baseline`** (`WillBaseline`): every sentence containing the word "will" or "I'll" is an
   open commitment with no due date, quoted exactly, confidence 1. It exists to show the scorer
   discriminates: it never closes anything, never reads a date, finds no open loops, and is fooled
@@ -177,22 +193,98 @@ A result is comparable with another only at the same benchmark version, tiers an
 ## Measured numbers
 
 Release build, Linux x86_64 container shared with other builds (latency is indicative), five
-seeds (42–46) per tier, operating point `all`, 2026-10-25. Mean [95% interval]; one value when the
-seeds agreed exactly. Full files: [`results-shogunagent-local-rules.json`](open-loop-tracking/results-shogunagent-local-rules.json),
+seeds (42–46) per tier, 2026-10-25. Mean [95% interval]; one value when the seeds agreed exactly.
+"Before" is the engine at plan E28 (commit `cac2e3f`); "after" is the engine with plan E49
+(outcomes read off later messages, paraphrase rules, the consolidator changes below), same seeds,
+same generator, same scorer.
+
+Full files in [`open-loop-tracking/`](open-loop-tracking/):
+[`results-shogunagent-local-rules.json`](open-loop-tracking/results-shogunagent-local-rules.json) (after),
+[`results-shogunagent-local-rules-before-e49.json`](open-loop-tracking/results-shogunagent-local-rules-before-e49.json) (before),
+[`results-shogunagent-scripted-review.json`](open-loop-tracking/results-shogunagent-scripted-review.json),
 [`results-will-baseline.json`](open-loop-tracking/results-will-baseline.json).
 
-**ShogunAgent, local rules (no model)**
+### ShogunAgent, local rules (no model)
+
+**Before (E28), operating point `all`**
 
 | tier | tracking F1 | commit. recall | commit. precision | loop recall | loop precision | resolution | false closure | supersession | false commitment | provenance |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | easy | 0.842 [0.77, 0.92] | 1.000 | 0.840 [0.73, 0.95] | 0.600 [0.43, 0.77] | 1.000 | 0.000 | 0.000 | — | 0.200 [0.06, 0.34] | 1.000 |
 | medium | 0.859 [0.84, 0.88] | 1.000 | 0.889 | 0.600 [0.53, 0.67] | 1.000 | 0.000 | 0.000 | 0.000 | 0.125 | 1.000 |
-| hard | 0.540 [0.33, 0.75] | 0.433 [0.25, 0.62] | 0.894 [0.76, 1.03] | 0.350 [0.11, 0.59] | 1.000 | 0.000 | 0.000 | 0.000 | 0.037 [0.00, 0.08] | 1.000 |
+| hard | 0.540 [0.33, 0.75] | 0.433 [0.25, 0.62] | 0.894 [0.76, 1.03] | 0.350 [0.11, 0.59] | 1.000 | 0.000 | 0.000 | 0.000 | 0.037 [-0.00, 0.08] | 1.000 |
 
-Ingest 0.81–0.90 ms per event; background processing 0.28 s (easy), 0.95 s (medium), 1.85 s
-(hard) per run, hourly ticks included; 0 model calls, 0 cost.
+**After (E49), operating point `all`**
 
-**"will" baseline**
+| tier | tracking F1 | commit. recall | commit. precision | loop recall | loop precision | resolution | false closure | supersession | false commitment | provenance |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| easy | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 | — | 0.000 | 1.000 |
+| medium | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 | 1.000 | 0.000 | 1.000 |
+| hard | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.940 [0.87, 1.02] | 0.000 | 0.900 [0.79, 1.01] | 0.000 | 1.000 |
+
+Change, `all` (metrics that moved):
+
+| tier | metric | before | after | delta |
+|---|---|---:|---:|---:|
+| easy | tracking_f1 | 0.842 | 1.000 | +0.158 |
+| easy | commitment_precision | 0.840 | 1.000 | +0.160 |
+| easy | open_loop_recall | 0.600 | 1.000 | +0.400 |
+| easy | resolution_accuracy | 0.000 | 1.000 | +1.000 |
+| easy | false_commitment_rate | 0.200 | 0.000 | -0.200 |
+| medium | tracking_f1 | 0.859 | 1.000 | +0.141 |
+| medium | commitment_precision | 0.889 | 1.000 | +0.111 |
+| medium | open_loop_recall | 0.600 | 1.000 | +0.400 |
+| medium | resolution_accuracy | 0.000 | 1.000 | +1.000 |
+| medium | supersession_accuracy | 0.000 | 1.000 | +1.000 |
+| medium | false_commitment_rate | 0.125 | 0.000 | -0.125 |
+| hard | tracking_f1 | 0.540 | 1.000 | +0.460 |
+| hard | commitment_recall | 0.433 | 1.000 | +0.567 |
+| hard | commitment_precision | 0.894 | 1.000 | +0.106 |
+| hard | open_loop_recall | 0.350 | 1.000 | +0.650 |
+| hard | resolution_accuracy | 0.000 | 0.940 | +0.940 |
+| hard | supersession_accuracy | 0.000 | 0.900 | +0.900 |
+| hard | false_commitment_rate | 0.037 | 0.000 | -0.037 |
+
+**Operating point `actionable` (≥ 0.5), before and after: empty on every tier** (no row; tracking
+F1 0.000). That is the rule, not a gap: local rules alone never lift a candidate to 0.5 (owner
+decision 2026-10-02). The path to that band is the next arm.
+
+After: easy: ingest 0.85 ms/event, processing 0.27 s/run; medium: ingest 0.76 ms/event, processing 0.90 s/run; hard: ingest 0.78 ms/event, processing 2.17 s/run (hourly ticks included; before: easy: ingest 0.90 ms/event, processing 0.28 s/run; medium: ingest 0.81 ms/event, processing 0.95 s/run; hard: ingest 0.81 ms/event, processing 1.85 s/run); 0 model calls, 0 cost.
+
+### ShogunAgent, scripted review (offline script, not a model)
+
+The same engine with its Batch lane answered by the **offline scripted reviewer**
+(`--adapter shogunagent-scripted-review`, see [The adapters](#the-adapters)). The reviewer's
+answers are scripted from the same on-device rules, so this arm can find nothing the local rules
+do not; what it shows is the route a candidate takes to the actionable band and that every step on
+it is gated by an exact quote. **These are not model numbers.** It did not exist before E49, so
+there is no before row.
+
+**Operating point `actionable` (≥ 0.5)**
+
+| tier | tracking F1 | commit. recall | commit. precision | loop recall | loop precision | resolution | false closure | supersession | false commitment | provenance |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| easy | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 | — | 0.000 | 1.000 |
+| medium | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 | 1.000 | 0.000 | 1.000 |
+| hard | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.940 [0.87, 1.02] | 0.000 | 0.900 [0.79, 1.01] | 0.000 | 1.000 |
+
+**Operating point `all`**
+
+| tier | tracking F1 | commit. recall | commit. precision | loop recall | loop precision | resolution | false closure | supersession | false commitment | provenance |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| easy | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 | — | 0.000 | 1.000 |
+| medium | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.000 | 1.000 | 0.000 | 1.000 |
+| hard | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.940 [0.87, 1.02] | 0.000 | 0.900 [0.79, 1.01] | 0.000 | 1.000 |
+
+What the consolidator did, summed over the five seeds (counts from
+`ScriptedReviewAdapter::applied`): easy 44 calls, 40 re-lists, 14 resolutions; medium 112 calls, 95 re-lists, 27 resolutions; hard 178 calls, 156 re-lists, 59 resolutions; 0 items opened as new rows and 0 refused, on every tier. No item was ever *opened* as a new row: every
+re-list landed in place on the local candidate that cites the same span, so the store holds one
+row per item. Every actionable row carries the consolidator's confidence (0.9), and every close
+of a reviewed row went through a `resolved` entry quoting the outcome's own words.
+
+easy: ingest 0.90 ms/event, processing 0.25 s/run; medium: ingest 0.79 ms/event, processing 0.72 s/run; hard: ingest 0.81 ms/event, processing 1.51 s/run; 0 model calls, 0 cost (the script is not billed and is not a model call).
+
+### "will" baseline (unchanged)
 
 | tier | tracking F1 | commit. recall | commit. precision | loop recall | loop precision | resolution | false closure | supersession | false commitment | provenance |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -204,23 +296,40 @@ The oracle scores 1 on every metric and 0 on both false rates (tested).
 
 **What the numbers say.**
 
-- The scorer separates the systems where they differ and agrees where they do not. Both find the
-  canonical promises (commitment recall 1.0 on easy and medium); only the engine finds open loops
-  and rejects most distractors (false commitment 0.04–0.20 against 0.26–0.45). Both quote exactly,
-  so provenance validity is 1.0 for both — the metric is there to catch systems that paraphrase
-  their evidence.
-- **On its local rules the engine resolves nothing and moves no due date** (resolution and
-  supersession 0.000 on every tier). That is the documented design, not a scoring artefact: the
-  on-device rules only *propose* low-confidence candidates (≤ 0.4); closing loops, folding
-  duplicates and re-dating commitments is the loop consolidator's job after the Batch review,
-  which needs the model lane. For the same reason the `actionable` operating point (≥ 0.5) is
-  empty for this adapter on every tier (tracking F1 0.000; in the results files).
-- Paraphrase is where the local rules break: on `hard` commitment recall drops to 0.43, below the
-  baseline's 0.77, because "Leave the board memo with me" has no cue the rules know. The engine
-  still wins on the headline through open loops and precision.
-- The numbers to beat with the Batch lane are therefore resolution, supersession and hard-tier
-  recall. Running this adapter through a Batch lane (the relay) is a follow-up: it needs a model
-  and so a named reader, a cost line and a network run, none of which this document claims.
+- **Resolution and supersession are no longer zero.** Before, the engine resolved nothing and
+  moved no due date on any tier. Now a later message in the same thread that says the item was
+  done, called off or moved is recorded as a typed update with its quote and event
+  (`loop_updates`, V104) and, for a local candidate, closes or re-dates it with that quote linked
+  as provenance — never raising its confidence. Hard-tier resolution reaches 0.940 and
+  supersession 0.900, with no false closure on any tier.
+- **Every remaining miss is one rule refusing to guess.** The hard tier folds several meeting
+  items into one note; their later updates arrive in the thread of the item's *original* meeting,
+  not of the note that carries the item, so "same thread" never holds and nothing is closed
+  (seed 46: three of three misses). Matching an outcome across threads by wording alone is what
+  the rule deliberately does not do.
+- **Paraphrased promises are found without new false commitments.** Hard-tier commitment recall
+  goes from 0.433 to 1.000 (the "will" baseline is at 0.767) and the false-commitment rate from
+  0.037 to 0.000: the new rules read acceptances ("Leave the memo with me", "Count on me for …",
+  "… is coming your way") and the reported forms of loops ("No word yet from …", "asked you to
+  review …", "Decision pending on …"), and they veto hypotheticals ("If …, I will …", "Maybe …,
+  no promises") and retracted offers ("I was going to …, but that is off now").
+- **Read these as an upper bound for template-shaped text.** The new phrases were written while
+  looking at this generator's template families, so a perfect score on them says the rules cover
+  those families, not that they generalise. Two checks against overfitting: each rule has unit
+  tests with forms the generator never produces (`extract::paraphrase_tests`,
+  `loop_updates::tests`), and the independent extraction eval (`cargo run -p extract-eval`, six
+  golden days written for E-series extraction work) is byte-identical before and after — the same
+  21 commitments and 18 open loops, the same 4 and 1 extras, precision unchanged. A held-out
+  template set released only for scoring (see Limits) is still the real test.
+- **How a candidate reaches the actionable band** is the scripted-review arm: the hourly window
+  review turns the local candidate into a typed signal with the exact span of its line; the loop
+  consolidator re-lists it in place at its answer's confidence, which code accepts only at ≥ 0.84
+  and only on an exact quote of an event the call was shown; outcomes of a row the consolidator
+  owns are shown to it ("Outcomes noticed in later messages") and change the row only through a
+  `resolved` entry or a re-list that quotes them. With that path, every tier's `actionable` point
+  matches its `all` point.
+- What a real model adds or loses on this path is still unmeasured: it needs a named model, a cost
+  line and a network run, none of which this document claims.
 
 ## Limits
 

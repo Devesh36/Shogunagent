@@ -1,7 +1,7 @@
 //! `loop-bench`: generate, run and score the open-loop tracking benchmark v1.
 //!
 //! ```text
-//! loop-bench run --adapter <shogunagent|will-baseline|oracle> [--tiers easy,medium,hard]
+//! loop-bench run --adapter <shogunagent|shogunagent-scripted-review|will-baseline|oracle> [--tiers easy,medium,hard]
 //!                [--seeds N] [--first-seed 42] [--out results.json] [--merge-into benchmarks.json]
 //! loop-bench generate --tier <t> --seed <n> --out <dir>      # events.jsonl + gold.json
 //! loop-bench score --dir <dir> [--tiers …] [--seeds N] [--first-seed 42] [--out results.json]
@@ -23,7 +23,9 @@ const HELP: &str = "loop-bench — open-loop and commitment tracking benchmark v
 USAGE
   loop-bench run --adapter <NAME> [OPTIONS]
       Drive a built-in adapter through every (tier, seed) and print the summary.
-      NAME: shogunagent (the engine on its local rules), will-baseline, oracle.
+      NAME: shogunagent (the engine on its local rules), shogunagent-scripted-review (the engine
+      with its Batch lane answered by an offline scripted reviewer, NOT a model), will-baseline,
+      oracle.
   loop-bench generate --tier <easy|medium|hard> --seed <N> --out <DIR>
       Write DIR/events.jsonl (the stream) and DIR/gold.json (the answer key).
   loop-bench score --dir <DIR> [OPTIONS]
