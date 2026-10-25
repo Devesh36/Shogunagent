@@ -21,6 +21,8 @@ pub mod activity_api;
 pub mod core_tools;
 /// `memory.ingest` / `memory.recall`: one parser and envelope for every face (E4-T3).
 pub mod ingest_api;
+// E44: provider webhook deliveries normalized to ingest events (`memory.ingest_webhook`).
+pub mod webhook_ingest;
 /// `handoff.create` / `handoff.accept`: the A2A state-of-work handoff, assembled in the core (E35).
 pub mod handoff_api;
 /// `state.export` in export format v1 (E7).

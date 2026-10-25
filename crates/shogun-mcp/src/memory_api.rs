@@ -113,6 +113,11 @@ pub enum Tool {
     /// the same sanitize / redact / dedup append path capture and integrations use, under an
     /// `idempotency_key` that replays on a repeat. Local write to the principal's own memory (L1).
     MemoryIngest,
+    /// One provider webhook delivery (GitHub, Linear, Slack, Notion, Google Calendar, Gmail) as
+    /// text events with provenance through the `memory.ingest` path (E44, `webhook_ingest`); a
+    /// delivery that carries only ids is acknowledged as changed and stores nothing. L1 like
+    /// `memory.ingest`.
+    MemoryIngestWebhook,
     /// A budgeted read of what memory holds on a question (E4-T3 / E5-T3): the context-pack
     /// assembly (facts + dated evidence) cut to `budget_tokens`, High facts as facts and Medium
     /// ones prefixed `possibly:`. A read; free (invariant 10).
@@ -479,6 +484,7 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryImportDelete,
     Tool::MemoryAppendNote,
     Tool::MemoryIngest,
+    Tool::MemoryIngestWebhook,
     Tool::MemoryRecall,
     Tool::MemoryFs,
     Tool::HandoffCreate,
@@ -646,6 +652,7 @@ impl Tool {
             Tool::MemoryImportDelete => "memory.import.delete",
             Tool::MemoryAppendNote => "memory.append_note",
             Tool::MemoryIngest => "memory.ingest",
+            Tool::MemoryIngestWebhook => "memory.ingest_webhook",
             Tool::MemoryRecall => "memory.recall",
             Tool::MemoryFs => "memory.fs",
             Tool::HandoffCreate => "handoff.create",
@@ -896,6 +903,8 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         // An agent's events / turns appended to the event log under an idempotency key (E4-T3):
         // local, replayable, nothing leaves the device — L1 like a note (plan §7.1).
         Tool::MemoryIngest => ApiLevel::Write(Level::L1),
+        // E44: a verified provider delivery through the same append path — L1 like `memory.ingest`.
+        Tool::MemoryIngestWebhook => ApiLevel::Write(Level::L1),
         // `/memories` file operations (E6-T2): a view reads, a write edits the caller's own
         // scratch or records an ingest event — local and reversible, L1 like `memory.ingest`.
         Tool::MemoryFs => ApiLevel::Write(Level::L1),
@@ -1204,7 +1213,9 @@ pub fn tool_group(tool: Tool) -> ToolGroup {
         Tool::MemoryImportPreview
         | Tool::MemoryImport
         | Tool::MemoryImportList
-        | Tool::MemoryImportDelete => ToolGroup::Import,
+        | Tool::MemoryImportDelete
+        // E44: provider webhook deliveries, another way memory is filled from outside.
+        | Tool::MemoryIngestWebhook => ToolGroup::Import,
         Tool::MemoryNotesList
         | Tool::MemoryNotesChange
         | Tool::StateCommitmentsGet
@@ -2773,6 +2784,7 @@ mod tests {
                             | Tool::MemoryNotesChange
                             | Tool::MemoryAppendNote
                             | Tool::MemoryIngest
+                            | Tool::MemoryIngestWebhook
                             | Tool::MemoryFs
                             | Tool::HandoffAccept
                             | Tool::CaptureSetPaused

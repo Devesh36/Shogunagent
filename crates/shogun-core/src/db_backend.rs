@@ -2783,6 +2783,7 @@ impl MemoryBackend for DbBackend {
             | Tool::MemoryAppendNote
             // Served by `ingest` / `recall` (E4-T3), never through the generic read channel.
             | Tool::MemoryIngest
+            | Tool::MemoryIngestWebhook
             | Tool::MemoryRecall
             // Served by `memory_fs` (E6-T2).
             | Tool::MemoryFs

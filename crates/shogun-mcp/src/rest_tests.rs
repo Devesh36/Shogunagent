@@ -2838,3 +2838,24 @@ fn handoff_routes_share_the_mcp_parser_at_the_same_levels() {
         respond_with(&with_body("/v1/handoff/accept", r#"{"handoff":{},"actor":"agent:w"}"#), &reg(), &ent(), &crate::backend::StubBackend);
     assert_eq!((status, body.contains("invalid_handoff")), (400, true), "{body}");
 }
+
+/// E44: `POST /v1/memory/ingest-webhook` is `memory.ingest_webhook` (an L1 write) on the shared
+/// parser; a delivery that names only a change stores nothing and answers 200 at 0 events.
+#[test]
+fn rest_ingest_webhook_is_the_l1_write_on_the_shared_parser() {
+    let routed = route(&req(Method::Post, "/v1/memory/ingest-webhook", Some("t")), &reg(), &ent());
+    assert_eq!(routed, Routed::Write { tool: Tool::MemoryIngestWebhook, level: Level::L1 });
+    assert_eq!(status_code(&route(&req(Method::Get, "/v1/memory/ingest-webhook", Some("t")), &reg(), &ent())), 405);
+    let with_body = |body: &str| RestRequest { body: Some(body.to_string()), ..req(Method::Post, "/v1/memory/ingest-webhook", Some("t")) };
+    let (status, body) = respond_with(&with_body(r#"{"provider":"jira","delivery_id":"d","idempotency_key":"k"}"#), &reg(), &ent(), &crate::backend::StubBackend);
+    assert_eq!((status, body.contains("invalid_provider")), (400, true), "{body}");
+    let (status, body) = respond_with(
+        &with_body(r#"{"provider":"gmail","delivery_id":"m","idempotency_key":"hook:gmail:m","changed":{"history_id":"7"}}"#),
+        &reg(),
+        &ent(),
+        &crate::backend::StubBackend,
+    );
+    assert_eq!(status, 200, "{body}");
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((value["result"]["outcome"].as_str(), value["usage"]["quantity"].as_u64()), (Some("changed"), Some(0)));
+}

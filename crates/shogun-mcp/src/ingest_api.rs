@@ -177,7 +177,7 @@ pub struct RecallOutcome {
 
 /// Whether `tool` is served by this module.
 pub fn is_ingest_tool(tool: Tool) -> bool {
-    matches!(tool, Tool::MemoryIngest | Tool::MemoryRecall)
+    matches!(tool, Tool::MemoryIngest | Tool::MemoryRecall | Tool::MemoryIngestWebhook)
 }
 
 fn bounded_string(args: &Value, key: &str, max_chars: usize, required: bool) -> Result<Option<String>, String> {
@@ -405,6 +405,8 @@ pub fn serve<B: crate::backend::MemoryBackend + ?Sized>(tool: Tool, args: &Value
             let outcome = backend.recall(&request).map_err(|_| Refusal::Unavailable("recall_unavailable"))?;
             Ok(render_recall(&request, &outcome, elapsed(started)))
         }
+        // E44: a provider webhook delivery, normalized to events, then the same ingest path.
+        Tool::MemoryIngestWebhook => crate::webhook_ingest::serve(args, backend),
         _ => Err(Refusal::BadArguments("invalid_request: not an ingest tool.".into())),
     }
 }
