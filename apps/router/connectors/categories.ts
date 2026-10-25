@@ -24,6 +24,10 @@ export const CATEGORIES = [
   "seo",
   "listings",
   "files",
+  /** Calendars and events (E22 first-party Google Calendar connector). */
+  "calendar",
+  /** Issue trackers: GitHub issues, Linear issues (E22). */
+  "issue_tracking",
   /** Structured data lookups that fit no narrower category. */
   "data",
 ] as const;

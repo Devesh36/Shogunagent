@@ -129,6 +129,10 @@ Format: `connectors/schema.md`. Registry: `connectors/index.ts`. Build the conte
 - `shogunagent` (first-party, `caller_bearer` auth to the state REST face; base URL from `SHOGUNAGENT_API_BASE_URL`): `state.commitments.list`, `state.open_loops.list`, `state.people.get`, `memory.recall` — reads, L1, $0 — and `actions.execute` — `external_send`, L3, $0.002.
 - `monid` (passthrough, `src/passthrough/monid.ts`): endpoints imported from a Monid-style catalog JSON, executed through Monid's `POST /v1/run` with the router's `MONID_API_KEY` injected at the transport, priced at Monid's price + 5%. The fixture catalog holds 12 endpoints from 11 upstream providers (search, scrape, enrichment, SEO, image generation, and one L3 `provision-numbers`).
 
+## Listing pipeline (E21)
+
+`pnpm --filter @shogunagent/router listing:check <provider-dir> | --all` validates a provider directory for listing: `provider.json` (legal name, contact, opaque payout reference, per-endpoint price declarations, data handling) and the catalog compile, offline fixture replay through the connector hooks and through `run` with its permission tier, the scope classification (sends and payments are L3; a write is never `read`), the description lint (tasks named, exclusions, cost class, ≤ 400 characters, no superlatives) and price sanity (declared = usage model = what the fixtures settle). It prints a JSON report and exits 1 on any error; `.github/workflows/router-listing.yml` runs it on PRs touching `connectors/**` and posts the markdown report as the job summary. Details: `connectors/schema.md` §9–§10.
+
 ## Pluggable seams (what apps/api and the state layer wire later)
 
 | Interface | Default | Production home |

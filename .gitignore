@@ -24,3 +24,6 @@ models/
 __pycache__/
 .wrangler/
 .claude/worktrees/
+
+# router listing:check report (E21)
+apps/router/listing-report.json

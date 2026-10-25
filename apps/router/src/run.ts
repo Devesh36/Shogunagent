@@ -92,7 +92,7 @@ export interface RunResult {
   body: RunBody;
 }
 
-function defaultRequest(endpoint: EndpointDefinition, input: Json): RunRequest {
+export function defaultRequest(endpoint: EndpointDefinition, input: Json): RunRequest {
   const base: RunRequest = { method: endpoint.request.method, path: endpoint.request.path };
   if (endpoint.request.timeout_ms !== undefined) base.timeout_ms = endpoint.request.timeout_ms;
   if (endpoint.request.method === "GET") {

@@ -14,6 +14,7 @@ connectors/
   schema.md                     this page
   <provider>/
     provider.ts                 ProviderDefinition (§2.1)
+    provider.json               listing manifest: legal name, contact, payout reference, prices, data handling (§9)
     endpoints/<name>.ts         one EndpointDefinition per file (§2.2)
   monid/catalog.fixture.json    a Monid-style catalog imported by src/passthrough/monid.ts (§7)
 ```
@@ -115,7 +116,7 @@ A fixture is a recorded exchange: `scenario`, `input`, the vendor `response` (`s
 
 Closed list in `connectors/categories.ts`; a definition naming anything else does not compile.
 
-`state`, `memory`, `approval` (ShogunAgent additions), `web_search`, `scrape`, `enrichment`, `communication`, `finance`, `social`, `ecommerce`, `gen_ai`, `seo`, `listings`, `files`, `data`.
+`state`, `memory`, `approval` (ShogunAgent additions), `web_search`, `scrape`, `enrichment`, `communication`, `finance`, `social`, `ecommerce`, `gen_ai`, `seo`, `listings`, `files`, `calendar`, `issue_tracking`, `data`.
 
 Categories are ranked (twice-weighted) by `discover`, filterable (`categories` argument) and used by `hints` to find cheaper alternatives. Monid's category names map onto this list in `src/passthrough/monid.ts` (`MONID_CATEGORY_MAP`).
 
@@ -138,7 +139,7 @@ Description changes must not lower the selection-eval rate (E11, CLAUDE.md code 
 
 `connectors/index.ts` lists every provider. `src/catalog.ts` compiles them into entries with a SHA-256 content hash each and a catalog hash over all of them; `scripts/build-catalog.ts` writes `dist/catalog.json` and `dist/catalog.<hash12>.json`. Compile errors are listed all at once (duplicate ids, unknown categories, missing class or health, bad usage numbers, fixtures failing their schema). `server-card.json`, `pricing.json` and the human docs derive from this manifest (invariant 12).
 
-Compiled entry fields: `tool_id, provider_id, provider_name, first_party, summary, description, exclusions, notes, categories, input_schema, output_schema, usage, quote_micro_usd, health, scope{class, level}, examples, docs_url, hash`.
+Compiled entry fields: `tool_id, provider_id, provider_name, first_party, summary, description, exclusions, notes, categories, input_schema, output_schema, usage, quote_micro_usd, health, scope{class, level}, examples, docs_url, data_handling, hash`. `data_handling` is the public part of `provider.json` (§9); legal name, contact and payout reference are never in the catalog.
 
 ## 7. Importing a Monid-style catalog
 
@@ -150,4 +151,67 @@ Compiled entry fields: `tool_id, provider_id, provider_name, first_party, summar
 - `scope.class` is required; Monid has no permission tiers.
 - `exclusions` is a separate field so it can be shown without being ranked.
 - Categories add `memory`, `state`, `approval`.
+- A `provider.json` listing manifest (§9) and the `listing:check` pipeline (§10) replace Monid's email-and-hand-review step.
 - Ids are not locked in a separate file; the content hash of each entry is the stability signal, and wire-name freezing (invariant 11) applies to the three verbs, not to catalog entries.
+
+## 9. `provider.json` — the listing manifest (E21)
+
+Every listed provider directory carries a `provider.json` next to `provider.ts`, imported as the provider's `manifest` (`import manifest from "./provider.json" with { type: "json" }`). The catalog compiler validates it (`src/listing/manifest.ts`); a provider without one does not pass `listing:check`. Passthrough catalogs (`connectors/monid`) carry none.
+
+```json
+{
+  "format": "shogunagent-provider/1",
+  "provider_id": "example",
+  "legal_name": "Example Data Ltd",
+  "contact": { "email": "listings@example.com", "url": "https://example.com/support" },
+  "payout_account_ref": "acct_1Nq2Example",
+  "pricing": [
+    { "endpoint": "search", "model": "per_result", "cost_micro_usd_per_result": 100, "base_micro_usd": 0 },
+    { "endpoint": "lookup", "model": "per_call", "cost_micro_usd": 1000 },
+    { "endpoint": "tts", "model": "per_unit", "unit": "1k_chars", "cost_micro_usd_per_unit": 50 }
+  ],
+  "data_handling": {
+    "retention": "none",
+    "retention_days": 0,
+    "zero_retention": true,
+    "regions": ["eu"],
+    "statement": "Requests are processed in memory and not stored."
+  }
+}
+```
+
+| field | rule |
+|---|---|
+| `provider_id` | equals the provider's `id` |
+| `legal_name` | the contracting legal entity, 2–200 characters |
+| `contact` | `email` and/or `url`; at least one |
+| `payout_account_ref` | an **opaque** id in the payout system (e.g. a Stripe Connect account id), `[A-Za-z0-9_:.-]{3,128}`. Never bank data: an IBAN, a run of 8+ digits or a bank field name (`iban`, `routing`, `swift`, `bic`, `sort code`, `account number`) is rejected |
+| `pricing` | exactly one declaration per endpoint, equal to the endpoint's `usage` model (model, unit and costs in micro-USD; `typical_*` stay in the endpoint) |
+| `data_handling.retention` | `none` (not stored), `transient` (memory or cache for the call only), `days` (stored up to `retention_days`), `user_account` (the call creates content the user owns in their account on the service — a draft, an issue — kept until the user deletes it) |
+| `data_handling.retention_days` | > 0 only with `days`, else 0 |
+| `data_handling.zero_retention` | `true` only with `none` or `transient` |
+| `data_handling.regions` | where request data is processed: ISO 3166 codes or `eu` / `us` / `global` (`global`: not region-pinned) |
+| `data_handling.statement` | one plain-English paragraph (20–600 characters): what is stored, where, for how long, who can see it |
+
+The catalog publishes `data_handling` per entry; legal name, contact and payout reference stay out of every agent-readable surface.
+
+## 10. Listing pipeline (`listing:check`)
+
+```bash
+pnpm --filter @shogunagent/router listing:check connectors/<provider>     # one provider directory
+pnpm --filter @shogunagent/router listing:check --all --out report.json   # every directory under connectors/
+```
+
+The command prints one JSON document (`{ "format": "shogunagent-listing-reports/1", "ok", "reports": [...] }`, one `shogunagent-listing-report/1` per directory with `checks`, `problems` and an `endpoints` summary) and exits 1 when any report has an error. Under GitHub Actions it appends a markdown rendering to the job summary; `.github/workflows/router-listing.yml` runs it on every PR that touches `apps/router/connectors/**`. The checks (`src/listing/check.ts`):
+
+| check | errors when |
+|---|---|
+| `schema` | `provider.json` is missing or invalid (§9), or the provider does not compile (§6) |
+| `fixtures` | an endpoint has no fixture or no successful one; a fixture's request hook throws; a fixture marked `error` is treated as a success (or the reverse); the mapped output or the settled usage differs from `expect`; replayed through the real `run` engine, an L1 run does not return the result, an L2 run does not ask `input_required` once before reaching the transport, or an L3 run reaches the transport instead of returning an approval URL |
+| `scope` | an endpoint has no class; its id names a send (`send`, `post`, `publish`, `invite`, `notify`, `reply`, …) but it is not `external_send`; it names a payment or provisioning but is not L3; it names a write (`create`, `update`, `delete`, …) or uses `DELETE`/`PUT`/`PATCH` but is declared `read` |
+| `descriptions` | `description` > 400 characters or `summary` > 160; no `Use for: …` (the tasks); no `exclusions`; no cost class (`free`, `$…`, `metered`, `L1/L2/L3`); a marketing superlative (`best`, `leading`, `revolutionary`, `seamless`, `powerful`, `AI-powered`, … — `MARKETING_SUPERLATIVES`) |
+| `price` | the `provider.json` declaration differs from the usage model; a replayed fixture settles a cost the declared model does not produce (empty results must settle 0) |
+
+Warnings (shown, not blocking): no failure fixture; an exclusion sentence inside `description`; an L2/L3 endpoint whose description does not say its level; a priced endpoint with no fixture that settles a non-zero cost; a quote over 10× or under 1/10 of the observed fixture cost; a typical run over $1.
+
+To list a provider: add `connectors/<provider>/` (§1–§2, §9), register it in `connectors/index.ts`, run `listing:check`, `pnpm --filter @shogunagent/router test` and the selection eval (§5), and open a PR. The workflow's report is the review's starting point; a passing report is required, not sufficient.

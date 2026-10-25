@@ -1,0 +1,52 @@
+name: router-listing
+
+# E21. The provider self-serve listing pipeline: a connector PR is tested automatically before it
+# is listed. On pull requests that touch apps/router/connectors/**, every provider directory is
+# checked (schema + provider.json, fixture replay, scope classification, description lint, price
+# sanity); the markdown report is posted as the job summary and the JSON report is uploaded as an
+# artifact. The run needs no secrets and makes no network call beyond installing dependencies:
+# fixtures are replayed offline.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "apps/router/connectors/**"
+      - "apps/router/src/listing/**"
+      - "apps/router/scripts/listing-check.ts"
+      - ".github/workflows/router-listing.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: router-listing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  listing:
+    name: listing check (every provider directory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: compile the catalog
+        run: pnpm --filter @shogunagent/router build:catalog
+      - name: listing check (report to the job summary)
+        # GITHUB_STEP_SUMMARY is set by Actions; the script appends its markdown report to it.
+        run: pnpm --filter @shogunagent/router -s listing:check --all --out listing-report.json
+      - name: router tests (fixture replay through the engine)
+        run: pnpm --filter @shogunagent/router test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: router-listing-report-${{ github.run_id }}
+          path: apps/router/listing-report.json
+          if-no-files-found: ignore

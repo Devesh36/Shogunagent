@@ -8,16 +8,25 @@ Read `CLAUDE.md` (the rules every change must keep) and `docs/implementation-pla
 
 ## Connector definitions (lowest friction)
 
-A connector describes how an external API is called, what it accepts and returns, and how usage is billed. It lives under `apps/router/connectors/<provider>/` and consists of a `provider.ts`, one file per endpoint under `endpoints/`, and recorded fixtures for replay tests. The format is documented in `apps/router/schema.md`.
+A connector describes how an external API is called, what it accepts and returns, and how usage is billed. It lives under `apps/router/connectors/<provider>/` and consists of a `provider.ts`, a `provider.json` listing manifest (legal name, contact, an opaque payout account reference — never bank data —, a price declaration per endpoint and the data-handling statement), one file per endpoint under `endpoints/`, and recorded fixtures for replay tests. The format is documented in `apps/router/connectors/schema.md` (§1–§9).
 
 Checklist:
-- The endpoint description is written for agents: name the task it serves and what it must not be used for.
+- The endpoint description is written for agents: name the task it serves (`Use for: …`), state the cost class, keep it ≤ 400 characters, no marketing superlatives; what it must not be used for goes in `exclusions`.
 - The usage model is exact (flat per call, per result, or per unit) and failures cost zero.
 - Fixtures let the replay tests run with no network.
 - The permission level is declared and correct: reads are L1, writes that touch user data are L2, anything that sends externally or moves money is L3. An operation missing from the scope table is denied.
 - No credentials in the definition. Credentials are injected at the transport layer by the host.
 
-Run `pnpm --filter @shogunagent/router test` and `pnpm --filter @shogunagent/router build:catalog`.
+Then run the listing pipeline, which is what reviews your PR (`apps/router/connectors/schema.md` §10):
+
+```bash
+pnpm --filter @shogunagent/router listing:check connectors/<provider>   # schema, fixture replay, scope, description lint, price sanity; JSON report
+pnpm --filter @shogunagent/router test
+pnpm --filter @shogunagent/router build:catalog
+pnpm --filter @shogunagent/selection-eval harness --mock && pnpm --filter @shogunagent/selection-eval gate --baseline results/baseline.json
+```
+
+`.github/workflows/router-listing.yml` runs the same check on every PR that touches `apps/router/connectors/**` and posts the report as the job summary. A passing report is required for listing; a maintainer still reviews the connector.
 
 ## Engine changes (Rust)
 

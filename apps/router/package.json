@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build:catalog": "tsx scripts/build-catalog.ts",
-    "check:bundle": "rm -rf dist/dry-run && wrangler deploy --config wrangler.jsonc --dry-run --outdir dist/dry-run"
+    "check:bundle": "rm -rf dist/dry-run && wrangler deploy --config wrangler.jsonc --dry-run --outdir dist/dry-run",
+    "listing:check": "tsx scripts/listing-check.ts"
   },
   "dependencies": {
     "hono": "^4.13.13",
