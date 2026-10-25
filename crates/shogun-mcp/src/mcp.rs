@@ -198,6 +198,9 @@ pub struct McpServer<B: MemoryBackend> {
     /// approval URL is `<SHOGUN_APPROVAL_BASE_URL>/approve/<signed token>`. Without a base URL or
     /// a signing key the envelope carries the id and the poll only: the user approves in the app.
     remote: crate::remote_approvals::RemoteApprovals,
+    /// Whether this process carries out approved actions (the REST face holds the executor);
+    /// `actions.status` says `execute_unavailable` for an approved action when it does not.
+    executes: bool,
 }
 
 thread_local! {
@@ -250,6 +253,7 @@ impl<B: MemoryBackend> McpServer<B> {
             memory_gate: None,
             llm_limiter: Arc::new(crate::rate_limit::LlmRateLimiter::in_memory()),
             remote: crate::remote_approvals::RemoteApprovals::from_env(),
+            executes: false,
         }
     }
 
@@ -1621,15 +1625,33 @@ impl<B: MemoryBackend> McpServer<B> {
 
     fn poll_action(&self, approval_id: u64) -> String {
         let now = (self.clock)();
-        if let Some(store) = &self.approval_store {
-            return store
-                .with_queue(|queue| rest::poll_approval(approval_id, queue, now))
-                .unwrap_or_else(|why| approval_store_error(&why));
-        }
-        match self.approvals.lock() {
-            Ok(mut queue) => rest::poll_approval(approval_id, &mut queue, now),
-            Err(_) => r#"{"error":"internal"}"#.to_string(),
-        }
+        let polled = if let Some(store) = &self.approval_store {
+            match store.with_queue(|queue| rest::poll_approval(approval_id, queue, now)) {
+                Ok(polled) => polled,
+                Err(why) => return approval_store_error(&why),
+            }
+        } else {
+            match self.approvals.lock() {
+                Ok(mut queue) => rest::poll_approval(approval_id, &mut queue, now),
+                Err(_) => return r#"{"error":"internal"}"#.to_string(),
+            }
+        };
+        // The same completion REST applies: the decision the principal's store persisted (V103)
+        // and whether an approved action will be carried out here.
+        let persisted = || match self.backend.approval_ledger(crate::remote_approvals::LedgerOp::Get(approval_id)) {
+            Ok(crate::remote_approvals::LedgerReply::Row(row)) => row,
+            _ => None,
+        };
+        crate::remote_approvals::augment_status(approval_id, &polled, persisted, self.executes)
+    }
+
+    /// Whether this process carries out approved actions (E15 follow-up): the REST face of the
+    /// same process holds the executor. Only changes what `actions.status` says about an approved
+    /// action (`execute_unavailable` when false).
+    #[must_use]
+    pub fn with_approval_execution(mut self, executes: bool) -> Self {
+        self.executes = executes;
+        self
     }
 }
 

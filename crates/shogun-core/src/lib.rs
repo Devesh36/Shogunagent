@@ -146,6 +146,10 @@ pub mod screen_context;
 pub mod context_sufficiency;
 #[cfg(feature = "exec")]
 pub mod send_exec;
+/// The executor behind a remote approval (E15 follow-up): runs an approved action through
+/// `send_exec` once a human decided it.
+#[cfg(feature = "exec")]
+pub mod approval_exec;
 #[cfg(feature = "exec")]
 pub mod tool_runner;
 #[cfg(feature = "desktop")]

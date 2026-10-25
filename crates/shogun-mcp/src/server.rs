@@ -91,6 +91,9 @@ pub struct AppState {
     /// decide approvals and change grants from the CLI. Never an agent's token; the raw value is
     /// not kept.
     admin_digest: Option<[u8; 32]>,
+    /// Carries out an approved action once a human decided it (E15 follow-up). `None` in a build
+    /// without the execution path: decided approvals stay `approved` (`execute_unavailable`).
+    executor: Option<Arc<dyn crate::approval_exec::ApprovalExecutor>>,
 }
 
 /// Multi-principal mode (E2-T2): which store and which writer a bearer token names. `apps/api`
@@ -171,6 +174,7 @@ impl AppState {
             mcp: None,
             remote: crate::remote_approvals::RemoteApprovals::from_env(),
             admin_digest: std::env::var("SHOGUN_ADMIN_TOKEN").ok().and_then(|t| admin_digest(&t)),
+            executor: None,
         }
     }
 
@@ -188,6 +192,15 @@ impl AppState {
     #[must_use]
     pub fn with_admin_token(mut self, token: Option<&str>) -> Self {
         self.admin_digest = token.and_then(admin_digest);
+        self
+    }
+
+    /// Carry out approved actions with `executor` (E15 follow-up): a human's approval on the decide
+    /// route runs the action once and records `sent` / `send_failed`. Without one, a decided
+    /// approval stays `approved` with `next_action: "execute_unavailable"`.
+    #[must_use]
+    pub fn with_approval_executor(mut self, executor: Arc<dyn crate::approval_exec::ApprovalExecutor>) -> Self {
+        self.executor = Some(executor);
         self
     }
 

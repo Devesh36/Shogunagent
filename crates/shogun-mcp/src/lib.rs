@@ -33,6 +33,7 @@ pub mod governance_api;
 pub mod remote_approvals;
 pub mod ai_search_api;
 pub mod api_port;
+pub mod approval_exec;
 pub mod approval_store;
 pub mod reply_thread;
 pub mod backend;

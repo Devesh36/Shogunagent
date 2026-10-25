@@ -31,7 +31,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use shogun_agents::approval::{
-    ApprovalId, ApprovalQueue, ApprovalStatus, ConfirmIntent, Decision, RejectCause, APPROVAL_TIMEOUT_MS,
+    ApprovalId, ApprovalQueue, ApprovalStatus, ConfirmIntent, ConfirmedSend, Decision, RejectCause, APPROVAL_TIMEOUT_MS,
 };
 use shogun_agents::permission::SendAction;
 use subtle::ConstantTimeEq;
@@ -362,6 +362,36 @@ pub fn status_next_action(status: &str, executor: bool) -> Option<&'static str> 
     }
 }
 
+/// `actions.status` on every face: the queue's poll (`polled`), completed from the principal's
+/// durable ledger. An id the queue does not know reads the persisted decision (after a restart);
+/// a failed send gets its failure class from the ledger when the queue kept none; an approved
+/// action no executor will run says `next_action: "execute_unavailable"`.
+pub fn augment_status(
+    approval_id: u64,
+    polled: &str,
+    persisted: impl FnOnce() -> Option<shogun_memory::approval_ledger::DecisionRow>,
+    executes: bool,
+) -> String {
+    let mut value: Value =
+        serde_json::from_str(polled).unwrap_or_else(|_| json!({ "approval_id": approval_id, "status": "unknown" }));
+    let status = value["status"].as_str().unwrap_or("unknown").to_string();
+    if matches!(status.as_str(), "unknown" | "send_failed") {
+        if let Some(row) = persisted() {
+            if status == "unknown" {
+                value["status"] = Value::String(persisted_status(&row).into());
+            }
+            if let (None, Some(reason)) = (value.get("reason"), &row.reason_class) {
+                value["reason"] = Value::String(reason.clone());
+            }
+        }
+    }
+    let status = value["status"].as_str().unwrap_or("unknown").to_string();
+    if let Some(next) = status_next_action(&status, executes) {
+        value["next_action"] = Value::String(next.into());
+    }
+    value.to_string()
+}
+
 /// The redacted summary of a decision the ledger persisted, for an approval the queue and the
 /// in-process ledger no longer know (after a restart). Body-free, like every terminal row.
 pub fn persisted_summary(row: &shogun_memory::approval_ledger::DecisionRow, executor: bool) -> Value {
@@ -615,21 +645,43 @@ pub enum Applied {
 /// approved row is recorded `approved` — confirmed by a human, for the executor to carry out; the
 /// confirmed action is not run here.
 pub fn apply(queue: &mut ApprovalQueue, approval_id: u64, decision: RemoteDecision, now_ms: u64) -> Applied {
+    apply_with_send(queue, approval_id, decision, now_ms).0
+}
+
+/// [`apply`], also handing back the confirmed action of an approval, for the executor
+/// ([`crate::approval_exec`]). The queue releases it to exactly one decision: a second decision on
+/// the same id finds nothing pending and gets no action. A rejection, an expiry or an unknown id
+/// never yields one.
+pub fn apply_with_send(
+    queue: &mut ApprovalQueue,
+    approval_id: u64,
+    decision: RemoteDecision,
+    now_ms: u64,
+) -> (Applied, Option<ConfirmedSend>) {
     let id = ApprovalId(approval_id);
     match decision {
         RemoteDecision::Approve => match queue.confirm(id, ConfirmIntent::DedicatedButton, now_ms) {
-            Decision::Confirmed(_) => {
+            Decision::Confirmed(confirmed) => {
                 queue.mark_status(id, ApprovalStatus::Approved, now_ms);
-                Applied::Approved
+                (Applied::Approved, Some(confirmed))
             }
-            Decision::Rejected(RejectCause::TimedOut) => Applied::Expired,
-            _ => Applied::NotPending,
+            Decision::Rejected(RejectCause::TimedOut) => (Applied::Expired, None),
+            _ => (Applied::NotPending, None),
         },
         RemoteDecision::Reject => match queue.reject(id, RejectCause::UserRejected, now_ms) {
-            Decision::Rejected(_) => Applied::Rejected,
-            _ => Applied::NotPending,
+            Decision::Rejected(_) => (Applied::Rejected, None),
+            _ => (Applied::NotPending, None),
         },
     }
+}
+
+/// Record an executed approval's outcome on the queue: `approved` → `sent` / `send_failed`, once.
+pub fn settle(queue: &mut ApprovalQueue, approval_id: u64, outcome: &crate::approval_exec::ExecOutcome, now_ms: u64) -> bool {
+    let status = match outcome {
+        crate::approval_exec::ExecOutcome::Sent => ApprovalStatus::Sent,
+        crate::approval_exec::ExecOutcome::Failed(_) => ApprovalStatus::SendFailed,
+    };
+    queue.settle_approved(ApprovalId(approval_id), status, now_ms, outcome.reason())
 }
 
 /// A validated decision request body.

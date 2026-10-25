@@ -399,9 +399,22 @@ The sidecar's approval decision API (`crates/shogun-mcp/src/remote_approvals.rs`
   approval_ledger_unavailable`, nothing decided). In multi-principal mode approval ids start above
   every id an earlier process handed out, so a persisted decision never names a later approval,
   and `actions.status` answers `unknown` for another principal's approval.
-- **Approved** is a terminal status (`actions.status` reads `approved`): a human confirmed with the
-  dedicated button's authority; the executor that owns the action carries it out. The decision is
-  recorded with `decided_by` and the time in the ledger and in the audit log.
+- **Approved, then executed.** A human's approval confirms with the dedicated button's authority
+  and moves the request to `approved`. A sidecar built with the execution path (`shogun-api`,
+  feature `exec`, multi-principal) then carries the action out **once**, in the same request: the
+  principal's ledger claims it (`pending` → `executing`, a compare-and-set, so two racing
+  decisions or a second process never run it twice), `send_exec` writes the traceability row to
+  the principal's store and calls the provider with the principal's connector grant (from the
+  token store; no grant is `not_connected`), and the outcome is recorded on the approval, in the
+  ledger and in the audit log (`approvals.execute`, `sent` or `failed:<class>`). The decide
+  answer and `actions.status` read `sent`, or `send_failed` with a `reason` class
+  (`not_connected`, `not_authorized`, `connection_changed`, `trace_unavailable`,
+  `invalid_target`, `not_executable`, `provider_error`, `timeout`, `ledger_unavailable`) — never
+  the provider's message or the body. A rejected, expired or unknown approval releases no action
+  and nothing runs. A build without the execution path (the `shogun-mcp` server alone, or the
+  single-principal `shogun-api` beside the desktop app) leaves the approval `approved` with
+  `next_action: "execute_unavailable"`. The decision is recorded with `decided_by` and the time in
+  the ledger and in the audit log.
 - **Audit log** (V101 `audit_log`): one record per write and per approval decision on every face —
   actor, principal, tool or route, tier, outcome (`ok`, `pending`, `refused`, `approved`, …),
   time, request id (`X-Request-Id`, echoed). Never a body or an argument value.

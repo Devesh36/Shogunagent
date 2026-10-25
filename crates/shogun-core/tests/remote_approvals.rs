@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use shogun_cli::http::request;
 use shogun_core::daemon::Clock;
 use shogun_core::tenancy::{EnvKeyProvider, PrincipalStore, TokenPrincipalMap};
+use shogun_mcp::approval_exec::{ApprovalExecutor, ExecOutcome, ExecRequest};
 use shogun_mcp::remote_approvals::{ApprovalSigner, RemoteApprovals};
 use shogun_mcp::server::{bind_local, serve_on, AppState};
 use shogun_memory::DbKey;
@@ -57,15 +58,19 @@ fn temp_root(tag: &str) -> TempRoot {
 /// Start one server object over the principal files under `root` (a second call over the same
 /// root is a restart: fresh queue, fresh in-process ledger, the same stores).
 fn serve(root: PathBuf, configure: impl FnOnce(AppState) -> AppState + Send + 'static) -> u16 {
+    serve_with_clock(root, wall_clock(), configure)
+}
+
+fn serve_with_clock(root: PathBuf, clock: Clock, configure: impl FnOnce(AppState) -> AppState + Send + 'static) -> u16 {
     let keys = EnvKeyProvider::with_default(DbKey::new([0x5a; 32]));
-    let store = Arc::new(PrincipalStore::new(root, Arc::new(keys), wall_clock(), 8));
+    let store = Arc::new(PrincipalStore::new(root, Arc::new(keys), clock.clone(), 8));
     let resolver = TokenPrincipalMap::parse(&format!("alice:{TOKEN_A}:claude-code,bob:{TOKEN_B}")).unwrap();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build().unwrap();
         rt.block_on(async move {
             let state = configure(
-                shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), wall_clock())
+                shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), clock)
                     .with_admin_token(Some(ADMIN))
                     .with_remote_approvals(
                         RemoteApprovals::default().with_base_url(Some(BASE.into())).with_signer(ApprovalSigner::new(KEY)),
@@ -262,4 +267,205 @@ fn a_restart_forgets_neither_the_spent_nonce_nor_the_decision() {
     // An approval queued after the restart gets a fresh id: a persisted decision never names it.
     let (fresh, _, _) = send(restarted, "kenji@example.com");
     assert!(fresh > id, "{fresh} <= {id}");
+}
+
+/// A fake executor: counts calls, remembers what it was handed, answers a fixed outcome. It
+/// sleeps a little so racing decisions overlap it.
+struct CountingExecutor {
+    calls: std::sync::atomic::AtomicUsize,
+    seen: std::sync::Mutex<Vec<(u64, Option<String>, String)>>,
+    outcome: ExecOutcome,
+}
+
+impl CountingExecutor {
+    fn new(outcome: ExecOutcome) -> Arc<Self> {
+        Arc::new(Self { calls: Default::default(), seen: Default::default(), outcome })
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl ApprovalExecutor for CountingExecutor {
+    fn execute(&self, request: &ExecRequest<'_>) -> ExecOutcome {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let to = match &request.confirmed.action {
+            shogun_agents::permission::SendAction::SendEmail { to } => to.clone(),
+            _ => String::new(),
+        };
+        self.seen.lock().unwrap().push((request.approval_id, request.principal.map(str::to_string), to));
+        std::thread::sleep(Duration::from_millis(50));
+        self.outcome.clone()
+    }
+}
+
+fn admin_decide(port: u16, id: u64, decision: &str) -> (u16, String) {
+    let r = request(
+        port,
+        "POST",
+        &format!("/v1/approvals/{id}/decide"),
+        Some(ADMIN),
+        Some(&json!({ "decision": decision, "decided_by": "human:operator" }).to_string()),
+    )
+    .unwrap();
+    (r.status, r.body)
+}
+
+fn audit_rows(port: u16, token: &str) -> Vec<(String, String)> {
+    let audit = request(port, "GET", "/v1/audit", Some(token), None).unwrap();
+    json_of(&audit.body)["records"]
+        .as_array()
+        .cloned()
+        .unwrap()
+        .iter()
+        .map(|r| (r["route"].as_str().unwrap().to_string(), r["outcome"].as_str().unwrap().to_string()))
+        .collect()
+}
+
+fn poll(port: u16, id: u64, token: &str) -> Value {
+    json_of(&request(port, "GET", &format!("/v1/actions/status/{id}"), Some(token), None).unwrap().body)
+}
+
+/// E15 follow-up: an approved action runs exactly once, its outcome is recorded on the approval,
+/// in the audit log and on `actions.status`; a rejected approval never runs.
+#[test]
+fn an_approved_action_runs_once_and_reports_its_outcome() {
+    let root = temp_root("execute");
+    let executor = CountingExecutor::new(ExecOutcome::Sent);
+    let attached: Arc<dyn ApprovalExecutor> = executor.clone();
+    let port = serve(root.0.clone(), move |state| state.with_approval_executor(attached));
+    let signer = ApprovalSigner::new(KEY).unwrap();
+
+    let (id, token, _) = send(port, "aiko@example.com");
+    let claims = signer.verify(&token, now_ms()).unwrap();
+    let (status, body) = decide(port, id, &token, &claims.nonce, "approve");
+    assert_eq!(status, 200, "{body}");
+    let decided = json_of(&body);
+    assert_eq!((decided["status"].as_str(), decided["executed"].as_bool()), (Some("sent"), Some(true)), "{body}");
+    assert!(decided["next_action"].is_null(), "{body}");
+    assert_eq!(executor.calls(), 1);
+    // The executor got exactly what the human approved, for the approving principal.
+    assert_eq!(executor.seen.lock().unwrap()[0], (id, Some("alice".to_string()), "aiko@example.com".to_string()));
+
+    // A second decision on the same id runs nothing: the replayed token and the operator alike.
+    assert_eq!(decide(port, id, &token, &claims.nonce, "approve").0, 409);
+    assert_eq!(admin_decide(port, id, "approve").0, 409);
+    assert_eq!(executor.calls(), 1, "executed exactly once");
+
+    let status = poll(port, id, TOKEN_A);
+    assert_eq!(status["status"], "sent", "{status}");
+    assert!(status.get("next_action").is_none(), "{status}");
+    let summary = json_of(&request(port, "GET", &format!("/v1/approvals/{id}"), Some(TOKEN_A), None).unwrap().body);
+    assert_eq!(summary["approval"]["status"], "sent", "{summary}");
+    // Bob never sees Alice's outcome.
+    assert_eq!(poll(port, id, TOKEN_B)["status"], "unknown");
+
+    // A rejected approval never runs.
+    let (rejected, _, _) = send(port, "kenji@example.com");
+    let (status, body) = admin_decide(port, rejected, "reject");
+    assert_eq!((status, json_of(&body)["status"].as_str()), (200, Some("rejected")), "{body}");
+    assert_eq!(executor.calls(), 1);
+
+    // The audit log names the decision and its execution, labels only.
+    let rows = audit_rows(port, TOKEN_A);
+    assert!(rows.contains(&("approvals.decide".into(), "approved".into())), "{rows:?}");
+    assert!(rows.contains(&("approvals.execute".into(), "sent".into())), "{rows:?}");
+    assert_eq!(rows.iter().filter(|(route, _)| route == "approvals.execute").count(), 1, "{rows:?}");
+
+    // After a restart the outcome is still reported from Alice's store.
+    let restarted = serve(root.0.clone(), |state| state);
+    assert_eq!(poll(restarted, id, TOKEN_A)["status"], "sent");
+}
+
+/// A failed execution records its class (never the provider's words) and runs once too.
+#[test]
+fn a_failed_execution_records_its_class() {
+    let root = temp_root("failed");
+    let executor = CountingExecutor::new(ExecOutcome::Failed("not_connected"));
+    let attached: Arc<dyn ApprovalExecutor> = executor.clone();
+    let port = serve(root.0.clone(), move |state| state.with_approval_executor(attached));
+    let (id, _, _) = send(port, "aiko@example.com");
+    let (status, body) = admin_decide(port, id, "approve");
+    assert_eq!(status, 200, "{body}");
+    let decided = json_of(&body);
+    assert_eq!((decided["status"].as_str(), decided["reason"].as_str()), (Some("send_failed"), Some("not_connected")), "{body}");
+    let status = poll(port, id, TOKEN_A);
+    assert_eq!((status["status"].as_str(), status["reason"].as_str()), (Some("send_failed"), Some("not_connected")), "{status}");
+    assert!(audit_rows(port, TOKEN_A).contains(&("approvals.execute".into(), "failed:not_connected".into())));
+    assert_eq!(executor.calls(), 1);
+    // The class survives a restart (the queue forgets; the store does not).
+    let restarted = serve(root.0.clone(), |state| state);
+    let status = poll(restarted, id, TOKEN_A);
+    assert_eq!((status["status"].as_str(), status["reason"].as_str()), (Some("send_failed"), Some("not_connected")), "{status}");
+}
+
+/// The real executor (`send_exec` over the principal's connector grants): with no traceability
+/// sink, or no grant for the service, it fails before anything is sent.
+#[test]
+fn the_send_exec_executor_sends_nothing_it_cannot_trace_or_authorize() {
+    use shogun_core::approval_exec::{ConnectorTransports, SendExecExecutor, SinkFor};
+    let root = temp_root("sendexec");
+    let tokens: Arc<dyn shogun_integrations::TokenStore> = Arc::new(shogun_integrations::MemorySecretStore::new());
+    let sinks: SinkFor = Arc::new(|_| None);
+    let executor: Arc<dyn ApprovalExecutor> = Arc::new(SendExecExecutor::new(Arc::new(ConnectorTransports::new(tokens)), sinks));
+    let port = serve(root.0.clone(), move |state| state.with_approval_executor(executor));
+    let (id, _, _) = send(port, "aiko@example.com");
+    let (status, body) = admin_decide(port, id, "approve");
+    assert_eq!(status, 200, "{body}");
+    let decided = json_of(&body);
+    assert_eq!((decided["status"].as_str(), decided["reason"].as_str()), (Some("send_failed"), Some("trace_unavailable")), "{body}");
+    assert!(!body.contains("aiko"), "{body}");
+}
+
+/// An expired approval never runs, even when a human approves it late.
+#[test]
+fn an_expired_approval_never_runs() {
+    let root = temp_root("expired");
+    let offset = Arc::new(std::sync::atomic::AtomicI64::new(0));
+    let skew = offset.clone();
+    let clock: Clock = Arc::new(move || (wall_clock())() + skew.load(std::sync::atomic::Ordering::SeqCst));
+    let executor = CountingExecutor::new(ExecOutcome::Sent);
+    let attached: Arc<dyn ApprovalExecutor> = executor.clone();
+    let port = serve_with_clock(root.0.clone(), clock, move |state| state.with_approval_executor(attached));
+    let (id, _, _) = send(port, "aiko@example.com");
+    offset.store(11 * 60 * 1000, std::sync::atomic::Ordering::SeqCst);
+    let (status, body) = admin_decide(port, id, "approve");
+    assert_eq!(status, 410, "{body}");
+    assert_eq!(executor.calls(), 0);
+    assert_eq!(poll(port, id, TOKEN_A)["status"], "timed_out");
+}
+
+/// Decisions racing on one approval: one wins, one execution.
+#[test]
+fn a_double_decide_race_executes_once() {
+    let root = temp_root("race");
+    let executor = CountingExecutor::new(ExecOutcome::Sent);
+    let attached: Arc<dyn ApprovalExecutor> = executor.clone();
+    let port = serve(root.0.clone(), move |state| state.with_approval_executor(attached));
+    let signer = ApprovalSigner::new(KEY).unwrap();
+    for round in 0..3 {
+        let (id, token, _) = send(port, &format!("round{round}@example.com"));
+        let claims = signer.verify(&token, now_ms()).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|i| {
+                let barrier = barrier.clone();
+                let (token, nonce) = (token.clone(), claims.nonce.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    // Two present the signed token, two the operator credential.
+                    if i % 2 == 0 {
+                        decide(port, id, &token, &nonce, "approve").0
+                    } else {
+                        admin_decide(port, id, "approve").0
+                    }
+                })
+            })
+            .collect();
+        let statuses: Vec<u16> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_eq!(statuses.iter().filter(|s| **s == 200).count(), 1, "round {round}: {statuses:?}");
+        assert!(statuses.iter().all(|s| matches!(s, 200 | 409)), "round {round}: {statuses:?}");
+        assert_eq!(executor.calls(), round + 1, "round {round}: one execution per approval");
+    }
 }

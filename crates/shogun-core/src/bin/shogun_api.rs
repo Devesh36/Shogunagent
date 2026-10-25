@@ -244,10 +244,12 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
     let clock = wall_clock();
     let (embedder, line) = shogun_core::embed_models::load_configured();
     eprintln!("{FACE}: {line}");
+    let keys: Arc<dyn shogun_core::tenancy::KeyProvider> = Arc::new(keys);
     let store = Arc::new(
-        PrincipalStore::new(root.clone(), Arc::new(keys), clock.clone(), max_open).with_embedder(embedder),
+        PrincipalStore::new(root.clone(), keys.clone(), clock.clone(), max_open).with_embedder(embedder),
     );
-    let state = shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), clock);
+    let executor = approval_executor(&root, keys, store.clone());
+    let state = shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), clock).with_approval_executor(executor);
     let port = std::env::var("SHOGUN_API_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
@@ -259,6 +261,31 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
         root.display()
     );
     serve_on(listener, state.with_port(addr.port())).await
+}
+
+/// The executor of remotely approved actions in multi-principal mode (E15 follow-up): each
+/// principal's connector grants from the local token store (`SHOGUN_TOKEN_STORE_DIR`, else
+/// `<root>/.tokens`, sealed with the principal's key), the action traced into the principal's own
+/// store before it leaves. A principal with no grant for the action's service gets
+/// `send_failed` / `not_connected`, and nothing is sent.
+fn approval_executor(
+    root: &std::path::Path,
+    keys: Arc<dyn shogun_core::tenancy::KeyProvider>,
+    store: Arc<shogun_core::tenancy::PrincipalStore>,
+) -> Arc<dyn shogun_mcp::approval_exec::ApprovalExecutor> {
+    use shogun_core::approval_exec::{ConnectorTransports, SendExecExecutor, SinkFor};
+    use shogun_core::tenancy::credentials::{local_store, token_dir, TOKEN_STORE_DIR_VAR};
+    use shogun_core::tenancy::PrincipalId;
+    let tokens: Arc<dyn shogun_integrations::TokenStore> = Arc::new(local_store(
+        token_dir(root, std::env::var_os(TOKEN_STORE_DIR_VAR).map(std::path::PathBuf::from)),
+        keys,
+    ));
+    let sinks: SinkFor = Arc::new(move |principal: Option<&str>| {
+        let id = PrincipalId::parse(principal?).ok()?;
+        let open = store.open(&id).ok()?;
+        Some(Box::new(open.db().traceability_sink()) as Box<dyn shogun_core::llm::traceability::TraceabilitySink>)
+    });
+    Arc::new(SendExecExecutor::new(Arc::new(ConnectorTransports::new(tokens)), sinks))
 }
 
 /// How many backlog rows one embedding pass handles, and how often the pass runs.
