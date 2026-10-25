@@ -1,0 +1,11 @@
+target
+**/target
+node_modules
+**/node_modules
+.git
+.claude
+research_notes
+reports
+dist
+**/dist
+.wrangler
