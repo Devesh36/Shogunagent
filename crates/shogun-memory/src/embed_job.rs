@@ -20,14 +20,19 @@ pub enum EmbedJobError {
     Embed(#[from] EmbedError),
 }
 
-/// Event ids (with their content) that have no embedding yet, oldest first, capped at `limit`.
-/// A LEFT JOIN against `event_vec` finds the gap.
+/// Event ids (with their content) that need embedding in the active space, oldest first, capped
+/// at `limit`: no Warm vector yet, or one written by another model (or before V102, with no model
+/// recorded) — the re-embed half of a model switch. Events archived to Cold are left there.
 pub fn pending(conn: &Connection, limit: usize) -> Result<Vec<(i64, String)>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT e.id, e.content
            FROM event_log e
            LEFT JOIN event_vec v ON v.rowid = e.id
-          WHERE v.rowid IS NULL
+           LEFT JOIN vector_models m ON m.vec_table = 'event_vec' AND m.row_id = e.id
+          WHERE (v.rowid IS NULL
+                 OR m.model_id IS NULL
+                 OR m.model_id IS NOT (SELECT model_id FROM embedding_space WHERE id = 1))
+            AND NOT EXISTS (SELECT 1 FROM cold_embeddings c WHERE c.event_id = e.id)
           ORDER BY e.id ASC
           LIMIT ?1",
     )?;
@@ -40,27 +45,42 @@ pub fn pending(conn: &Connection, limit: usize) -> Result<Vec<(i64, String)>, ru
 /// Embed and store one batch of pending events (up to `batch`). Returns the number embedded.
 /// Zero means nothing was pending. The vectors are written in a single transaction so a batch
 /// is all-or-nothing.
+///
+/// The embedder's model becomes the store's active space first ([`crate::embedding_space`]): from
+/// then on search reads only its rows, and rows another model wrote are pending until re-embedded
+/// here. A vector of the wrong length is refused rather than stored.
 pub fn embed_batch(
     conn: &mut Connection,
     embedder: &dyn Embedder,
     batch: usize,
 ) -> Result<usize, EmbedJobError> {
+    crate::embedding_space::activate(conn, embedder.model_id(), embedder.dim(), now_ms())?;
     let pending = pending(conn, batch)?;
     if pending.is_empty() {
         return Ok(0);
     }
     let texts: Vec<&str> = pending.iter().map(|(_, c)| c.as_str()).collect();
     let vectors = embedder.embed_passages(&texts)?;
+    if vectors.len() != pending.len() {
+        return Err(EmbedError::Inference("passage count mismatch".to_owned()).into());
+    }
+    if let Some(bad) = vectors.iter().find(|v| v.len() != embedder.dim()) {
+        return Err(EmbedError::Dim { expected: embedder.dim(), got: bad.len() }.into());
+    }
 
     let tx = conn.transaction()?;
     for ((id, _), vec) in pending.iter().zip(vectors.iter()) {
-        // Reuse the vector-store upsert semantics inside the batch transaction.
-        tx.execute("DELETE FROM event_vec WHERE rowid = ?1", params![id])?;
-        let blob: Vec<u8> = vec.iter().flat_map(|f| f.to_le_bytes()).collect();
-        tx.execute("INSERT INTO event_vec (rowid, embedding) VALUES (?1, ?2)", params![id, blob])?;
+        crate::vector::upsert_in(&tx, *id, embedder.model_id(), vec)?;
     }
     tx.commit()?;
     Ok(pending.len())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Drain all pending events in batches of `batch` until none remain. Returns the total embedded.
@@ -146,6 +166,51 @@ mod tests {
         let q = m.embed_query("budget review").unwrap();
         let hits = crate::search::search_hybrid(&conn, "no_such_fts_term", Some(&q), 5).unwrap();
         assert!(hits.iter().any(|h| h.event_id == id));
+    }
+
+    /// E24: switching models re-embeds every row in place; the old model's rows are never mixed
+    /// into the new space and nothing is lost.
+    #[test]
+    fn a_model_switch_re_embeds_instead_of_mixing() {
+        use crate::embed::TestEmbedder;
+        let mut conn = crate::open_in_memory().unwrap();
+        for i in 0..3 {
+            add(&conn, &format!("event number {i}"), &format!("s{i}"));
+        }
+        let first = MockEmbedder::new(E5_SMALL_DIM);
+        assert_eq!(embed_all_pending(&mut conn, &first, 2).unwrap(), 3);
+        assert_eq!(
+            crate::embedding_space::counts(&conn, crate::embedding_space::EVENT_VEC).unwrap(),
+            vec![(crate::embedding_space::UNSPECIFIED_MODEL.to_string(), 3)]
+        );
+
+        let second = TestEmbedder::new();
+        assert!(pending(&conn, 10).unwrap().is_empty(), "nothing is pending before the switch");
+        crate::embedding_space::activate(&conn, second.model_id(), second.dim(), 1).unwrap();
+        assert_eq!(pending(&conn, 10).unwrap().len(), 3, "after the switch every row of the old model is pending");
+        assert!(crate::vector::knn(&conn, &second.embed_query("event number").unwrap(), 5).unwrap().is_empty(), "the old rows are never searched in the new space");
+        assert_eq!(embed_all_pending(&mut conn, &second, 2).unwrap(), 3, "every row is re-embedded");
+        assert_eq!(
+            crate::embedding_space::counts(&conn, crate::embedding_space::EVENT_VEC).unwrap(),
+            vec![(second.model_id().to_string(), 3)]
+        );
+        assert_eq!(crate::vector::count(&conn).unwrap(), 3, "replaced in place, not duplicated");
+        assert!(pending(&conn, 10).unwrap().is_empty());
+    }
+
+    /// Vectors written before V102 carry no model: once an embedder runs they are re-embedded.
+    #[test]
+    fn unattributed_vectors_are_re_embedded() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let id = add(&conn, "legacy vector", "legacy");
+        let blob: Vec<u8> = vec![0.1f32; E5_SMALL_DIM].iter().flat_map(|f| f.to_le_bytes()).collect();
+        conn.execute("INSERT INTO event_vec (rowid, embedding) VALUES (?1, ?2)", params![id, blob]).unwrap();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+        assert_eq!(embed_all_pending(&mut conn, &m, 8).unwrap(), 1);
+        assert_eq!(
+            crate::embedding_space::model_of(&conn, crate::embedding_space::EVENT_VEC, id).unwrap().as_deref(),
+            Some(m.model_id())
+        );
     }
 
     #[test]

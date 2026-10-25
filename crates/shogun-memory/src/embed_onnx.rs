@@ -1,16 +1,19 @@
-//! The ONNX-backed embedder (multilingual-e5-small, on-device, no cloud embedding API).
-//! Feature-gated behind `onnx` — see the feature note in Cargo.toml.
+//! The ONNX-backed embedder (on-device, no cloud embedding API), driven by a
+//! [`crate::embed::ModelSpec`]: the server's default [`crate::embed::NOMIC_EMBED_TEXT_V15`]
+//! (feature `embed-local`, E24) or ShogunAI's developer model
+//! [`crate::embed::MULTILINGUAL_E5_SMALL`]. Feature-gated behind `onnx` — see Cargo.toml.
 //!
-//! **Developer-only since issue #237.** The desktop app ships neither these weights nor the ONNX
-//! Runtime: a release searches lexically and never constructs this type. A developer fetches the
-//! model (`scripts/fetch-embedding-model.sh`), installs the runtime (`brew install onnxruntime`)
-//! and opts in with the desktop `local-embedder` feature; everything else — the shipped app and
-//! every test — runs without an embedder, which `Db::with_embedder` treats as the normal case.
+//! Nothing here downloads anything: the model files come from `shogun models fetch` (an explicit
+//! operator step) and the ONNX Runtime library is resolved at run time (`load-dynamic`). Without
+//! either, loading fails with an `Err` and search stays lexical.
 //!
-//! Three details are easy to get wrong and would silently degrade retrieval rather than fail:
+//! Four details are easy to get wrong and would silently degrade retrieval rather than fail:
 //!
-//! * **e5 role prefixes.** The model is trained with `query:` / `passage:` and its accuracy drops
-//!   noticeably without them, in a way nothing surfaces as an error.
+//! * **Task prefixes.** e5 is trained with `query:` / `passage:`, nomic with `search_query:` /
+//!   `search_document:`; accuracy drops noticeably without them, in a way nothing surfaces as an
+//!   error. They come from the spec.
+//! * **Matryoshka truncation.** nomic v1.5 is layer-normalised before its 768-wide output is cut
+//!   to the stored 384, then re-normalised; truncating without the layer norm skews the prefix.
 //! * **Mean pooling over the attention mask.** Padding tokens must not be averaged in, or every
 //!   short text drifts toward the padding vector.
 //! * **L2 normalisation.** Cosine similarity — and the vector store's distance — assume unit
@@ -23,11 +26,7 @@ use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Value;
 use tokenizers::Tokenizer;
 
-use crate::embed::{e5_passage, e5_query, EmbedError, Embedder, E5_SMALL_DIM};
-
-/// Longest input handed to the model. e5-small is trained at 512; anything past that is truncated
-/// by the tokenizer anyway, and a captured window can be far longer.
-const MAX_TOKENS: usize = 512;
+use crate::embed::{EmbedError, Embedder, ModelSpec, Pooling, MULTILINGUAL_E5_SMALL};
 
 // `ort` is built in `load-dynamic` mode: nothing is linked at build time and the runtime library is
 // resolved by `dlopen` at first use. Two problems come with that, and both bite here rather than in
@@ -109,18 +108,52 @@ fn ensure_runtime() -> Result<(), EmbedError> {
 pub struct OnnxEmbedder {
     session: Mutex<Session>,
     tokenizer: Tokenizer,
+    spec: &'static ModelSpec,
 }
 
 impl OnnxEmbedder {
-    /// Load the model and its tokenizer from disk.
+    /// Load ShogunAI's developer model (multilingual-e5-small) from disk. Kept for the developer
+    /// opt-in and `tests/retrieval_eval.rs`; the server loads its spec with [`Self::load_dir`].
+    pub fn load(model: impl AsRef<Path>, tokenizer: impl AsRef<Path>) -> Result<Self, EmbedError> {
+        Self::load_spec(&MULTILINGUAL_E5_SMALL, model, tokenizer)
+    }
+
+    /// Load `spec`'s files from the directory `shogun models fetch` wrote them to.
+    pub fn load_dir(spec: &'static ModelSpec, dir: impl AsRef<Path>) -> Result<Self, EmbedError> {
+        let dir = dir.as_ref();
+        let model = dir.join(spec.onnx_file().unwrap_or("model.onnx"));
+        let tokenizer = dir.join("tokenizer.json");
+        if !model.is_file() || !tokenizer.is_file() {
+            return Err(EmbedError::NotLoaded);
+        }
+        Self::load_spec(spec, model, tokenizer)
+    }
+
+    /// The spec this embedder runs.
+    pub fn spec(&self) -> &'static ModelSpec {
+        self.spec
+    }
+
+    /// Load a model and its tokenizer from disk.
     ///
     /// `model` is the `.onnx` file, `tokenizer` the matching `tokenizer.json` — they must be from
     /// the same model, since a mismatched vocabulary produces confident nonsense rather than an
     /// error.
-    pub fn load(model: impl AsRef<Path>, tokenizer: impl AsRef<Path>) -> Result<Self, EmbedError> {
+    pub fn load_spec(
+        spec: &'static ModelSpec,
+        model: impl AsRef<Path>,
+        tokenizer: impl AsRef<Path>,
+    ) -> Result<Self, EmbedError> {
         ensure_runtime()?;
-        let tokenizer = Tokenizer::from_file(tokenizer.as_ref())
+        let mut tokenizer = Tokenizer::from_file(tokenizer.as_ref())
             .map_err(|e| EmbedError::Inference(format!("tokenizer: {e}")))?;
+        // Truncate inside the tokenizer so the closing special token survives a long input.
+        tokenizer
+            .with_truncation(Some(tokenizers::TruncationParams {
+                max_length: spec.max_tokens,
+                ..Default::default()
+            }))
+            .map_err(|e| EmbedError::Inference(format!("tokenizer truncation: {e}")))?;
         let model = model.as_ref().to_path_buf();
         // Belt and braces around the one thing that can still abort the process: ort panics on
         // several load failures (a wrong-architecture library, a corrupt graph) rather than
@@ -136,7 +169,7 @@ impl OnnxEmbedder {
         }))
         .map_err(|_| EmbedError::Inference("onnx runtime aborted while loading the model".into()))?
         .map_err(|e| EmbedError::Inference(format!("session: {e}")))?;
-        Ok(Self { session: Mutex::new(session), tokenizer })
+        Ok(Self { session: Mutex::new(session), tokenizer, spec })
     }
 
     /// Embed a batch of already-prefixed texts.
@@ -144,13 +177,10 @@ impl OnnxEmbedder {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
-        let mut encodings = self
+        let encodings = self
             .tokenizer
             .encode_batch(texts.iter().map(String::as_str).collect::<Vec<_>>(), true)
             .map_err(|e| EmbedError::Inference(format!("encode: {e}")))?;
-        for e in &mut encodings {
-            e.truncate(MAX_TOKENS, 0, tokenizers::TruncationDirection::Right);
-        }
         let batch = encodings.len();
         let seq = encodings.iter().map(|e| e.get_ids().len()).max().unwrap_or(0);
         if seq == 0 {
@@ -160,7 +190,7 @@ impl OnnxEmbedder {
         // Pad to a rectangular batch, keeping the mask so padding can be excluded from the mean.
         let mut ids = vec![0i64; batch * seq];
         let mut mask = vec![0i64; batch * seq];
-        let mut types = vec![0i64; batch * seq];
+        let types = vec![0i64; batch * seq];
         for (r, enc) in encodings.iter().enumerate() {
             for (c, (&id, &m)) in
                 enc.get_ids().iter().zip(enc.get_attention_mask().iter()).enumerate()
@@ -168,7 +198,6 @@ impl OnnxEmbedder {
                 ids[r * seq + c] = id as i64;
                 mask[r * seq + c] = m as i64;
             }
-            let _ = &mut types;
         }
 
         let shape = [batch, seq];
@@ -204,8 +233,8 @@ impl OnnxEmbedder {
             return Err(EmbedError::Inference(format!("unexpected output rank {}", out_shape.len())));
         }
         let hidden = out_shape[2] as usize;
-        if hidden != E5_SMALL_DIM {
-            return Err(EmbedError::Dim { expected: E5_SMALL_DIM, got: hidden });
+        if hidden != self.spec.native_dim {
+            return Err(EmbedError::Dim { expected: self.spec.native_dim, got: hidden });
         }
 
         let mut out = Vec::with_capacity(batch);
@@ -222,15 +251,41 @@ impl OnnxEmbedder {
                     *s += data[base + h];
                 }
             }
-            if kept > 0.0 {
-                for s in sum.iter_mut() {
-                    *s /= kept;
+            match self.spec.pooling {
+                Pooling::Mean if kept > 0.0 => {
+                    for s in sum.iter_mut() {
+                        *s /= kept;
+                    }
                 }
+                Pooling::Mean => {}
             }
-            l2_normalize(&mut sum);
-            out.push(sum);
+            out.push(finish(sum, self.spec));
         }
         Ok(out)
+    }
+}
+
+/// Pooled vector → stored vector: the Matryoshka steps the spec asks for, then unit length.
+fn finish(mut pooled: Vec<f32>, spec: &ModelSpec) -> Vec<f32> {
+    if spec.layer_norm_before_truncate {
+        layer_norm(&mut pooled);
+    }
+    pooled.truncate(spec.stored_dim);
+    l2_normalize(&mut pooled);
+    pooled
+}
+
+/// Layer normalisation without learned scale or shift (`F.layer_norm(x, (d,))`, eps 1e-5).
+fn layer_norm(v: &mut [f32]) {
+    if v.is_empty() {
+        return;
+    }
+    let n = v.len() as f32;
+    let mean = v.iter().sum::<f32>() / n;
+    let var = v.iter().map(|x| (x - mean) * (x - mean)).sum::<f32>() / n;
+    let denom = (var + 1e-5).sqrt();
+    for x in v.iter_mut() {
+        *x = (*x - mean) / denom;
     }
 }
 
@@ -251,16 +306,21 @@ fn l2_normalize(v: &mut [f32]) {
 
 impl Embedder for OnnxEmbedder {
     fn dim(&self) -> usize {
-        E5_SMALL_DIM
+        self.spec.stored_dim
+    }
+
+    fn model_id(&self) -> &str {
+        self.spec.space_id
     }
 
     fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
-        let prepared: Vec<String> = texts.iter().map(|t| e5_passage(t)).collect();
+        let prepared: Vec<String> =
+            texts.iter().map(|t| format!("{}{t}", self.spec.passage_prefix)).collect();
         self.embed_prepared(&prepared)
     }
 
     fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
-        let prepared = vec![e5_query(text)];
+        let prepared = vec![format!("{}{text}", self.spec.query_prefix)];
         self.embed_prepared(&prepared)?
             .into_iter()
             .next()
@@ -279,6 +339,61 @@ mod tests {
         assert!((v[0] - 0.6).abs() < 1e-6 && (v[1] - 0.8).abs() < 1e-6);
         let len = v.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!((len - 1.0).abs() < 1e-6);
+    }
+
+    /// nomic's Matryoshka recipe: layer-norm the full vector, keep the prefix, re-normalise.
+    #[test]
+    fn matryoshka_finish_layer_norms_truncates_and_normalises() {
+        let spec = &crate::embed::NOMIC_EMBED_TEXT_V15;
+        let pooled: Vec<f32> = (0..spec.native_dim).map(|i| (i % 7) as f32 + 0.5).collect();
+        let out = finish(pooled.clone(), spec);
+        assert_eq!(out.len(), spec.stored_dim);
+        let len = out.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((len - 1.0).abs() < 1e-5);
+        // Without the layer norm the prefix differs: the step is not a no-op.
+        let mut plain = pooled;
+        plain.truncate(spec.stored_dim);
+        l2_normalize(&mut plain);
+        assert!(out.iter().zip(&plain).any(|(a, b)| (a - b).abs() > 1e-3));
+        // e5 keeps its native 384 untouched apart from normalisation.
+        let e5 = finish(vec![3.0, 4.0], &MULTILINGUAL_E5_SMALL);
+        assert!((e5[0] - 0.6).abs() < 1e-6 && (e5[1] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_missing_model_directory_is_not_loaded() {
+        let err = OnnxEmbedder::load_dir(&crate::embed::NOMIC_EMBED_TEXT_V15, "/nonexistent/models");
+        assert!(matches!(err, Err(EmbedError::NotLoaded)));
+    }
+
+    /// End-to-end against the real default model (nomic-embed-text-v1.5) and runtime. Ignored: CI
+    /// has neither. `shogun models fetch` writes the directory.
+    ///   ORT_DYLIB_PATH=…/libonnxruntime.so SHOGUN_EMBED_MODEL_DIR=…/nomic-embed-text-v1.5 \
+    ///     cargo test -p shogun-memory --features embed-local -- --ignored nomic --nocapture
+    #[test]
+    #[ignore = "needs the fetched model and an ONNX Runtime; set SHOGUN_EMBED_MODEL_DIR"]
+    fn the_real_nomic_model_ranks_the_answer_above_unrelated_text() {
+        let Ok(dir) = std::env::var("SHOGUN_EMBED_MODEL_DIR") else {
+            return;
+        };
+        let e = OnnxEmbedder::load_dir(&crate::embed::NOMIC_EMBED_TEXT_V15, dir).expect("load");
+        assert_eq!(e.dim(), crate::embed::STORED_DIM);
+        assert_eq!(e.model_id(), "nomic-embed-text-v1.5@384");
+        let q = e.embed_query("what did we decide about the vendor pricing?").unwrap();
+        let passages = [
+            "The vendor renewal was settled at 12k for the year.",
+            "Lunch options near the office on Thursday.",
+            "The office wifi has been dropping since the upgrade.",
+        ];
+        let vecs = e.embed_passages(&passages).unwrap();
+        let scores: Vec<f32> = vecs.iter().map(|p| crate::embed::cosine_similarity(&q, p)).collect();
+        // log-hygiene-ok: fixed eval fixture scores, no captured text
+        eprintln!("nomic scores: {scores:?}");
+        assert!(scores[0] > scores[1] && scores[0] > scores[2], "{scores:?}");
+        let len = q.iter().map(|x| x * x).sum::<f32>().sqrt();
+        assert!((len - 1.0).abs() < 1e-3);
+        // Same input, same vector: the space is deterministic.
+        assert_eq!(e.embed_query("vendor pricing").unwrap(), e.embed_query("vendor pricing").unwrap());
     }
 
     #[test]
@@ -353,7 +468,7 @@ mod tests {
             return;
         };
         let e = OnnxEmbedder::load(model, tok).expect("load");
-        assert_eq!(e.dim(), E5_SMALL_DIM);
+        assert_eq!(e.dim(), crate::embed::E5_SMALL_DIM);
 
         // What this layer is actually responsible for is **recall**: getting the answering passage
         // into the handful of lines that reach the model, ahead of unrelated noise. It is not

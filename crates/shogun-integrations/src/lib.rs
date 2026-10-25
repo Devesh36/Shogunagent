@@ -9,6 +9,10 @@
 //! - `rpc` — the `McpRpc` / `TokenProvider` seams (pure traits).
 //! - `transport` — `RemoteMcpTransport` implements `IntegrationTransport`, composing the above.
 //! - `oauth_flow` — feature `live`: the interactive OAuth loopback flow (browser + loopback socket) over the `TokenExchange` seam. No HTTP client — the concrete reqwest impls live in shogun-core (the single traced egress, FR-TR-03).
+//! - `token_store` — where a principal's credentials live (E5-T5): the [`TokenStore`] trait over
+//!   principal × slot, holding [`Secret`]s; the file-sealed store for a local Linux server, the
+//!   interface the hosted KMS-sealed Postgres store implements, and the Mac app's Keychain
+//!   (`keychain`, feature `desktop`).
 //!
 //! Scope notes (product decision 2026-07-23):
 //! - Google Docs / Sheets have no dedicated official MCP server — their content is read via Drive's `read_file_content`, and there is no first-layer write path for them.
@@ -27,19 +31,24 @@ pub mod runtime;
 pub mod send_bridge;
 pub mod slack_target;
 pub mod token;
+pub mod token_store;
 pub mod toolmap;
 pub mod transport;
 
-#[cfg(target_os = "macos")]
+// The Mac app's Keychain and code-signature readers (feature `desktop`; each file is macOS-only
+// inside). The server keeps tokens in `token_store` instead (E5-T5).
+#[cfg(feature = "desktop")]
 pub mod keychain;
-#[cfg(target_os = "macos")]
+#[cfg(feature = "desktop")]
 pub mod keychain_store;
-#[cfg(target_os = "macos")]
+#[cfg(feature = "desktop")]
 pub mod code_signature;
 pub mod keychain_fallback;
 pub mod keychain_accounts;
 #[cfg(feature = "live")]
 pub mod oauth_flow;
+#[cfg(all(feature = "live", feature = "desktop"))]
+mod browser;
 
 pub use composio::ComposioApi;
 pub use connect::ConnectError;
@@ -50,8 +59,9 @@ pub use runtime::{
     IngestSink, ServiceStatus, SyncReport,
 };
 pub use send_bridge::{args_for_send, route_send, SendRoute};
-pub use token::{ManagedTokenProvider, MemoryTokenStore, TokenError, TokenManager, TokenStore};
+pub use token::{GrantStore, ManagedTokenProvider, MemoryTokenStore, TokenError, TokenManager};
+pub use token_store::{
+    CredentialSlot, FileSealedTokenStore, MemorySecretStore, PrincipalGrants, RemoteTokenStore, Secret,
+    TokenStore, TokenStoreError,
+};
 pub use transport::{RemoteMcpTransport, WriteExecutor};
-
-#[cfg(target_os = "macos")]
-pub use keychain::KeychainTokenStore;

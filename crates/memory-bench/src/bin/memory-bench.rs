@@ -61,6 +61,10 @@ OPTIONS:
     --recency <F>       Recency weight blended into ranking, 0..1. Default 0 = shipped behaviour.
     --write-batch <N>   Events per bulk-load transaction, at least 1. Default: 1000. Use 1 to
                         measure the true per-capture write cost including commit.
+    --embedder <NAME>   Turn the vector lane on (E24). `test` = the deterministic test
+                        embedder (no model); with --features embed-local, a fetched model by
+                        name (nomic-embed-text-v1.5) from SHOGUN_MODELS_DIR. Default: none
+                        (lexical). The report names the model; never compare across models.
     -h, --help          Show this help.
 
 REPRODUCIBILITY:
@@ -72,6 +76,7 @@ REPRODUCIBILITY:
 HARNESS (E12-T2 — the same-harness publication, docs/benchmarks/README.md):
     memory-bench harness [--seeds N] [--first-seed N] [--events N] [--k N] [--warmup N]
                          [--path hybrid|federated] [--db-dir DIR] [--out FILE]
+                         [--embedder NAME]
     Runs query_p95 (clean), temporal_recall_at_1, abstention_false_evidence and
     multi_session_coverage_at_5 over N seeds (default 10, from 42) at --events (default 100000)
     on the federated path (the daemon's), then writes benchmarks.json (default
@@ -79,6 +84,8 @@ HARNESS (E12-T2 — the same-harness publication, docs/benchmarks/README.md):
     model cost and p95 per suite, plus not-run entries for the OmniMemEval and Mem0 harnesses
     (SHOGUN_OMNIMEMEVAL_DIR / SHOGUN_MEM0_HARNESS_DIR). No model is called. --db-dir names a
     parent directory for one fresh scratch database per run; without it every run is in-memory.
+    --embedder pins ONE embedding model for every suite and seed and records it as
+    `embedding: {model, dim}`; without it `embedding` is null (lexical).
 
 EXAMPLES:
     memory-bench --workload clean --events 100000 --queries 500 --seed 42 --db /tmp/bench-run --out reports
@@ -106,6 +113,7 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
         recency_weight: 0.0,
         search_path: memory_bench::backend::SearchPath::default(),
         slice: memory_bench::slicer::SliceConfig::default(),
+        embedder: None,
     };
 
     let mut i = 0;
@@ -158,6 +166,7 @@ fn parse(args: &[String]) -> Result<Option<BenchConfig>, String> {
             }
             "--db" => cfg.db_path = Some(value.clone()),
             "--out" => cfg.out_dir = Some(value.clone()),
+            "--embedder" => cfg.embedder = Some(memory_bench::embedding::BenchEmbedder::parse(value)?),
             other => return Err(format!("unknown flag {other:?}")),
         }
         i += 2;
@@ -205,6 +214,7 @@ fn parse_harness(args: &[String]) -> Result<Option<(HarnessConfig, String)>, Str
             }
             "--db-dir" => cfg.db_dir = Some(value.clone()),
             "--out" => out = value.clone(),
+            "--embedder" => cfg.embedder = Some(memory_bench::embedding::BenchEmbedder::parse(value)?),
             other => return Err(format!("unknown harness flag {other:?}")),
         }
         i += 2;

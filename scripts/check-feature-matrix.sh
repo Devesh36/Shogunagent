@@ -29,6 +29,10 @@ run cargo clippy -p shogun-core --features daemon-server --all-targets
 run cargo clippy -p shogun-core --features desktop,daemon-server --all-targets
 run cargo clippy -p shogun-mcp --features server --all-targets
 run cargo clippy -p shogun-mcp --features desktop,server --all-targets
+# E24: the local embedding lane (ONNX, runtime loaded at run time) and the server build profile.
+run cargo clippy -p shogun-memory --features embed-local --all-targets
+run cargo clippy -p shogun-core -p shogun-cli --features shogun-core/daemon-server,shogun-core/embed-local,shogun-cli/embed-local --all-targets
+run cargo clippy -p memory-bench --features embed-local --all-targets
 run python3 scripts/check-desktop-gate.py --self-test
 run python3 scripts/check-desktop-gate.py
 

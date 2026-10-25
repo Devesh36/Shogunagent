@@ -13,7 +13,21 @@ description = "SHOGUN first-layer connector adapter: maps the shogun-mcp scope t
 # shogun-core. `live` enables the interactive OAuth loopback flow (needs OS randomness, no network).
 [features]
 default = []
-live = ["dep:getrandom"]
+# The interactive OAuth loopback flow. Its CSPRNG (`getrandom`) is always on since E5-T5: the
+# file-sealed token store draws its nonces from it too.
+live = []
+# `desktop` (E5-T5) compiles the ShogunAI Mac app's Keychain token store and code-signature reader
+# (`keychain`, `keychain_store`, `code_signature`, each macOS-only inside) and the `open` browser
+# launcher. OFF by default: the server build stores tokens through `token_store::FileSealedTokenStore`
+# (local) or `token_store::RemoteTokenStore` (hosted) and carries no `cfg(target_os = "macos")`
+# site (`scripts/check-desktop-gate.py`). `shogun-core`'s `desktop` turns it on.
+desktop = [
+    "dep:security-framework",
+    "dep:security-framework-sys",
+    "dep:core-foundation",
+    "dep:core-foundation-sys",
+    "dep:libc",
+]
 
 [dependencies]
 # The scope table + the IntegrationTransport seam this crate implements. One-way: integrations → mcp.
@@ -27,19 +41,25 @@ serde_json = "1"
 sha2 = "0.10"
 base64 = "0.22"
 url = "2"
-# CSPRNG for the PKCE verifier — only needed by the effectful auth flow, so it rides the `live` flag.
-getrandom = { version = "0.3", optional = true }
+# CSPRNG for the PKCE verifier and the token store's AEAD nonces.
+getrandom = "0.3"
+# The `Secret` type every token store holds values in (E5-T5). Dependency-free.
+shogun-redact = { path = "../shogun-redact" }
+# The file-sealed token store (E5-T5): ChaCha20-Poly1305 under a key HKDF-derived from the
+# principal's store key. Same crates and versions shogun-mcp already seals the L3 queue with, so
+# nothing new enters the graph.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+hkdf = "0.12"
 
-# The macOS Keychain token source (invariant 7: secrets never in a file/DB/log). macOS-only and
-# gated in code by `#[cfg(target_os = "macos")]`; other targets use the env/static token providers
-# for dev + integration. Not tied to the `live` feature — it is just a token source, no network.
+# The macOS Keychain token source (invariant 7: secrets never in a file/DB/log). macOS-only, and
+# since E5-T5 also behind the `desktop` feature: the server build never links Security.framework.
 [target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "3"
-security-framework-sys = "2"
-core-foundation = "0.10"
-core-foundation-sys = "0.8"
+security-framework = { version = "3", optional = true }
+security-framework-sys = { version = "2", optional = true }
+core-foundation = { version = "0.10", optional = true }
+core-foundation-sys = { version = "0.8", optional = true }
 # The process tree above `shogun-mcp` (`proc_pidinfo`) for the launcher check (issue #979).
-libc = "0.2"
+libc = { version = "0.2", optional = true }
 
 [lints]
 workspace = true

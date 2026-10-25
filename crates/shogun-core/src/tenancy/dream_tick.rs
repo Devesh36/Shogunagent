@@ -11,8 +11,10 @@
 //! - [`hourly_tick_with_lane`] runs the hourly review through a [`BatchLane`] (the relay, or a
 //!   test double): the model path, behind the same frozen-cycle machinery as the desktop.
 //! - [`hourly_tick_local`] runs it with the on-device [`LocalRuleClassifier`]: no model, no
-//!   egress. This is what `shogun-api --dream-tick` runs until a hosted Batch credential is wired
-//!   per principal (the connector/credential store, E5-T5).
+//!   egress.
+//! - [`hourly_tick_routed`] picks per principal (E5-T5): the Batch lane when the principal has a
+//!   relay credential in its token store ([`super::credentials::relay_bearer`]), the local rules
+//!   otherwise. This is what `shogun-api --dream-tick` runs.
 //!
 //! Nothing here logs content: outcomes are per-principal counts and fixed codes.
 
@@ -25,6 +27,10 @@ use crate::dreamcycle::schedule::{run_batch_cycle, DreamBatchClients, DreamSched
 use crate::llm::anthropic::BatchLane;
 
 use super::{PrincipalId, PrincipalStore};
+
+/// Backlog rows a routed tick embeds per principal before reviewing it (when a local embedding
+/// model is attached to the store, E24). The rest waits for the next tick.
+pub const EMBED_BACKLOG_PER_TICK: usize = 2_000;
 
 /// Polls a server tick allows one hourly cycle before it leaves the cycle resumable for the next
 /// tick (the relay's synchronous review needs none).
@@ -47,11 +53,21 @@ pub enum TickOutcome {
     Failed(&'static str),
 }
 
+/// Which lane a principal's tick used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickLane {
+    /// The Batch lane (the relay with the principal's own credential, or a test double).
+    Batch,
+    /// The on-device local rules: no model, no egress.
+    Local,
+}
+
 /// One principal's line of a tick report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrincipalTick {
     pub principal: PrincipalId,
     pub outcome: TickOutcome,
+    pub lane: TickLane,
 }
 
 /// The conditions the shared gate is given on a server: always idle and on power (a server has
@@ -170,7 +186,41 @@ pub async fn hourly_tick_with_lane<B: BatchLane>(
             Ok(open) => tick_principal_with_lane(open.db(), lane, now_ms).await,
             Err(_) => TickOutcome::Unavailable("store_unavailable"),
         };
-        report.push(PrincipalTick { principal: principal.clone(), outcome });
+        report.push(PrincipalTick { principal: principal.clone(), outcome, lane: TickLane::Batch });
+    }
+    report
+}
+
+/// The hourly tick over `principals`, each through the Batch lane `lane_for` builds for it, or
+/// with the local rules when `lane_for` answers `None` (no relay credential configured for that
+/// principal). `lane_for` gets the principal's open [`Db`] so a lane can write its traceability
+/// rows into that principal's own store. Building a lane sends nothing: a principal with no new
+/// material still makes no call either way.
+pub async fn hourly_tick_routed<B, F>(
+    store: &PrincipalStore,
+    principals: &[PrincipalId],
+    lane_for: F,
+    now_ms: i64,
+) -> Vec<PrincipalTick>
+where
+    B: BatchLane,
+    F: Fn(&PrincipalId, &Db) -> Option<B>,
+{
+    let mut report = Vec::with_capacity(principals.len());
+    for principal in principals {
+        let (outcome, lane) = match store.open(principal) {
+            Ok(open) => {
+                // Embed the principal's backlog first (a no-op without a local model, E24), so
+                // the review and the next search see vectors for the material it reviews.
+                open.db().embed_pending(EMBED_BACKLOG_PER_TICK);
+                match lane_for(principal, open.db()) {
+                    Some(lane) => (tick_principal_with_lane(open.db(), &lane, now_ms).await, TickLane::Batch),
+                    None => (tick_principal_local(open.db(), now_ms), TickLane::Local),
+                }
+            }
+            Err(_) => (TickOutcome::Unavailable("store_unavailable"), TickLane::Local),
+        };
+        report.push(PrincipalTick { principal: principal.clone(), outcome, lane });
     }
     report
 }
@@ -184,7 +234,7 @@ pub fn hourly_tick_local(store: &PrincipalStore, principals: &[PrincipalId], now
                 Ok(open) => tick_principal_local(open.db(), now_ms),
                 Err(_) => TickOutcome::Unavailable("store_unavailable"),
             };
-            PrincipalTick { principal: principal.clone(), outcome }
+            PrincipalTick { principal: principal.clone(), outcome, lane: TickLane::Local }
         })
         .collect()
 }
@@ -193,7 +243,7 @@ pub fn hourly_tick_local(store: &PrincipalStore, principals: &[PrincipalId], now
 pub fn summary(report: &[PrincipalTick]) -> String {
     let count = |f: fn(&TickOutcome) -> bool| report.iter().filter(|t| f(&t.outcome)).count();
     format!(
-        "principals={} ran={} nothing_new={} already_done={} skipped={} unavailable={} failed={}",
+        "principals={} ran={} nothing_new={} already_done={} skipped={} unavailable={} failed={} batch_lane={} local_lane={}",
         report.len(),
         count(|o| matches!(o, TickOutcome::Ran { .. })),
         count(|o| matches!(o, TickOutcome::NothingNew)),
@@ -201,6 +251,8 @@ pub fn summary(report: &[PrincipalTick]) -> String {
         count(|o| matches!(o, TickOutcome::Skipped(_))),
         count(|o| matches!(o, TickOutcome::Unavailable(_))),
         count(|o| matches!(o, TickOutcome::Failed(_))),
+        report.iter().filter(|t| t.lane == TickLane::Batch).count(),
+        report.iter().filter(|t| t.lane == TickLane::Local).count(),
     )
 }
 
@@ -332,6 +384,84 @@ mod tests {
         assert!(report.iter().all(|t| matches!(t.outcome, TickOutcome::NothingNew | TickOutcome::AlreadyDone)), "{report:?}");
         assert_eq!(again.calls.load(Ordering::SeqCst), 0);
         assert!(summary(&report).starts_with("principals=2 ran=0"));
+    }
+
+    /// Shares one counting lane between the principals a routed tick hands it to.
+    struct SharedLane(Arc<CountingLane>);
+
+    impl BatchLane for SharedLane {
+        async fn review(&self, items: &[BatchItem]) -> Result<Vec<BatchResult>, LlmError> {
+            self.0.review(items).await
+        }
+        async fn submit(&self, items: &[BatchItem], id: Option<&str>) -> Result<BatchHandle, LlmError> {
+            self.0.submit(items, id).await
+        }
+        async fn poll(&self, batch_id: &str) -> Result<BatchHandle, LlmError> {
+            self.0.poll(batch_id).await
+        }
+        async fn results(&self, batch_id: &str) -> Result<Vec<BatchResult>, LlmError> {
+            self.0.results(batch_id).await
+        }
+    }
+
+    /// E5-T5: `--dream-tick` sends a principal through the Batch lane only when its token store
+    /// holds a relay credential; the others are reviewed by the local rules with no model call.
+    #[tokio::test]
+    async fn the_routed_tick_uses_the_batch_lane_only_with_a_stored_relay_credential() {
+        use crate::tenancy::credentials::{local_store, relay_bearer};
+        use shogun_integrations::{CredentialSlot, TokenStore};
+
+        let now = 220 * 24 * HOUR + 11 * HOUR + 20 * 60_000;
+        let root = TempRoot::new("routed");
+        let store = store(&root, now);
+        let with_relay = PrincipalId::parse("with-relay").unwrap();
+        let without = PrincipalId::parse("without").unwrap();
+        for (principal, key) in [(&with_relay, "r1"), (&without, "r2")] {
+            let open = store.open(principal).unwrap();
+            ingest(open.db(), key, "I'll send the rollout plan to Oren by Friday.", now - 2 * HOUR);
+        }
+
+        let keys: Arc<dyn crate::tenancy::KeyProvider> =
+            Arc::new(EnvKeyProvider::with_default(DbKey::new([0x3c; 32])));
+        let tokens = local_store(root.0.join(".tokens"), keys);
+        tokens
+            .put(with_relay.as_str(), CredentialSlot::BatchRelay, &crate::llm::Secret::new("v1.relay-bearer"))
+            .unwrap();
+
+        let principals = principals_on_disk(&store);
+        assert_eq!(principals, vec![with_relay.clone(), without.clone()], "the token directory is not a principal");
+
+        let counting = Arc::new(CountingLane::default());
+        let report = hourly_tick_routed(
+            &store,
+            &principals,
+            |principal, _db| relay_bearer(&tokens, principal).map(|_| SharedLane(counting.clone())),
+            now,
+        )
+        .await;
+        let line = |p: &PrincipalId| report.iter().find(|t| &t.principal == p).cloned().unwrap();
+        assert_eq!(line(&with_relay).lane, TickLane::Batch);
+        assert_eq!(line(&with_relay).outcome, TickOutcome::Ran { complete: true });
+        assert_eq!(line(&without).lane, TickLane::Local);
+        assert_eq!(line(&without).outcome, TickOutcome::Ran { complete: true });
+        assert_eq!(counting.calls.load(Ordering::SeqCst), 1, "only the principal with a credential reached the lane");
+        assert!(summary(&report).ends_with("batch_lane=1 local_lane=1"), "{}", summary(&report));
+
+        // Removing the credential sends the next new material through the local rules.
+        tokens.delete(with_relay.as_str(), CredentialSlot::BatchRelay).unwrap();
+        let open = store.open(&with_relay).unwrap();
+        ingest(open.db(), "r3", "I'll book the venue for the offsite by Tuesday.", now + HOUR);
+        drop(open);
+        let counting = Arc::new(CountingLane::default());
+        let report = hourly_tick_routed(
+            &store,
+            std::slice::from_ref(&with_relay),
+            |principal, _db| relay_bearer(&tokens, principal).map(|_| SharedLane(counting.clone())),
+            now + 2 * HOUR + 60_000,
+        )
+        .await;
+        assert_eq!(report[0].lane, TickLane::Local);
+        assert_eq!(counting.calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

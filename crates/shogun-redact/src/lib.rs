@@ -46,6 +46,9 @@ pub use instruction::{dropped_count, instruction_shaped, reject_instruction_shap
 
 mod identifiers;
 
+pub mod secret;
+pub use secret::Secret;
+
 // The two role halves of `fence_untrusted`, for backends that can separate them (#667).
 pub use fence::{fence_data, fence_instruction};
 

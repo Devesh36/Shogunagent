@@ -29,6 +29,8 @@ pub enum BackendError {
     Io(#[from] std::io::Error),
     #[error("search: {0}")]
     Search(#[from] shogun_memory::search_documents::SearchDocumentError),
+    #[error("embed: {0}")]
+    Embed(String),
 }
 
 /// Which retrieval path a run measures.
@@ -136,11 +138,24 @@ pub struct ShogunBackend {
     /// event in the corpus: the federated path resolves its Warm window relative to "now", and
     /// leaving it at zero would place a synthetic corpus entirely in the future.
     pub now_ms: i64,
+    /// The vector lane (E24): embeds the corpus after ingest and every query. `None` = lexical.
+    pub embedder: Option<crate::embedding::BenchEmbedder>,
     conn: Connection,
     path: Option<PathBuf>,
 }
 
 impl ShogunBackend {
+    /// Embed every stored event with the run's embedder (E24): the vector lane's index, built
+    /// after ingest and outside every timed section, as the product builds it off the write
+    /// path. Returns the rows embedded; zero without an embedder.
+    pub fn embed_corpus(&mut self) -> Result<usize, BackendError> {
+        let Some(embedder) = self.embedder.clone() else {
+            return Ok(0);
+        };
+        shogun_memory::embed_job::embed_all_pending(&mut self.conn, embedder.embedder(), 256)
+            .map_err(|error| BackendError::Embed(error.to_string()))
+    }
+
     /// Open a file-backed database. Prefer this over [`Self::in_memory`] for any run whose numbers
     /// are going to be quoted: an in-memory database has no WAL, no page cache eviction and no
     /// filesystem, so its write latency is not the latency the product experiences.
@@ -153,6 +168,7 @@ impl ShogunBackend {
             recency_weight: 0.0,
             search_path: SearchPath::default(),
             now_ms: 0,
+            embedder: None,
         })
     }
 
@@ -165,6 +181,7 @@ impl ShogunBackend {
             recency_weight: 0.0,
             search_path: SearchPath::default(),
             now_ms: 0,
+            embedder: None,
         })
     }
 
@@ -209,6 +226,15 @@ impl MemoryBackend for ShogunBackend {
     }
 
     fn search(&self, query: &str, k: usize) -> Result<Vec<i64>, BackendError> {
+        let query_vec = match &self.embedder {
+            Some(embedder) => Some(
+                embedder
+                    .embedder()
+                    .embed_query(query)
+                    .map_err(|error| BackendError::Embed(error.to_string()))?,
+            ),
+            None => None,
+        };
         // `query_embedding: None` means the semantic half contributes nothing and RRF fuses the
         // lexical list alone. That is not a shortcut — it is the configuration CI runs in, because
         // the ONNX embedder is behind an off-by-default feature and needs a model file on disk.
@@ -230,7 +256,7 @@ impl MemoryBackend for ShogunBackend {
                 let result = search::search_hybrid_with_options(
                     &self.conn,
                     query,
-                    None,
+                    query_vec.as_deref(),
                     self.now_ms,
                     &opts,
                     k,
@@ -264,7 +290,7 @@ impl MemoryBackend for ShogunBackend {
                 let result = search::search_federated(
                     &self.conn,
                     query,
-                    None,
+                    query_vec.as_deref(),
                     self.now_ms,
                     &opts,
                     k,

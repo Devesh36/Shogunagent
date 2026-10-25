@@ -106,8 +106,13 @@ pub mod mcp_http;
 pub mod mcp_oauth;
 #[cfg(feature = "net")]
 pub mod github_device;
-#[cfg(all(feature = "desktop", feature = "net"))]
+// The pinned static-asset download (no Mac code): the desktop's whisper weights and, since E24, the
+// server's embedding model (`embed_models`). Server-neutral, so it rides `net` alone.
+#[cfg(feature = "net")]
 pub mod model_asset;
+/// The local embedding model: where it lives, `shogun models fetch`, and loading it (E24).
+#[cfg(feature = "db")]
+pub mod embed_models;
 /// The account API (#148 P2): browser sign-in over loopback + PKCE, the session's refresh, devices,
 /// re-authentication and sign-out. Fail-closed `Route::Billing` rows, content-free.
 #[cfg(feature = "net")]

@@ -198,6 +198,8 @@ pub struct BenchReport {
     pub generated_queries: usize,
     pub environment: Environment,
     pub mode: RunMode,
+    /// The embedding model of the vector lane (`{model, dim}`), `null` for a lexical run (E24).
+    pub embedding: Option<crate::embedding::EmbeddingRef>,
     pub backend: &'static str,
     /// Explicit validity gate for automated comparison. Consumers must require `valid == true`.
     pub validity: MeasurementValidity,
@@ -221,7 +223,7 @@ pub struct BenchReport {
 pub const BENCHMARK_NAME: &str = "shogun-memory-bench";
 /// Report schema version. Bump when a field changes meaning, so old reports are not silently
 /// re-read under new semantics.
-pub const REPORT_VERSION: &str = "0.5";
+pub const REPORT_VERSION: &str = "0.6";
 
 impl BenchReport {
     /// Build the SLO check from the query-latency summary, if there is one.

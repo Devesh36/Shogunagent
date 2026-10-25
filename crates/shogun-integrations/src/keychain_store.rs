@@ -9,6 +9,7 @@
 //! [`SERVICE`] on repair; [`crate::keychain_fallback`] decides when the legacy name is consulted.
 //! A secret another process rewrites while this one runs must be read with
 //! [`get_generic_secret_uncached`].
+#![cfg(target_os = "macos")]
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};

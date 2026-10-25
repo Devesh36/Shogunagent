@@ -7,10 +7,19 @@ license.workspace = true
 publish = false
 description = "Shared exact-name microphone discovery and validation for every ShogunAI surface."
 
+[features]
+default = []
+# `desktop` (E25) compiles the live CoreAudio discovery (`platform`, through CPAL on macOS). OFF by
+# default: without it every selection of a named device answers "available only on macOS", which
+# is what a server or a Linux build says anyway, and the crate carries no
+# `cfg(target_os = "macos")` site (`scripts/check-desktop-gate.py`). `shogun-core` / `shogun-mcp`
+# turn it on with their own `desktop` feature.
+desktop = ["dep:cpal"]
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Device discovery only. Keeping CPAL target-specific prevents the Linux MCP/REST test graph from
 # pulling alsa-sys while every supported production face validates against the same CoreAudio list.
-cpal = "0.18"
+cpal = { version = "0.18", optional = true }
 
 [lints]
 workspace = true

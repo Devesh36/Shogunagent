@@ -1202,6 +1202,10 @@ COMMANDS:
                               Copy a single-user store into <dir>/<id>/memory.db and apply the
                               pending migrations (local; the key comes from SHOGUN_DB_KEY or
                               SHOGUN_DB_KEY_<ID>)
+    models list|path          Local embedding models (local; no server)
+    models fetch [--model M]  Download the pinned embedding model (the only command that
+                              downloads one; needs a CLI built with --features embed-local)
+    models verify [--model M] Check the installed model files against their pinned SHA-256
     help                      This help
 
 GLOBAL FLAGS:

@@ -1391,3 +1391,38 @@ fn a_recency_cue_word_is_recognised_on_its_own_so_callers_can_count_it_back_in()
         assert!(!crate::search::is_recency_cue_word(word), "{word:?}");
     }
 }
+
+/// E24: with the deterministic test embedder on, the vector lane recovers a paraphrase the
+/// lexical lane misses ("cost" never appears in the answer), and with no embedding the same
+/// question finds nothing, exactly as the lexical-only build does.
+#[test]
+fn the_vector_lane_recovers_a_paraphrase_the_lexical_lane_misses() {
+    use crate::embed::{Embedder, TestEmbedder};
+    let mut conn = crate::open_in_memory().unwrap();
+    let answer = event(&conn, 10, "The renewal fee lands at 12k for the year", "para-answer");
+    event(&conn, 11, "Standup notes: nothing blocking, ship on Thursday", "para-noise-1");
+    event(&conn, 12, "Lunch options near the office", "para-noise-2");
+    let embedder = TestEmbedder::new();
+    assert_eq!(crate::embed_job::embed_all_pending(&mut conn, &embedder, 16).unwrap(), 3);
+    let options = FederatedSearchOptions::default();
+    let ids = |result: &FederatedSearchResult| -> Vec<i64> {
+        result
+            .hits
+            .iter()
+            .flat_map(|hit| hit.sources.iter())
+            .filter_map(|source| match source.id {
+                FederatedSourceId::Event(id) => Some(id),
+                _ => None,
+            })
+            .collect()
+    };
+
+    let lexical = search_federated(&conn, "what did it cost", None, 100, &options, 5).unwrap();
+    assert!(!ids(&lexical).contains(&answer), "precondition: no shared word, lexical misses it");
+
+    let query = embedder.embed_query("what did it cost").unwrap();
+    let hybrid = search_federated(&conn, "what did it cost", Some(&query), 100, &options, 5).unwrap();
+    let found = ids(&hybrid);
+    assert_eq!(found.first(), Some(&answer), "the vector lane ranks the paraphrase first: {found:?}");
+    assert!(hybrid.hits[0].component_ranks.warm_knn.is_some());
+}

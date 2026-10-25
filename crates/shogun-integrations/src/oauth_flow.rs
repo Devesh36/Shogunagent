@@ -35,31 +35,17 @@ pub fn open_system_browser(url: &str) -> Result<(), String> {
     open_browser(url)
 }
 
-/// Open a URL in the system browser. macOS uses `open`; other targets are a no-op that returns the
-/// URL to the caller to present (keeps the flow compilable off-macOS).
-#[cfg(target_os = "macos")]
+/// Open a URL in the system browser. The Mac app's build (`desktop`) runs `open`
+/// ([`crate::browser`]); the server build has no browser to drive and reports that, so the caller
+/// presents the URL itself (the hosted OAuth flow returns it on every platform, E5).
+#[cfg(feature = "desktop")]
 fn open_browser(url: &str) -> Result<(), String> {
-    let status = std::process::Command::new("open")
-        .arg(url)
-        .status()
-        .map_err(|e| format!("open failed: {e}"))?;
-    // `open` exits nonzero when no browser takes the URL; waiting for a redirect that can never
-    // come would hold "Connecting…" for the whole flow timeout.
-    browser_open_outcome(status.success())
+    crate::browser::open(url)
 }
 
-/// A nonzero exit from the browser opener is a failure, not a five-minute wait.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn browser_open_outcome(succeeded: bool) -> Result<(), String> {
-    if succeeded {
-        Ok(())
-    } else {
-        Err("open exited with a failure status".to_string())
-    }
-}
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(feature = "desktop"))]
 fn open_browser(_url: &str) -> Result<(), String> {
-    Err("browser-open is only wired for macOS".to_string())
+    Err("browser-open is only wired for the desktop build; present the authorization URL instead".to_string())
 }
 
 /// Run the full loopback Authorization-Code + PKCE flow and return a token set.
@@ -533,10 +519,10 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "desktop"))]
     #[test]
-    fn a_failed_browser_open_fails_fast() {
-        assert!(browser_open_outcome(true).is_ok());
-        assert!(browser_open_outcome(false).is_err());
+    fn the_server_build_reports_that_it_opens_no_browser() {
+        assert!(open_system_browser("https://example.test/auth").is_err());
     }
     #[test]
     fn loopback_reads_a_fragmented_bounded_profile_request_line() {

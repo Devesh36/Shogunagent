@@ -36,3 +36,10 @@ workspace = true
 # (`apps/desktop` feature `local-embedder`, docs/embedding-model-setup.md). `load-dynamic`
 # resolves libonnxruntime at RUNTIME, so enabling it never makes the build need the network.
 onnx = ["dep:ort", "dep:tokenizers"]
+# `embed-local` (E24): the server's local embedding lane — the ONNX embedder above, driven by the
+# default model spec (`embed::NOMIC_EMBED_TEXT_V15`). OFF by default so the default build stays
+# dependency-light (no ort, no tokenizers); ON in the server build profile (Dockerfile, release
+# workflow). Compiling it in downloads nothing: the model comes only from an explicit
+# `shogun models fetch`, the runtime library is resolved at run time, and without either search
+# stays lexical.
+embed-local = ["onnx"]

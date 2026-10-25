@@ -1173,6 +1173,39 @@ impl Db {
         self.compression_config.as_ref()
     }
 
+    /// The attached embedder, if any.
+    pub fn embedder(&self) -> Option<&Arc<dyn shogun_memory::embed::Embedder>> {
+        self.embedder.as_ref()
+    }
+
+    /// The query vector for `text`, or `None` when search must stay lexical: no embedder, a model
+    /// failure, or an embedder whose model is not the store's active space yet (E24). The last
+    /// case is a model switch whose re-embed job has not run: comparing the new model's query
+    /// against the old model's vectors would rank nonsense, so the vector lane sits out instead.
+    pub(crate) fn query_embedding(&self, text: &str) -> Option<Vec<f32>> {
+        let embedder = self.embedder.as_deref()?;
+        let model_id = embedder.model_id().to_string();
+        let active = self
+            .with_conn("embed.space", |conn| {
+                shogun_memory::embedding_space::matches(conn, &model_id)
+            })
+            .unwrap_or(false);
+        if !active {
+            return None;
+        }
+        embedder.embed_query(text).ok()
+    }
+
+    /// [`Self::query_embedding`] for a caller that already holds the connection lock (taking it
+    /// again would deadlock).
+    pub(crate) fn query_embedding_on(&self, conn: &Connection, text: &str) -> Option<Vec<f32>> {
+        let embedder = self.embedder.as_deref()?;
+        if !shogun_memory::embedding_space::matches(conn, embedder.model_id()).unwrap_or(false) {
+            return None;
+        }
+        embedder.embed_query(text).ok()
+    }
+
     /// Embed canonical events and clean distilled memory that lack vectors. Both stay off the
     /// write path, so a slow model never delays capture or state persistence.
     pub fn embed_pending(&self, limit: usize) -> usize {

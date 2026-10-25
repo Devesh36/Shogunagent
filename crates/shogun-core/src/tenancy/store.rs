@@ -95,6 +95,9 @@ pub struct PrincipalStore {
     lru: Mutex<Lru>,
     /// `OpenPrincipal` values alive anywhere: in the LRU or borrowed by a request.
     live: Arc<AtomicUsize>,
+    /// The local embedding model every opened principal's `Db` gets (E24). One model for every
+    /// principal: a server never mixes vector spaces across the people it serves either.
+    embedder: Option<Arc<dyn shogun_memory::embed::Embedder>>,
 }
 
 impl PrincipalStore {
@@ -109,7 +112,15 @@ impl PrincipalStore {
             policy: OpenPolicy::CreateIfMissing,
             lru: Mutex::new(Lru::default()),
             live: Arc::new(AtomicUsize::new(0)),
+            embedder: None,
         }
+    }
+
+    /// Attach the local embedding model to every principal this store opens from now on (E24).
+    #[must_use]
+    pub fn with_embedder(mut self, embedder: Option<Arc<dyn shogun_memory::embed::Embedder>>) -> Self {
+        self.embedder = embedder;
+        self
     }
 
     #[must_use]
@@ -185,6 +196,10 @@ impl PrincipalStore {
                 }
                 store.db().clone()
             }
+        };
+        let db = match &self.embedder {
+            Some(embedder) => db.with_embedder(embedder.clone()),
+            None => db,
         };
         self.live.fetch_add(1, Ordering::AcqRel);
         Ok(OpenPrincipal {

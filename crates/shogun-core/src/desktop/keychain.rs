@@ -58,7 +58,7 @@ pub fn daemon_key_present(_provider: &str) -> Option<bool> {
 /// `include_account_labels`), from the app's Keychain token store. `None` off macOS.
 #[cfg(target_os = "macos")]
 pub fn connection_account_label(service: Option<&str>) -> Option<String> {
-    use shogun_integrations::token::TokenStore;
+    use shogun_integrations::token::GrantStore;
     shogun_mcp::connections_api::listed_services()
         .find(|listed| Some(listed.source_str()) == service)
         .and_then(|listed| {

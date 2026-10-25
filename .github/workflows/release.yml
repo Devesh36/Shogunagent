@@ -36,8 +36,10 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y clang pkg-config
       - name: build
         run: |
-          cargo build --release --locked --target ${{ matrix.target }} -p shogun-core --features daemon-server --bin shogun-api --bin shogun-mcp
-          cargo build --release --locked --target ${{ matrix.target }} -p shogun-cli --bin shogun
+          # Server build profile: `embed-local` on (E24). It downloads nothing; the model comes from
+          # an explicit `shogun models fetch` and the ONNX Runtime library is resolved at run time.
+          cargo build --release --locked --target ${{ matrix.target }} -p shogun-core --features daemon-server,embed-local --bin shogun-api --bin shogun-mcp
+          cargo build --release --locked --target ${{ matrix.target }} -p shogun-cli --features embed-local --bin shogun
       - name: package
         run: |
           set -euo pipefail

@@ -810,3 +810,47 @@ fn harness_smoke_emits_the_published_shape() {
     assert_eq!(written["suites"].as_array().map(Vec::len), Some(6));
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
+
+/// E24: with `--embedder`, one model is pinned across every suite and seed, each per-run report
+/// names it, and `benchmarks.json` carries it as `embedding: {model, dim}`.
+#[test]
+fn harness_pins_one_embedding_model_across_every_arm() {
+    use memory_bench::embedding::BenchEmbedder;
+    use memory_bench::harness::{self, HarnessConfig};
+
+    let embedder = BenchEmbedder::test();
+    let config = HarnessConfig {
+        seeds: vec![42],
+        embedder: Some(embedder.clone()),
+        ..HarnessConfig::smoke()
+    };
+    let mut arms = 0;
+    let benchmarks = harness::run(&config, |_, _, report| {
+        arms += 1;
+        assert!(report.mode.semantic, "the vector lane is on in every arm");
+        assert_eq!(report.embedding, Some(embedder.model_ref()), "one model in every arm");
+    })
+    .expect("run");
+    assert_eq!(arms, harness::SUITES.len());
+
+    let json: serde_json::Value =
+        serde_json::from_str(&benchmarks.to_json().expect("json")).expect("parse");
+    assert_eq!(
+        json["embedding"],
+        serde_json::json!({ "model": shogun_memory::embed::TestEmbedder::SPACE_ID, "dim": 384 })
+    );
+}
+
+/// The vector lane changes nothing about a run unless asked for: a lexical run reports
+/// `semantic: false` and no embedding.
+#[test]
+fn a_run_without_an_embedder_stays_lexical() {
+    let report = memory_bench::run(&BenchConfig {
+        events: 600,
+        queries: 10,
+        ..BenchConfig::smoke()
+    })
+    .expect("run");
+    assert!(!report.mode.semantic);
+    assert_eq!(report.embedding, None);
+}

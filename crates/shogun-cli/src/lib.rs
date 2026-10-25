@@ -9,6 +9,7 @@
 
 pub mod command;
 pub mod hint;
+pub mod models;
 pub mod http;
 pub mod parse;
 pub mod plan;

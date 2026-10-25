@@ -41,19 +41,6 @@ ALLOWLIST: dict[str, str] = {
         "elsewhere; the licence token's device binding needs it in every build that verifies "
         "a token the Mac app sends (E3-T4)."
     ),
-    "crates/shogun-integrations/src/lib.rs": (
-        "declares the Keychain token store and the code-signature reader, both macOS-only "
-        "modules; the Keychain store becomes a `TokenStore` trait with a hosted implementation "
-        "in E5-T5, which removes this entry."
-    ),
-    "crates/shogun-integrations/src/oauth_flow.rs": (
-        "`open_browser` shells out to `open` on macOS and returns the URL to the caller "
-        "elsewhere; the hosted OAuth flow (E5) returns the URL on every platform."
-    ),
-    "crates/shogun-microphone/src/lib.rs": (
-        "lists input devices through CPAL on macOS and reports the check unavailable "
-        "elsewhere; the crate leaves `shogun-mcp`'s dependency graph in E25."
-    ),
     "crates/spike-harness/src/cpu.rs": (
         "the `proc_pid_rusage` CPU reader of the SLO harness; `memory-bench` carries the "
         "Linux `/proc` reader so the bench runs on Linux CI."

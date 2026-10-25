@@ -27,7 +27,7 @@ default = []
 # them. The feature compiles on Linux too (the `cfg(target_os = "macos")` gates inside it stay),
 # so CI proves the Mac app can keep consuming this crate. `scripts/check-desktop-gate.py` keeps
 # every `target_os = "macos"` site behind it.
-desktop = ["shogun-mcp?/desktop"]
+desktop = ["shogun-mcp?/desktop", "shogun-integrations?/desktop", "dep:shogun-microphone", "shogun-microphone/desktop"]
 # Local relay override (SHOGUN_RELAY_BASE_URL / relay_override.json, loopback only) and plain-http
 # loopback requests. OFF in shipping builds; the owner testing build enables it.
 local-relay = []
@@ -46,6 +46,12 @@ db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-mcp", "dep:shogun-integra
 # enables this; the daemon-server bundle builds on it and adds axum.
 exec = ["db", "net", "dep:shogun-agents"]
 daemon-server = ["exec", "shogun-mcp/server", "tokio/rt-multi-thread", "tokio/macros"]
+# `embed-local` (E24): the local embedding lane — `shogun-memory/embed-local` (the ONNX embedder,
+# runtime resolved at run time) plus `embed_models` (load a fetched model; `shogun models fetch`
+# downloads one over the traced egress). OFF by default; the server build profile turns it on
+# (Dockerfile, release workflow). Compiling it in fetches nothing: without a fetched model and an
+# ONNX Runtime library the server logs one line and searches lexically.
+embed-local = ["db", "net", "shogun-memory/embed-local"]
 # The MT3 audio lane: the real capture + ASR backends. macOS-only heavy deps (whisper.cpp/Metal,
 # cpal, Core Audio via objc2), so OFF by default — the pure-logic audio tests compile without them.
 # The audio module itself is part of the desktop set, so this implies `desktop`.
@@ -95,8 +101,8 @@ hmac = "0.12"
 # builds — that is why redaction was extracted out of shogun-memory into its own crate.
 shogun-redact = { path = "../shogun-redact" }
 # Exact-name device discovery is shared with MCP/REST/CLI so every surface accepts and rejects the
-# same microphone selections. Its CPAL dependency exists only on macOS.
-shogun-microphone = { path = "../shogun-microphone" }
+# same microphone selections. Used only by the desktop audio lane, so it rides `desktop` (E25).
+shogun-microphone = { path = "../shogun-microphone", optional = true }
 # Storage layer + its rusqlite handle, feature-gated (see the `db` feature). Same rusqlite version
 # as shogun-memory so the bundled SQLite compiles once.
 shogun-memory = { path = "../shogun-memory", optional = true }

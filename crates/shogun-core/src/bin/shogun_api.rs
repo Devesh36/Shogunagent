@@ -242,7 +242,11 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
         .and_then(|value| value.parse().ok())
         .unwrap_or(64);
     let clock = wall_clock();
-    let store = Arc::new(PrincipalStore::new(root.clone(), Arc::new(keys), clock.clone(), max_open));
+    let (embedder, line) = shogun_core::embed_models::load_configured();
+    eprintln!("{FACE}: {line}");
+    let store = Arc::new(
+        PrincipalStore::new(root.clone(), Arc::new(keys), clock.clone(), max_open).with_embedder(embedder),
+    );
     let state = shogun_core::tenancy::multi::app_state(store, Arc::new(resolver), clock);
     let port = std::env::var("SHOGUN_API_PORT")
         .ok()
@@ -257,34 +261,131 @@ async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
     serve_on(listener, state.with_port(addr.port())).await
 }
 
-/// `shogun-api --dream-tick [--multi <root>]` (plan E5-T4): run the hourly Dream Cycle once for
-/// every principal under the multi-principal root (`--multi <root>`, else `SHOGUN_MULTI_ROOT`,
-/// else `./principals`) and exit. A principal with no new material since its cursor is not
-/// reviewed and costs no model call. This build reviews with the on-device local rules (no model,
-/// no egress) until a hosted Batch credential is wired per principal; the Batch-lane variant is
-/// `tenancy::dream_tick::hourly_tick_with_lane`. Prints one line of counts, never content.
-fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
-    use shogun_core::tenancy::{dream_tick, EnvKeyProvider, PrincipalStore};
-    let keys = EnvKeyProvider::from_env().unwrap_or_else(|e| {
+/// How many backlog rows one embedding pass handles, and how often the pass runs.
+const EMBED_BATCH: usize = 256;
+const EMBED_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Attach the local embedding model when this build has `embed-local` and a fetched model loads
+/// (E24), and embed the backlog off the request path on a timer. Otherwise search stays lexical;
+/// either way one line on stderr says which.
+fn attach_local_embedder(db: Db) -> Db {
+    let (embedder, line) = shogun_core::embed_models::load_configured();
+    eprintln!("{FACE}: {line}");
+    let Some(embedder) = embedder else {
+        return db;
+    };
+    let db = db.with_embedder(embedder);
+    let worker = db.clone();
+    std::thread::spawn(move || loop {
+        while worker.embed_pending(EMBED_BATCH) > 0 {}
+        std::thread::sleep(EMBED_EVERY);
+    });
+    db
+}
+
+/// `shogun-api --dream-tick [--multi <root>]` (plan E5-T4 / E5-T5): run the hourly Dream Cycle
+/// once for every principal under the multi-principal root (`--multi <root>`, else
+/// `SHOGUN_MULTI_ROOT`, else `./principals`) and exit. A principal with no new material since its
+/// cursor is not reviewed and costs no model call. A principal whose token store
+/// (`SHOGUN_TOKEN_STORE_DIR`, else `<root>/.tokens`, sealed with the principal's own key) holds a
+/// Batch relay credential is reviewed through the relay with it; every other principal with the
+/// on-device local rules (no model, no egress). Prints one line of counts, never content.
+async fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
+    use shogun_core::llm::relay::{ModelClass, RelayBatchClient, RelayConfig};
+    use shogun_core::llm::transport::ReqwestTransport;
+    use shogun_core::tenancy::credentials::{local_store, relay_bearer, token_dir, TOKEN_STORE_DIR_VAR};
+    use shogun_core::tenancy::{dream_tick, EnvKeyProvider, KeyProvider, PrincipalStore};
+    let keys: Arc<dyn KeyProvider> = Arc::new(EnvKeyProvider::from_env().unwrap_or_else(|e| {
         eprintln!("{FACE}: {e}");
         std::process::exit(1);
-    });
+    }));
     let clock = wall_clock();
     let now = (clock)();
+    let tokens = local_store(
+        token_dir(&root, std::env::var_os(TOKEN_STORE_DIR_VAR).map(std::path::PathBuf::from)),
+        keys.clone(),
+    );
+    // The transport is built lazily, once, and only if some principal has a credential: a tick
+    // where every principal stays local opens no HTTP client at all.
+    let transport: std::sync::OnceLock<Option<ReqwestTransport>> = std::sync::OnceLock::new();
     // One file open at a time: the tick visits each principal once. Same open policy as
     // `--multi` (the sidecar owns these files); only files already on disk are visited.
-    let store = PrincipalStore::new(root, Arc::new(keys), clock, 1);
+    // The tick also embeds each visited principal's backlog when a local model is installed (E24).
+    let (embedder, line) = shogun_core::embed_models::load_configured();
+    eprintln!("{FACE}: {line}");
+    let store = PrincipalStore::new(root, keys, clock, 1).with_embedder(embedder);
     let principals = dream_tick::principals_on_disk(&store);
-    let report = dream_tick::hourly_tick_local(&store, &principals, now);
+    let report = dream_tick::hourly_tick_routed(
+        &store,
+        &principals,
+        |principal, db| {
+            let bearer = relay_bearer(&tokens, principal)?;
+            let transport = transport.get_or_init(|| ReqwestTransport::shared().ok()).clone()?;
+            Some(RelayBatchClient::new(
+                transport,
+                db.traceability_sink(),
+                bearer,
+                RelayConfig::new(ModelClass::Classify),
+            ))
+        },
+        now,
+    )
+    .await;
     println!("{FACE}: dream tick: {}", dream_tick::summary(&report));
+    Ok(())
+}
+
+/// `shogun-api --store-relay-credential <principal> [--multi <root>]` (E5-T5): read the
+/// principal's Batch relay bearer from stdin (never from argv, which other users can read in the
+/// process table) and seal it into the local token store `--dream-tick` reads. An empty line
+/// removes it, and the principal's tick returns to the local rules.
+fn store_relay_credential(root: std::path::PathBuf, principal: &str) -> std::io::Result<()> {
+    use shogun_core::llm::Secret;
+    use shogun_core::tenancy::credentials::{local_store, token_dir, TOKEN_STORE_DIR_VAR};
+    use shogun_core::tenancy::{EnvKeyProvider, KeyProvider, PrincipalId};
+    use shogun_integrations::{CredentialSlot, TokenStore};
+    let principal = PrincipalId::parse(principal).unwrap_or_else(|e| {
+        eprintln!("{FACE}: {e}");
+        std::process::exit(2);
+    });
+    let keys: Arc<dyn KeyProvider> = Arc::new(EnvKeyProvider::from_env().unwrap_or_else(|e| {
+        eprintln!("{FACE}: {e}");
+        std::process::exit(1);
+    }));
+    let store = local_store(
+        token_dir(&root, std::env::var_os(TOKEN_STORE_DIR_VAR).map(std::path::PathBuf::from)),
+        keys,
+    );
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let value = Secret::new(line.trim());
+    let result = if value.is_empty() {
+        store.delete(principal.as_str(), CredentialSlot::BatchRelay)
+    } else {
+        store.put(principal.as_str(), CredentialSlot::BatchRelay, &value)
+    };
+    match result {
+        Ok(()) if value.is_empty() => println!("{FACE}: relay credential removed"),
+        Ok(()) => println!("{FACE}: relay credential stored (sealed)"),
+        Err(e) => {
+            eprintln!("{FACE}: {e}");
+            std::process::exit(1);
+        }
+    }
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    if let Some(principal) =
+        std::env::args().skip(1).skip_while(|arg| arg != "--store-relay-credential").nth(1)
+    {
+        let root = multi_root(std::env::args().skip(1)).unwrap_or_else(|| std::path::PathBuf::from("./principals"));
+        return store_relay_credential(root, &principal);
+    }
     if std::env::args().skip(1).any(|arg| arg == "--dream-tick") {
         let root = multi_root(std::env::args().skip(1)).unwrap_or_else(|| std::path::PathBuf::from("./principals"));
-        return dream_tick(root);
+        return dream_tick(root).await;
     }
     if let Some(root) = multi_root(std::env::args().skip(1)) {
         return serve_multi(root).await;
@@ -321,7 +422,7 @@ async fn main() -> std::io::Result<()> {
     if let Some(why) = store.unavailable() {
         eprintln!("{FACE}: {}", why.line());
     }
-    let db = store.db().clone();
+    let db = attach_local_embedder(store.db().clone());
     let metrics = metrics_source(db.clone());
     let backend = Arc::new(db_backend(db));
 

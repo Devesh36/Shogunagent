@@ -26,6 +26,8 @@ shogun-agents = { path = "../shogun-agents" }
 # `db` for `shogun principal import` (E2-T6): the tenancy module copies and migrates a store
 # locally, with no server involved. The storage layer is already in the graph through shogun-mcp.
 shogun-core = { path = "../shogun-core", features = ["db"] }
+# The model table of `shogun models` (E24). Already in the graph through shogun-core / shogun-mcp.
+shogun-memory = { path = "../shogun-memory" }
 serde_json = "1"
 
 # On a Mac the command finds the app's `memory.db` under `~/Library/Application Support`
@@ -33,6 +35,12 @@ serde_json = "1"
 # (E1-T7). macOS targets only: the Linux server build carries none of the desktop set.
 [target.'cfg(target_os = "macos")'.dependencies]
 shogun-mcp = { path = "../shogun-mcp", features = ["desktop"] }
+
+[features]
+default = []
+# `shogun models fetch` (E24): pulls in shogun-core's traced egress (`net`) and the ONNX embedder.
+# OFF by default so the CLI stays HTTP-client-free; the server image builds it on.
+embed-local = ["shogun-core/embed-local"]
 
 [lints]
 workspace = true

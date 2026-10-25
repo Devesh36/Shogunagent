@@ -93,25 +93,21 @@ fn ambiguous(selected: &str) -> String {
     format!("selected microphone name is ambiguous: {selected}; choose a different input")
 }
 
-#[cfg(target_os = "macos")]
-fn platform_input_device_names() -> Result<Vec<String>, String> {
-    use cpal::traits::{DeviceTrait, HostTrait};
+#[cfg(feature = "desktop")]
+mod platform;
 
-    cpal::default_host()
-        .input_devices()
-        .map_err(|error| format!("could not list microphone devices: {error}"))
-        .map(|devices| {
-            devices
-                .filter_map(|device| device.description().ok())
-                .map(|description| description.name().to_owned())
-                .collect()
-        })
+#[cfg(feature = "desktop")]
+use platform::platform_input_device_names;
+
+/// Without the `desktop` feature there is no device list to read: the same answer the Mac-only
+/// reader gives off macOS.
+#[cfg(not(feature = "desktop"))]
+fn platform_input_device_names() -> Result<Vec<String>, String> {
+    Err(UNAVAILABLE_OFF_MACOS.to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn platform_input_device_names() -> Result<Vec<String>, String> {
-    Err("microphone device validation is available only on macOS".to_string())
-}
+/// What every face answers when it cannot list inputs (a server, Linux, a non-desktop build).
+pub const UNAVAILABLE_OFF_MACOS: &str = "microphone device validation is available only on macOS";
 
 #[cfg(test)]
 mod tests {

@@ -188,10 +188,7 @@ impl Db {
         }
 
         // Model failure degrades honestly to lexical-only search, matching legacy behavior.
-        let query_embedding = self
-            .embedder
-            .as_deref()
-            .and_then(|embedder| embedder.embed_query(&request.query).ok());
+        let query_embedding = self.query_embedding(&request.query);
         let include_cold =
             resolved.effective_depth == SearchDepthV1::All && query_embedding.is_some();
         let range = shogun_memory::search::SearchRange {

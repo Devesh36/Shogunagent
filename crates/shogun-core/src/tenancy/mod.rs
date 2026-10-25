@@ -19,11 +19,14 @@
 //! - [`import`]: a ShogunAI single-user `memory.db` becomes a principal's file (E2-T6).
 //! - [`dream_tick`]: the hourly Dream Cycle per principal, only when new material exists (E5-T4;
 //!   `shogun-api --dream-tick`).
+//! - [`credentials`]: the principal's token store on a local server (sealed files keyed by the
+//!   principal's own key) and the relay-credential lookup that picks the tick's lane (E5-T5).
 //! - [`multi`] (feature `daemon-server`): the `shogun-api --multi` composition.
 //! - [`team`]: the tenant's teams (E18). A principal grants a teammate read access to its
 //!   `world` state in its own file (`principal_grants`, V101); the sidecar checks both before it
 //!   opens that file for the teammate.
 
+pub mod credentials;
 pub mod dream_tick;
 pub mod import;
 pub mod key_provider;

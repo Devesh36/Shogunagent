@@ -114,6 +114,10 @@ pub struct BenchConfig {
     pub search_path: crate::backend::SearchPath,
     /// Time-bucketed ingestion budget. Disabled by default, so a run is the full corpus.
     pub slice: crate::slicer::SliceConfig,
+    /// The vector lane (E24). `None` (the default) is lexical-only; the report's `embedding`
+    /// names the model when set. Not serialized here: the report carries it as `embedding`.
+    #[serde(skip)]
+    pub embedder: Option<crate::embedding::BenchEmbedder>,
 }
 
 /// Serialize a path as its final component. The report needs to say *that* a file-backed run
@@ -150,6 +154,7 @@ impl Default for BenchConfig {
             recency_weight: 0.0,
             search_path: crate::backend::SearchPath::default(),
             slice: crate::slicer::SliceConfig::default(),
+            embedder: None,
         }
     }
 }
@@ -232,6 +237,7 @@ impl BenchConfig {
             recency_weight: 0.0,
             search_path: crate::backend::SearchPath::default(),
             slice: crate::slicer::SliceConfig::default(),
+            embedder: None,
         }
     }
 }

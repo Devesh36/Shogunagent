@@ -22,6 +22,7 @@
 
 pub mod backend;
 pub mod config;
+pub mod embedding;
 pub mod harness;
 pub mod metrics;
 pub mod report;

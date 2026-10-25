@@ -2613,6 +2613,7 @@ dependencies = [
  "shogun-agents",
  "shogun-core",
  "shogun-mcp",
+ "shogun-memory",
 ]
 
 [[package]]
@@ -2673,9 +2674,11 @@ name = "shogun-integrations"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chacha20poly1305",
  "core-foundation",
  "core-foundation-sys",
  "getrandom 0.3.4",
+ "hkdf",
  "libc",
  "security-framework",
  "security-framework-sys",
@@ -2684,6 +2687,7 @@ dependencies = [
  "sha2",
  "shogun-agents",
  "shogun-mcp",
+ "shogun-redact",
  "url",
 ]
 

@@ -23,6 +23,12 @@
 //!
 //! The floor asserted at the end is the measured result minus a small margin, so a change that
 //! makes search worse fails here. Raise it when search gets better.
+//!
+//! E24 adds the vector lane. [`golden_search_eval`] is the lexical build (no embedder): its floors
+//! are unchanged. [`golden_search_eval_with_the_vector_lane`] runs the same cases with the
+//! deterministic [`TestEmbedder`] attached and every row embedded, and prints its table beside the
+//! lexical one; [`the_vector_lane_recovers_a_paraphrase_lexical_search_misses`] proves the lane
+//! adds what the lexical lane cannot.
 #![cfg(feature = "db")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -30,6 +36,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use shogun_core::daemon::{Db, SearchRequestV1};
+use shogun_memory::embed::{Embedder, TestEmbedder};
 use shogun_memory::event_log::NewEvent;
 use shogun_memory::search::{CanonicalEvidenceId, FederatedHit, FederatedSourceId};
 use shogun_memory::search_documents::SourceRef;
@@ -757,7 +764,21 @@ struct Report {
 }
 
 fn run() -> Report {
+    run_with(None)
+}
+
+/// The eval over the same corpus, with `embedder` attached and the whole store embedded first
+/// when one is given (the vector lane on), lexical-only otherwise.
+fn run_with(embedder: Option<Arc<dyn Embedder>>) -> Report {
     let (db, labels) = seed();
+    let db = match embedder {
+        Some(embedder) => {
+            let db = db.with_embedder(embedder);
+            while db.embed_pending(1_000) > 0 {}
+            db
+        }
+        None => db,
+    };
     let mut by_category: Vec<(&'static str, Tally)> = Vec::new();
     let mut overall = Tally::default();
     let mut latencies = Vec::new();
@@ -837,6 +858,74 @@ fn golden_search_eval() {
     );
 }
 
+/// The same golden set with the vector lane on (E24, deterministic [`TestEmbedder`]). The lexical
+/// floors above are the product's; this run must not claim answers for absent memory and must not
+/// lose what the lexical lane found by more than a small margin.
+#[test]
+fn golden_search_eval_with_the_vector_lane() {
+    let report = run_with(Some(Arc::new(TestEmbedder::new())));
+    println!("\nvector lane on ({}):\n{}", TestEmbedder::SPACE_ID, report.table);
+    let o = report.overall;
+    let recall_5 = o.mean(o.recall_5);
+    let mrr = o.mean(o.mrr);
+    let false_answerable = o.false_answerable as f64 / o.negatives as f64;
+    println!(
+        "overall (vector lane on): R@5 {recall_5:.3} R@10 {:.3} MRR {mrr:.3} false-answerable {false_answerable:.3}",
+        o.mean(o.recall_10)
+    );
+    assert!(recall_5 >= FLOOR_RECALL_5_VECTOR_LANE, "recall@5 with the vector lane: {recall_5:.3}");
+    assert!(mrr >= FLOOR_MRR_VECTOR_LANE, "MRR with the vector lane: {mrr:.3}");
+    assert!(
+        false_answerable <= CEIL_FALSE_ANSWERABLE,
+        "the vector lane claimed an answer for absent memory: {false_answerable:.3}"
+    );
+}
+
+/// E24: a question that shares no word with its answer. The lexical build finds nothing; with the
+/// deterministic test embedder attached, `Db::search_request` — the path every face calls — finds
+/// the answer through the vector lane.
+#[test]
+fn the_vector_lane_recovers_a_paraphrase_lexical_search_misses() {
+    let (db, mut labels) = seed();
+    // One more row, outside the shared corpus so the golden numbers above do not move: a lodging
+    // receipt written in Japanese, sharing no word with the English question.
+    let (receipt, _) = db
+        .capture(&NewEvent {
+            ts: at(2, 18),
+            source: "capture",
+            kind: "text",
+            app_bundle_id: Some("com.apple.mail"),
+            window_title: Some("経費"),
+            content: "出張の宿泊料金は一泊18,000円で精算済み",
+            content_hash: "golden-paraphrase-receipt",
+            dwell_ms: 4_000,
+            display_id: None,
+            window_bounds: None,
+        })
+        .unwrap();
+    labels.events.insert(receipt, "para_lodging_fee");
+    let question = "how much did the hotel cost";
+    let request = SearchRequestV1 { query: question.to_string(), limit: 10, ..SearchRequestV1::default() };
+    let found = |db: &Db| -> Vec<&'static str> {
+        db.search_request(&request)
+            .unwrap()
+            .federated_hits
+            .iter()
+            .flat_map(|hit| hit_labels(hit, &labels))
+            .collect()
+    };
+    let lexical = found(&db);
+    assert!(!lexical.contains(&"para_lodging_fee"), "precondition: lexical misses it: {lexical:?}");
+
+    let db = db.with_embedder(Arc::new(TestEmbedder::new()));
+    while db.embed_pending(1_000) > 0 {}
+    let hybrid = found(&db);
+    assert!(
+        hybrid.iter().take(5).any(|label| *label == "para_lodging_fee"),
+        "the vector lane must surface the paraphrased answer in the top 5: {hybrid:?}"
+    );
+}
+
 // Measured 2026-10-14 (docs/search-eval.md): R@5 0.985, MRR 0.948, zero-result 0.000,
 // answerable 0.873, false-answerable 0.000.
 const FLOOR_RECALL_5: f64 = 0.95;
@@ -844,6 +933,9 @@ const FLOOR_MRR: f64 = 0.91;
 const CEIL_ZERO_RATE: f64 = 0.03;
 const FLOOR_ANSWERABLE: f64 = 0.83;
 const CEIL_FALSE_ANSWERABLE: f64 = 0.0;
+// With the vector lane on (E24, TestEmbedder): measured in golden_search_eval_with_the_vector_lane.
+const FLOOR_RECALL_5_VECTOR_LANE: f64 = 0.95;
+const FLOOR_MRR_VECTOR_LANE: f64 = 0.91;
 
 /// Pages (bytes) used by the tables whose names start with `prefix`, from SQLite's `dbstat`.
 fn bytes_of(conn: &rusqlite::Connection, prefix: &str) -> i64 {

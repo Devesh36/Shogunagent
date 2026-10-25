@@ -1058,10 +1058,7 @@ impl Db {
                     .map(|event_id| (event_id, frame.frame_id))
             })
             .collect();
-        let query_embedding = self
-            .embedder
-            .as_deref()
-            .and_then(|embedder| embedder.embed_query(query).ok());
+        let query_embedding = self.query_embedding(query);
         let mut options = shogun_memory::search::FederatedSearchOptions {
             since_ts: query_plan.from_ms,
             to_ts: query_plan.to_ms,
@@ -1110,10 +1107,8 @@ impl Db {
         if hits.is_empty() && options.per_source_limit < 100 && within_budget {
             options.per_source_limit = 100;
             let retry_query = query_plan.retry_query.as_deref().unwrap_or(query);
-            let retry_embedding = self
-                .embedder
-                .as_deref()
-                .and_then(|embedder| embedder.embed_query(retry_query).ok());
+            // The connection is held here: check the space on it, never re-lock (E24).
+            let retry_embedding = self.query_embedding_on(&conn, retry_query);
             if let Ok(retry) = shogun_memory::search::search_federated(
                 &conn,
                 retry_query,
