@@ -9,7 +9,8 @@
 //! `null` is the explicit "follow the macOS default input" reset. A blank, unavailable, or
 //! ambiguous name is rejected before persistence on every face. Live discovery lives in the
 //! lightweight `shogun-microphone` crate so MCP/REST/CLI share desktop capture's exact-name rules
-//! without pulling CPAL or ALSA into Linux builds.
+//! without pulling CPAL or ALSA into Linux builds; since E25 that crate is only in the `desktop`
+//! build, and the server answers a named selection as unavailable.
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -52,8 +53,30 @@ pub fn set(body: &str) -> Result<String, String> {
 pub fn store(microphone: Option<String>) -> Result<String, String> {
     let microphone = validated(microphone)?;
     let path = voice_json_path().ok_or("voice settings unavailable")?;
-    store_validated_at(&path, microphone, shogun_microphone::validate_selection)
+    store_validated_at(&path, microphone, validate_selection)
 }
+
+/// Check a selection against the live input list. The Mac app's build (`desktop`) asks CoreAudio
+/// through `shogun-microphone`; the server build carries no device discovery (E25) and answers
+/// what that crate answers off macOS: the default input is fine, a named device cannot be
+/// confirmed.
+#[cfg(feature = "desktop")]
+fn validate_selection(selected: Option<&str>) -> Result<(), String> {
+    shogun_microphone::validate_selection(selected)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn validate_selection(selected: Option<&str>) -> Result<(), String> {
+    match selected {
+        None => Ok(()),
+        Some(_) => Err(UNAVAILABLE_OFF_MACOS.to_string()),
+    }
+}
+
+/// Same text as `shogun_microphone::UNAVAILABLE_OFF_MACOS`, so a server and a Linux desktop build
+/// fail a named selection identically.
+#[cfg(not(feature = "desktop"))]
+const UNAVAILABLE_OFF_MACOS: &str = "microphone device validation is available only on macOS";
 
 /// Parse a request body into a selection. Anything other than a string or `null` is a hard error
 /// on every face.

@@ -50,10 +50,6 @@ ALLOWLIST: dict[str, str] = {
         "`open_browser` shells out to `open` on macOS and returns the URL to the caller "
         "elsewhere; the hosted OAuth flow (E5) returns the URL on every platform."
     ),
-    "crates/shogun-microphone/src/lib.rs": (
-        "lists input devices through CPAL on macOS and reports the check unavailable "
-        "elsewhere; the crate leaves `shogun-mcp`'s dependency graph in E25."
-    ),
     "crates/spike-harness/src/cpu.rs": (
         "the `proc_pid_rusage` CPU reader of the SLO harness; `memory-bench` carries the "
         "Linux `/proc` reader so the bench runs on Linux CI."

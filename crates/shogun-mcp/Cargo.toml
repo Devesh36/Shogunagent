@@ -21,7 +21,10 @@ default = []
 # (`memory_api_settings`), the live re-check (`live_tokens`), the file-backed plan source
 # (`plan_source`, `trial_relay`), the "Add to …" planner (`client_install`) and the chat bridge are
 # pure and serve every face, so they stay in the default build.
-desktop = []
+# Since E25 it is also the only way `shogun-microphone` enters this crate's graph: live device
+# discovery exists for the Mac app's dictation setting, so the server build answers that it is
+# unavailable (`voice_microphone_api::validate_selection`) without carrying the crate.
+desktop = ["dep:shogun-microphone", "shogun-microphone/desktop"]
 # `server` pulls in the axum listener for the REST face. OFF by default so the pure routing layer
 # (rest::route / rest::respond) tests without a runtime; the daemon enables it. axum is a server
 # framework (inbound), not an HTTP client — it does not violate the FR-TR-03 egress rule.
@@ -39,9 +42,9 @@ shogun-memory = { path = "../shogun-memory" }
 # Licence-token verification for the billing half of plan resolution (issue #8). One-way: mcp →
 # license → agents.
 shogun-license = { path = "../shogun-license" }
-# Live exact-name validation shared with desktop capture. CPAL is target-specific inside this
-# crate, so Linux policy/REST tests keep their dependency-light graph.
-shogun-microphone = { path = "../shogun-microphone" }
+# Live exact-name validation shared with desktop capture — feature `desktop` only (E25): the
+# server build has no microphone to list and does not depend on the crate at all.
+shogun-microphone = { path = "../shogun-microphone", optional = true }
 # Parse the actions.execute request body (a small JSON action spec).
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
