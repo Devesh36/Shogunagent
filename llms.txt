@@ -15,6 +15,7 @@ Skill version 0.1.0. Hosted MCP endpoint (Streamable HTTP, 2026-07-28): https://
 ## API reference
 
 - [402 Payment Required](https://github.com/Torutesu/Shogunagent/blob/main/docs/api/402.md): The gateway answers `402` whenever a metered call cannot proceed for a money reason. There are two reasons and one shape. Implementation: `apps/api/src/billing/402.ts`; tests:…
+- [Agent-readable surfaces](https://github.com/Torutesu/Shogunagent/blob/main/docs/api/agent-surfaces.md): Every place an agent looks before it chooses a service, and what generates it (CLAUDE.md invariant 12: these are derived from code and config; the human docs derive from them). Plan: E10.
 - [`tool-table.json` — the machine-readable tool table](https://github.com/Torutesu/Shogunagent/blob/main/docs/api/tool-table.json.md): The one input every agent-readable surface is rendered from (CLAUDE.md invariant 12): `/.well-known/mcp/server-card.json` (E10-T1), the MCP `tools/list` the core answers, the `llms.txt` tool index,…
 
 ## Machine-readable surfaces

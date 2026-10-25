@@ -66,3 +66,29 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @shogun-ai/api typecheck
       - run: pnpm --filter @shogun-ai/api test:node
+
+  agent-surfaces:
+    name: agent-readable surfaces (E10: generated files match, registry entry valid, CLI)
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Invariant 12: the committed agent-readable files equal what the generators produce.
+      - name: llms.txt / llms-full.txt are generated from the docs (E10-T4)
+        run: node scripts/gen-llms-txt.mjs --check
+      - name: the agent card's skills are generated from SKILL.md (E10-T3)
+        run: node scripts/gen-agent-skills.mjs --check
+      - name: server.json validates against the MCP Registry schema (E10-T2)
+        run: pnpm registry:validate
+      - name: npx shogunagent (E10-T10)
+        run: |
+          pnpm --filter shogunagent typecheck
+          pnpm --filter shogunagent test
+          pnpm --filter shogunagent build
