@@ -331,6 +331,15 @@ one JSON-RPC request per `POST`; `GET` and `DELETE` answer 405. `server/discover
 capabilities, `tools/list` and `resources/list` carry `ttlMs` / `cacheScope` (`private`: the
 answer depends on the bearer), and a read's result carries the same hints under `_meta`.
 
+`shogun-api --multi` serves `/mcp` too: every request resolves its principal from its own bearer
+through the same resolver REST uses (`TokenPrincipalMap` until `apps/api` issues agent keys),
+reads and writes that principal's file as the bearer's agent, and shares the server's one
+approval queue, remote-approval ledger and per-token rate limit with REST. A request without a
+bearer the resolver knows answers JSON-RPC error `-32001` before any store is opened. The header
+contract and the MRTR shapes below are the same; an approval queued over MCP is recorded under the
+principal, so another principal's `actions.status`, `approvals.*` and `audit.list` never see it
+(`crates/shogun-core/tests/invariant_tenant.rs`, `the_mcp_face_keeps_principals_apart`).
+
 Every request names what it does in headers so a gateway can meter it without reading the body:
 
 ```

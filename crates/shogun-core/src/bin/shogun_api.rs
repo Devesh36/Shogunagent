@@ -221,6 +221,7 @@ fn gate_or_exit(db_path: &str, db_env_set: bool) {
 /// `SHOGUN_DB_KEY_<PRINCIPAL>` or `SHOGUN_DB_KEY`. Tokens come from
 /// `SHOGUN_PRINCIPAL_TOKENS="principal:token[:agent_id],…"` until `apps/api` issues agent keys
 /// (E3). None of the desktop gates (memory_api.json, plan files, Keychain, heartbeat) apply.
+/// REST and the MCP face (`POST /mcp`) both resolve the principal per request from the bearer.
 async fn serve_multi(root: std::path::PathBuf) -> std::io::Result<()> {
     use shogun_core::tenancy::{EnvKeyProvider, PrincipalStore, TokenPrincipalMap};
     let keys = EnvKeyProvider::from_env().unwrap_or_else(|e| {

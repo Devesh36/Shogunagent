@@ -382,8 +382,12 @@ async fn handle_mcp(State(state): State<AppState>, req: Request) -> Response {
     ) {
         return render(403, r#"{"error":"forbidden_host"}"#.to_string());
     }
-    let Some(mcp) = state.mcp.clone() else {
-        return render(404, r#"{"error":"not_found"}"#.to_string());
+    // Multi-principal mode (E2-T2): every request resolves its own principal from its bearer
+    // through the same resolver REST uses, so the MCP face needs no handler of its own.
+    let mcp: Arc<dyn crate::mcp_http::McpHandler> = match (&state.principals, state.mcp.clone()) {
+        (Some(_), _) => Arc::new(PrincipalMcp { state: state.clone() }),
+        (None, Some(mcp)) => mcp,
+        (None, None) => return render(404, r#"{"error":"not_found"}"#.to_string()),
     };
     let method = req.method().as_str().to_string();
     let headers = req.headers().clone();
@@ -429,6 +433,59 @@ async fn handle_mcp(State(state): State<AppState>, req: Request) -> Response {
     response
         .body(Body::from(reply.body))
         .unwrap_or_else(|_| render(500, r#"{"error":"internal"}"#.to_string()))
+}
+
+/// `POST /mcp` in multi-principal mode (E2-T2 × E4-T1): one MCP server per request, over the store
+/// of the principal the request's bearer names ([`BackendResolver::resolve`], the resolver REST
+/// uses), writing as that bearer's actor, with the server's one approval queue, remote-approval
+/// ledger, plan gate and rate limiter. Same header contract and MRTR shapes as the
+/// single-principal face; approvals it queues are recorded under the principal, and another
+/// principal's approval, store or audit log is never reachable from it. A request without a bearer
+/// the resolver knows is refused before any store is opened.
+struct PrincipalMcp {
+    state: AppState,
+}
+
+impl crate::mcp_http::McpHandler for PrincipalMcp {
+    fn handle_line_as(&self, line: &str, token: Option<&str>) -> Option<String> {
+        use shogun_memory::actor::{CallScope, Namespace, ReadScope, WriteContext};
+        let id = serde_json::from_str::<serde_json::Value>(line).ok().and_then(|v| v.get("id").cloned());
+        let refuse = |code: i64, message: &str| {
+            id.clone().map(|id| {
+                serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }).to_string()
+            })
+        };
+        let state = &self.state;
+        let Some(resolver) = &state.principals else {
+            return refuse(-32000, "internal: no principal resolver");
+        };
+        let resolved = match token.map(|token| resolver.resolve(token)) {
+            Some(Ok(resolved)) => resolved,
+            Some(Err((503, _))) => return refuse(-32000, "memory_unavailable: the principal's store cannot be opened right now; retry."),
+            _ => {
+                return refuse(
+                    crate::mcp::TOKEN_INVALID_CODE,
+                    "unauthorized: present a principal's bearer token (Authorization: Bearer <token>).",
+                )
+            }
+        };
+        let Ok(write) = WriteContext::new(&resolved.actor, Namespace::World) else {
+            return refuse(-32000, "internal: invalid actor");
+        };
+        let clock = state.clock.clone();
+        let entitlements = state.entitlements.clone();
+        let mut server = crate::mcp::McpServer::new(resolved.backend, state.approvals.clone(), move || clock(), move || entitlements())
+            .with_remote_approvals(state.remote.clone())
+            .with_principal(resolved.principal)
+            .with_approval_execution(state.executor.is_some())
+            .with_llm_rate_limiter(state.llm_limiter.clone());
+        if let Some(token_id) = token.and_then(|token| state.tokens.current().token_id(token)) {
+            server = server.with_rate_client(crate::rate_limit::ClientKey::token(&token_id));
+        }
+        shogun_memory::actor::with_call_scope(CallScope { write, read: ReadScope { include_scratch: false } }, || {
+            server.handle_line_as(line, token)
+        })
+    }
 }
 
 /// The one handler. Adapts an axum request into a [`RestRequest`], calls [`rest::respond`], and
