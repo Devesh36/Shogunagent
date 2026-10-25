@@ -1,0 +1,54 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.torutesu/shogunagent",
+  "title": "ShogunAgent",
+  "description": "The state layer for AI agents: people, projects, commitments and open loops, with provenance.",
+  "version": "0.1.0",
+  "websiteUrl": "https://shogunagent.dev",
+  "repository": {
+    "url": "https://github.com/Torutesu/Shogunagent",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.shogunagent.dev/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Optional. Bearer sa_live_… from POST /v1/agents; without it discover, inspect and narrow reads work.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "shogunagent",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "valueHint": "mcp",
+          "description": "Serve the local sidecar's memory over stdio, read-only (the subcommand `npx shogunagent mcp`)."
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "SHOGUNAGENT_DATA_DIR",
+          "description": "Optional. Where the local store, token and installed binaries live (default: the OS data directory).",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "filepath"
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 {
-  "name": "shogunagent",
+  "name": "shogunagent-monorepo",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.33.0",
@@ -8,9 +8,16 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "test": "turbo run test"
+    "test": "turbo run test",
+    "registry:validate": "node scripts/validate-server-json.mjs",
+    "llms:gen": "node scripts/gen-llms-txt.mjs --write",
+    "llms:check": "node scripts/gen-llms-txt.mjs --check",
+    "agent-skills:gen": "node scripts/gen-agent-skills.mjs --write",
+    "agent-skills:check": "node scripts/gen-agent-skills.mjs --check"
   },
   "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "turbo": "^2.3.3"
   },
   "engines": {

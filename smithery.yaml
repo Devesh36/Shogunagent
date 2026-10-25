@@ -1,0 +1,27 @@
+# Smithery listing (plan E10-T9). ShogunAgent is a hosted Streamable HTTP server, so the listing
+# points at the endpoint and the config schema served at /.well-known/mcp-config; nothing here is
+# built or run by Smithery. The `startCommand` keys follow Smithery's documented `type: http`
+# form for remote servers; the research note confirms Smithery as a listing surface but not the
+# exact schema beyond that, so the fields are kept to the minimum (name, type, URL, config
+# schema) and the rest lives at the well-known URL. Identity values mirror server.json.
+name: io.github.torutesu/shogunagent
+description: "The state layer for AI agents: people, projects, commitments and open loops, with provenance."
+version: 0.1.0
+homepage: https://shogunagent.dev
+repository: https://github.com/Torutesu/Shogunagent
+startCommand:
+  type: http
+  url: https://api.shogunagent.dev/mcp
+  # The JSON Schema of the client configuration. The same document is served live at
+  # https://api.shogunagent.dev/.well-known/mcp-config (apps/api/src/wellknown/mcp-config.ts).
+  configSchema:
+    type: object
+    properties:
+      apiKey:
+        type: string
+        title: Agent key
+        description: "Optional. An sa_live_ key from POST https://api.shogunagent.dev/v1/agents (self-registration, no email). Without it discover, inspect and narrow reads work; the first write or metered run answers 402 with a top-up URL."
+    required: []
+  # How the config reaches the server: the key, when given, as the bearer.
+  exampleConfig:
+    apiKey: sa_live_example

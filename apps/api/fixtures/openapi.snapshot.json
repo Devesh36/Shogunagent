@@ -1,0 +1,2748 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ShogunAgent Agent API",
+    "version": "0.1.0",
+    "summary": "The REST face of the state layer for AI agents: registration, wallet, quotes, receipts, the metered MCP proxy, the router verbs and the agent-readable documents.",
+    "description": "The state layer for AI agents. Read what is true about the user's work right now (people, projects, commitments, open loops) with a quote and a confidence score on every fact; write what you learned so the next agent starts from it; run tools through a router that enforces permission tiers. Not a transcript store and not a general web-search tool.",
+    "contact": {
+      "name": "Select KK",
+      "url": "https://shogunagent.dev"
+    },
+    "license": {
+      "name": "Apache-2.0",
+      "url": "https://github.com/Torutesu/Shogunagent/blob/main/LICENSE"
+    },
+    "x-pricing": {
+      "ingest_micro_usd_per_event": 500,
+      "model_op_micro_usd": 100,
+      "run_markup_bps": 500,
+      "free_allowance_micro_usd": 5000000,
+      "default_caps": {
+        "key": {
+          "day_micro_usd": 1000000,
+          "month_micro_usd": 20000000
+        },
+        "principal": {
+          "day_micro_usd": 5000000,
+          "month_micro_usd": 100000000
+        }
+      },
+      "document": "https://api.test/.well-known/pricing.json"
+    },
+    "x-mcp": {
+      "url": "https://api.test/mcp",
+      "protocolVersion": "2026-07-28",
+      "server_card": "https://api.test/.well-known/mcp/server-card.json",
+      "tools": [
+        {
+          "name": "memory.search",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "memory.get_context",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "memory.get_context_pack",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "memory.get_events",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "memory.read_session",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "memory.get_wrap",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "memory.get_periods",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "memory.recall",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "calendar.upcoming",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "profile.whoami",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "state.commitments.list",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "state.open_loops.list",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "state.people.list",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "state.projects.list",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "state.people.get",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "state.projects.get",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "wiki.evidence",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "actions.status",
+          "level": "read",
+          "cost_unit": "read",
+          "annotations": {
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "memory.append_note",
+          "level": "L1",
+          "cost_unit": "ingest",
+          "annotations": {
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "memory.ingest",
+          "level": "L1",
+          "cost_unit": "ingest",
+          "annotations": {
+            "readOnlyHint": false,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false
+          }
+        },
+        {
+          "name": "actions.execute",
+          "level": "L3",
+          "cost_unit": "run",
+          "annotations": {
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true
+          }
+        }
+      ]
+    },
+    "x-pending": "The core's /v1/state/*, /v1/memory/*, /v1/actions/* and /v1/export routes join this document when E4 exports rest_routing.rs (docs/api/tool-table.json.md)."
+  },
+  "externalDocs": {
+    "description": "Agent API guide",
+    "url": "https://shogunagent.dev/docs"
+  },
+  "servers": [
+    {
+      "url": "https://api.test"
+    }
+  ],
+  "tags": [
+    {
+      "name": "well-known",
+      "description": "Machine-readable documents. No auth."
+    },
+    {
+      "name": "agents",
+      "description": "Self-registration and identity."
+    },
+    {
+      "name": "keys",
+      "description": "Key caps and revocation."
+    },
+    {
+      "name": "wallet",
+      "description": "Prepaid micro-USD wallet (Stripe card rail)."
+    },
+    {
+      "name": "billing",
+      "description": "Quotes, receipts, disputes."
+    },
+    {
+      "name": "mcp",
+      "description": "The metered MCP Streamable HTTP proxy."
+    },
+    {
+      "name": "router",
+      "description": "discover / inspect / run (apps/router)."
+    }
+  ],
+  "paths": {
+    "/.well-known/mcp/server-card.json": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "MCP Server Card: endpoint, auth, tools with annotations.",
+        "operationId": "get__well_known_mcp_server_card_json",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/.well-known/agent-card.json": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "A2A Agent Card (v1.0), Ed25519-signed when the deployment holds a key.",
+        "operationId": "get__well_known_agent_card_json",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/.well-known/pricing.json": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "The rate card, free allowance and caps, rendered from the metering table.",
+        "operationId": "get__well_known_pricing_json",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/.well-known/status.json": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Live p50 / p95, error rate over the last five minutes, and the incident history.",
+        "operationId": "get__well_known_status_json",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/.well-known/mcp-config": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "JSON Schema of the client configuration (Smithery).",
+        "operationId": "get__well_known_mcp_config",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Health with p50 / p95 and error rate; 503 during a major incident.",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "This document.",
+        "operationId": "get_openapi_json",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/llms.txt": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "Agent-readable documentation index.",
+        "operationId": "get_llms_txt",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/llms-full.txt": {
+      "get": {
+        "tags": [
+          "well-known"
+        ],
+        "summary": "The full agent-readable documentation in one file.",
+        "operationId": "get_llms_full_txt",
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/agents/challenge": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "A proof-of-work challenge for self-registration.",
+        "operationId": "get_v1_agents_challenge",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Challenge"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true
+      }
+    },
+    "/v1/agents": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Self-register: a key with read, write and run, a fresh principal and the free allowance.",
+        "description": "Send X-Agent-Pow: <challenge>:<nonce> where sha256(challenge + nonce) has the challenge's leading zero bits. Rate-limited per IP per hour. The allowance is 5000000 µ$.",
+        "operationId": "post_v1_agents",
+        "parameters": [
+          {
+            "name": "X-Agent-Pow",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Registration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_ref | invalid_caps | caps_above_default | invalid_json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "pow_missing | pow_malformed | pow_invalid | pow_expired | pow_insufficient | pow_reused — next_action solve_challenge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-proof-of-work": true
+      }
+    },
+    "/v1/agents/me": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "The key's principal, scopes, expiry and caps.",
+        "operationId": "get_v1_agents_me",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/keys/{id}/revoke": {
+      "post": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Revoke a key (own key; admin for others).",
+        "operationId": "post_v1_keys_id_revoke",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key_id": {
+                      "type": "string"
+                    },
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "key_not_found (unknown and someone else's answer the same)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": []
+          }
+        ]
+      }
+    },
+    "/v1/keys/{id}": {
+      "patch": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Set a key's hard caps. Lowering: any key; raising above the defaults: admin.",
+        "operationId": "patch_v1_keys_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapsPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key_id": {
+                      "type": "string"
+                    },
+                    "caps": {
+                      "$ref": "#/components/schemas/Caps"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_caps | invalid_json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "caps_above_default",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "key_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": []
+          }
+        ]
+      }
+    },
+    "/v1/wallet": {
+      "get": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "Balance, reserved, spendable, caps, this day's and month's spend.",
+        "operationId": "get_v1_wallet",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Wallet"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/wallet/topup": {
+      "post": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "A Stripe Checkout session (card rail). Hand the URL to a human once.",
+        "operationId": "post_v1_wallet_topup",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopupSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_amount | invalid_idempotency_key | invalid_json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "topup_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/stripe/webhook": {
+      "post": {
+        "tags": [
+          "wallet"
+        ],
+        "summary": "Stripe → wallet credit (signed, idempotent by event id). Not for agents.",
+        "operationId": "post_v1_stripe_webhook",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean"
+                    },
+                    "credited": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-webhook-signature": "Stripe-Signature"
+      }
+    },
+    "/v1/quote": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "The exact cost of a call. Nothing is reserved.",
+        "operationId": "post_v1_quote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_quantity | invalid_price | run_price_unavailable | invalid_json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/receipts": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Per-call receipts, oldest first. Page with next_since.",
+        "operationId": "get_v1_receipts",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "ISO-8601 or epoch milliseconds."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Receipts"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_since | invalid_limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/receipts/{id}/dispute": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Open a dispute on a receipt (one per receipt; a second answers 200 with the existing one).",
+        "operationId": "post_v1_receipts_id_dispute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisputeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dispute"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dispute"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_reason | invalid_json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "receipt_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
+    "/mcp": {
+      "get": {
+        "tags": [
+          "mcp"
+        ],
+        "summary": "The metered MCP Streamable HTTP endpoint. Classified from headers, never from the body.",
+        "description": "Sequence: key → classify → quote → reserve → forward → settle once (2xx: the quote; anything else: 0). Tool names today: memory.search, memory.get_context, memory.get_context_pack, memory.get_events, memory.read_session, memory.get_wrap, memory.get_periods, memory.recall, calendar.upcoming, profile.whoami, state.commitments.list, state.open_loops.list, state.people.list, state.projects.list, state.people.get, state.projects.get, wiki.evidence, actions.status, memory.append_note, memory.ingest, actions.execute. Annotations per tool are in the server card (https://api.test/.well-known/mcp/server-card.json).",
+        "operationId": "get_mcp",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/McpMethod"
+          },
+          {
+            "$ref": "#/components/parameters/McpName"
+          },
+          {
+            "$ref": "#/components/parameters/McpQuantity"
+          },
+          {
+            "$ref": "#/components/parameters/McpDryRun"
+          },
+          {
+            "$ref": "#/components/parameters/McpToolId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonRpc"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The core's response, relayed untouched, with the usage headers; or a dry-run quote.",
+            "headers": {
+              "X-Receipt-Id": {
+                "$ref": "#/components/headers/X-Receipt-Id"
+              },
+              "X-Usage-Unit": {
+                "$ref": "#/components/headers/X-Usage-Unit"
+              },
+              "X-Usage-Quantity": {
+                "$ref": "#/components/headers/X-Usage-Quantity"
+              },
+              "X-Usage-Cost-Micro-Usd": {
+                "$ref": "#/components/headers/X-Usage-Cost-Micro-Usd"
+              },
+              "X-Latency-Ms": {
+                "$ref": "#/components/headers/X-Latency-Ms"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/JsonRpc"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DryRun"
+                    }
+                  ]
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_metering_header | run_price_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid key — next_action register",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required | cap_exceeded, with payment (x402 shape) and PAYMENT-REQUIRED header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "mcp"
+        ],
+        "summary": "The metered MCP Streamable HTTP endpoint. Classified from headers, never from the body.",
+        "description": "Sequence: key → classify → quote → reserve → forward → settle once (2xx: the quote; anything else: 0). Tool names today: memory.search, memory.get_context, memory.get_context_pack, memory.get_events, memory.read_session, memory.get_wrap, memory.get_periods, memory.recall, calendar.upcoming, profile.whoami, state.commitments.list, state.open_loops.list, state.people.list, state.projects.list, state.people.get, state.projects.get, wiki.evidence, actions.status, memory.append_note, memory.ingest, actions.execute. Annotations per tool are in the server card (https://api.test/.well-known/mcp/server-card.json).",
+        "operationId": "post_mcp",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/McpMethod"
+          },
+          {
+            "$ref": "#/components/parameters/McpName"
+          },
+          {
+            "$ref": "#/components/parameters/McpQuantity"
+          },
+          {
+            "$ref": "#/components/parameters/McpDryRun"
+          },
+          {
+            "$ref": "#/components/parameters/McpToolId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonRpc"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The core's response, relayed untouched, with the usage headers; or a dry-run quote.",
+            "headers": {
+              "X-Receipt-Id": {
+                "$ref": "#/components/headers/X-Receipt-Id"
+              },
+              "X-Usage-Unit": {
+                "$ref": "#/components/headers/X-Usage-Unit"
+              },
+              "X-Usage-Quantity": {
+                "$ref": "#/components/headers/X-Usage-Quantity"
+              },
+              "X-Usage-Cost-Micro-Usd": {
+                "$ref": "#/components/headers/X-Usage-Cost-Micro-Usd"
+              },
+              "X-Latency-Ms": {
+                "$ref": "#/components/headers/X-Latency-Ms"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/JsonRpc"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DryRun"
+                    }
+                  ]
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_metering_header | run_price_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid key — next_action register",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required | cap_exceeded, with payment (x402 shape) and PAYMENT-REQUIRED header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "mcp"
+        ],
+        "summary": "The metered MCP Streamable HTTP endpoint. Classified from headers, never from the body.",
+        "description": "Sequence: key → classify → quote → reserve → forward → settle once (2xx: the quote; anything else: 0). Tool names today: memory.search, memory.get_context, memory.get_context_pack, memory.get_events, memory.read_session, memory.get_wrap, memory.get_periods, memory.recall, calendar.upcoming, profile.whoami, state.commitments.list, state.open_loops.list, state.people.list, state.projects.list, state.people.get, state.projects.get, wiki.evidence, actions.status, memory.append_note, memory.ingest, actions.execute. Annotations per tool are in the server card (https://api.test/.well-known/mcp/server-card.json).",
+        "operationId": "delete_mcp",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/McpMethod"
+          },
+          {
+            "$ref": "#/components/parameters/McpName"
+          },
+          {
+            "$ref": "#/components/parameters/McpQuantity"
+          },
+          {
+            "$ref": "#/components/parameters/McpDryRun"
+          },
+          {
+            "$ref": "#/components/parameters/McpToolId"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonRpc"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The core's response, relayed untouched, with the usage headers; or a dry-run quote.",
+            "headers": {
+              "X-Receipt-Id": {
+                "$ref": "#/components/headers/X-Receipt-Id"
+              },
+              "X-Usage-Unit": {
+                "$ref": "#/components/headers/X-Usage-Unit"
+              },
+              "X-Usage-Quantity": {
+                "$ref": "#/components/headers/X-Usage-Quantity"
+              },
+              "X-Usage-Cost-Micro-Usd": {
+                "$ref": "#/components/headers/X-Usage-Cost-Micro-Usd"
+              },
+              "X-Latency-Ms": {
+                "$ref": "#/components/headers/X-Latency-Ms"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/JsonRpc"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DryRun"
+                    }
+                  ]
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_metering_header | run_price_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid key — next_action register",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required | cap_exceeded, with payment (x402 shape) and PAYMENT-REQUIRED header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable | wallet_unavailable | capacity_exhausted | metering_unavailable, with Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": []
+          }
+        ]
+      }
+    },
+    "/v1/router/discover": {
+      "post": {
+        "tags": [
+          "router"
+        ],
+        "summary": "Find tools for a task, ranked by task fit × (price, health, latency) with the score breakdown. Free.",
+        "operationId": "post_v1_router_discover",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouterDiscoverRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouterEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true,
+        "x-served-by": "apps/router"
+      }
+    },
+    "/v1/router/inspect": {
+      "post": {
+        "tags": [
+          "router"
+        ],
+        "summary": "One tool: schemas, price, live health, permission level, examples, cheaper alternatives. Free.",
+        "operationId": "post_v1_router_inspect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouterInspectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouterEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "tool_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true,
+        "x-served-by": "apps/router"
+      }
+    },
+    "/v1/router/run": {
+      "post": {
+        "tags": [
+          "router"
+        ],
+        "summary": "Run a tool: L1 runs, L2 asks once (input_required), L3 returns an approval URL. Failures and empty results cost 0.",
+        "operationId": "post_v1_router_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouterRunRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouterEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "authentication_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "payment_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "operation_denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "tool_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "upstream_error ($0)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "provider_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "run"
+            ]
+          }
+        ],
+        "x-served-by": "apps/router"
+      }
+    },
+    "/v1/router/catalog": {
+      "get": {
+        "tags": [
+          "router"
+        ],
+        "summary": "The content-hashed catalog manifest.",
+        "operationId": "get_v1_router_catalog",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-anonymous": true,
+        "x-served-by": "apps/router"
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "agentKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "sa_live_<key>",
+        "description": "An agent key from POST /v1/agents. Scopes: read, write, run, admin (admin implies all)."
+      }
+    },
+    "parameters": {
+      "McpMethod": {
+        "name": "Mcp-Method",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "The JSON-RPC method (MCP 2026-07-28 Streamable HTTP). Anything but tools/call is free protocol traffic."
+      },
+      "McpName": {
+        "name": "Mcp-Name",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "description": "The tool name for tools/call. Classified by pricing.ts into read / ingest / model_op / run."
+      },
+      "McpQuantity": {
+        "name": "Mcp-Quantity",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
+          "default": 1
+        },
+        "description": "Units in this call (events for memory.ingest)."
+      },
+      "McpDryRun": {
+        "name": "Mcp-Dry-Run",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "true"
+          ]
+        },
+        "description": "Quote only: nothing reserved, nothing forwarded."
+      },
+      "McpToolId": {
+        "name": "Mcp-Tool-Id",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "For router.run: the tool whose provider price the router looks up."
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "description": "Repeat with the same key to get the same outcome without a second effect."
+      }
+    },
+    "headers": {
+      "X-Receipt-Id": {
+        "schema": {
+          "type": "string",
+          "pattern": "^rcpt_"
+        },
+        "description": "The receipt of this call (GET /v1/receipts)."
+      },
+      "X-Usage-Unit": {
+        "schema": {
+          "type": "string",
+          "enum": [
+            "read",
+            "ingest",
+            "model_op",
+            "run",
+            "storage",
+            "protocol"
+          ]
+        }
+      },
+      "X-Usage-Quantity": {
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "X-Usage-Cost-Micro-Usd": {
+        "schema": {
+          "type": "integer"
+        },
+        "description": "0 when the upstream answered anything but 2xx: a failed call costs nothing."
+      },
+      "X-Latency-Ms": {
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "Retry-After": {
+        "schema": {
+          "type": "integer"
+        },
+        "description": "Seconds. Honour it; do not spin."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "next_action"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Branch on this."
+              },
+              "message": {
+                "type": "string",
+                "description": "Plain English: what to do next."
+              },
+              "next_action": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "top_up",
+                  "approve_at_url",
+                  "retry_after",
+                  "narrow_query",
+                  "not_allowed",
+                  "solve_challenge",
+                  "register",
+                  "fix_input",
+                  "discover",
+                  "authenticate",
+                  "provide_input",
+                  "try_alternative",
+                  null
+                ]
+              }
+            }
+          },
+          "payment": {
+            "$ref": "#/components/schemas/Payment",
+            "description": "Present on 402 only."
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          },
+          "latency_ms": {
+            "type": "integer"
+          }
+        }
+      },
+      "Usage": {
+        "type": "object",
+        "required": [
+          "unit",
+          "quantity",
+          "cost_micro_usd"
+        ],
+        "properties": {
+          "unit": {
+            "type": "string",
+            "enum": [
+              "read",
+              "ingest",
+              "model_op",
+              "run",
+              "storage",
+              "protocol"
+            ]
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cost_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "What this call cost (integer micro-USD; 1 USD = 1000000)."
+          }
+        }
+      },
+      "Payment": {
+        "type": "object",
+        "description": "x402-shaped payment-required payload (docs/api/402.md).",
+        "required": [
+          "amount_micro_usd",
+          "unit",
+          "accepts",
+          "retry_after"
+        ],
+        "properties": {
+          "amount_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The amount the refused call needs (integer micro-USD; 1 USD = 1000000)."
+          },
+          "unit": {
+            "type": "string"
+          },
+          "accepts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "rail",
+                "url"
+              ],
+              "properties": {
+                "rail": {
+                  "type": "string",
+                  "enum": [
+                    "card"
+                  ]
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "method": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "retry_after": {
+            "type": "integer"
+          },
+          "balance_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Spendable balance at the time of refusal (integer micro-USD; 1 USD = 1000000)."
+          },
+          "cap": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "key",
+                  "principal"
+                ]
+              },
+              "period": {
+                "type": "string",
+                "enum": [
+                  "day",
+                  "month"
+                ]
+              },
+              "limit_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The cap (integer micro-USD; 1 USD = 1000000)."
+              },
+              "spent_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Spent in the period (integer micro-USD; 1 USD = 1000000)."
+              }
+            }
+          }
+        }
+      },
+      "Caps": {
+        "type": "object",
+        "required": [
+          "key",
+          "principal"
+        ],
+        "properties": {
+          "key": {
+            "type": "object",
+            "properties": {
+              "day_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Per key per UTC day (integer micro-USD; 1 USD = 1000000)."
+              },
+              "month_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Per key per UTC month (integer micro-USD; 1 USD = 1000000)."
+              }
+            }
+          },
+          "principal": {
+            "type": "object",
+            "properties": {
+              "day_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Per principal per UTC day (integer micro-USD; 1 USD = 1000000)."
+              },
+              "month_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Per principal per UTC month (integer micro-USD; 1 USD = 1000000)."
+              }
+            }
+          }
+        }
+      },
+      "Challenge": {
+        "type": "object",
+        "required": [
+          "challenge",
+          "difficulty_bits",
+          "expires_at"
+        ],
+        "properties": {
+          "challenge": {
+            "type": "string"
+          },
+          "difficulty_bits": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:-]{1,128}$",
+            "description": "Another key id or a developer id, credited as the referrer."
+          },
+          "caps": {
+            "type": "object",
+            "properties": {
+              "day_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "May only lower the key default (integer micro-USD; 1 USD = 1000000)."
+              },
+              "month_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "May only lower the key default (integer micro-USD; 1 USD = 1000000)."
+              }
+            }
+          }
+        }
+      },
+      "Registration": {
+        "type": "object",
+        "required": [
+          "key",
+          "key_id",
+          "prefix",
+          "principal_id",
+          "tenant_id",
+          "scopes",
+          "created_at",
+          "expires_at",
+          "wallet",
+          "caps"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^sa_(live|test)_",
+            "description": "Shown once. Never paste it into a chat, a log or a file."
+          },
+          "key_id": {
+            "type": "string",
+            "pattern": "^ak_"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "principal_id": {
+            "type": "string",
+            "pattern": "^prn_"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "read",
+                "write",
+                "run",
+                "admin"
+              ]
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "wallet": {
+            "type": "object",
+            "properties": {
+              "balance_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The free allowance (integer micro-USD; 1 USD = 1000000)."
+              },
+              "reserved_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Held by in-flight calls (integer micro-USD; 1 USD = 1000000)."
+              }
+            }
+          },
+          "caps": {
+            "$ref": "#/components/schemas/Caps"
+          },
+          "next_action": {
+            "type": "null"
+          }
+        }
+      },
+      "Me": {
+        "type": "object",
+        "required": [
+          "key_id",
+          "mode",
+          "principal_id",
+          "tenant_id",
+          "scopes",
+          "expires_at",
+          "caps"
+        ],
+        "properties": {
+          "key_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "live",
+              "test"
+            ]
+          },
+          "principal_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "caps": {
+            "$ref": "#/components/schemas/Caps"
+          }
+        }
+      },
+      "CapsPatch": {
+        "type": "object",
+        "properties": {
+          "day_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Omit to reset to the default (integer micro-USD; 1 USD = 1000000)."
+          },
+          "month_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Omit to reset to the default (integer micro-USD; 1 USD = 1000000)."
+          }
+        }
+      },
+      "Wallet": {
+        "type": "object",
+        "required": [
+          "principal_id",
+          "balance_micro_usd",
+          "reserved_micro_usd",
+          "available_micro_usd",
+          "caps",
+          "spend",
+          "topup"
+        ],
+        "properties": {
+          "principal_id": {
+            "type": "string"
+          },
+          "balance_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Balance (integer micro-USD; 1 USD = 1000000)."
+          },
+          "reserved_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Held by in-flight calls (integer micro-USD; 1 USD = 1000000)."
+          },
+          "available_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "balance − reserved (integer micro-USD; 1 USD = 1000000)."
+          },
+          "caps": {
+            "$ref": "#/components/schemas/Caps"
+          },
+          "spend": {
+            "$ref": "#/components/schemas/Caps"
+          },
+          "topup": {
+            "type": "object",
+            "properties": {
+              "rail": {
+                "type": "string",
+                "enum": [
+                  "card"
+                ]
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "POST"
+                ]
+              },
+              "min_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Smallest top-up (integer micro-USD; 1 USD = 1000000)."
+              },
+              "max_micro_usd": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Largest top-up (integer micro-USD; 1 USD = 1000000)."
+              }
+            }
+          }
+        }
+      },
+      "TopupRequest": {
+        "type": "object",
+        "required": [
+          "amount_micro_usd"
+        ],
+        "properties": {
+          "amount_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Between topup.min_micro_usd and topup.max_micro_usd (integer micro-USD; 1 USD = 1000000)."
+          }
+        }
+      },
+      "TopupSession": {
+        "type": "object",
+        "required": [
+          "rail",
+          "url",
+          "session_id",
+          "amount_micro_usd",
+          "next_action"
+        ],
+        "properties": {
+          "rail": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Hand it to a human once."
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "amount_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Amount (integer micro-USD; 1 USD = 1000000)."
+          },
+          "next_action": {
+            "type": "string",
+            "enum": [
+              "approve_at_url"
+            ]
+          },
+          "instructions": {
+            "type": "string"
+          }
+        }
+      },
+      "QuoteRequest": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "default": "tools/call"
+          },
+          "name": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "provider_price_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "For router.run / actions.execute: the provider price from router.inspect (integer micro-USD; 1 USD = 1000000)."
+          },
+          "tool_id": {
+            "type": "string"
+          }
+        }
+      },
+      "QuoteResponse": {
+        "type": "object",
+        "required": [
+          "quote",
+          "method",
+          "name",
+          "balance_micro_usd",
+          "sufficient",
+          "caps",
+          "usage",
+          "next_action"
+        ],
+        "properties": {
+          "quote": {
+            "$ref": "#/components/schemas/Usage"
+          },
+          "method": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "balance_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Spendable now (integer micro-USD; 1 USD = 1000000)."
+          },
+          "sufficient": {
+            "type": "boolean"
+          },
+          "caps": {
+            "$ref": "#/components/schemas/Caps"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          },
+          "next_action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "top_up",
+              null
+            ]
+          }
+        }
+      },
+      "Receipt": {
+        "type": "object",
+        "required": [
+          "id",
+          "key_id",
+          "method",
+          "name",
+          "unit",
+          "quantity",
+          "cost_micro_usd",
+          "reserved_micro_usd",
+          "settled",
+          "ts"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^rcpt_"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer"
+          },
+          "cost_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Settled cost (integer micro-USD; 1 USD = 1000000)."
+          },
+          "reserved_micro_usd": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Held while in flight (integer micro-USD; 1 USD = 1000000)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "settled": {
+            "type": "boolean"
+          },
+          "ts": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Receipts": {
+        "type": "object",
+        "required": [
+          "receipts",
+          "next_since"
+        ],
+        "properties": {
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Receipt"
+            }
+          },
+          "next_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "DisputeRequest": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      },
+      "Dispute": {
+        "type": "object",
+        "required": [
+          "dispute_id",
+          "receipt_id",
+          "status",
+          "ts"
+        ],
+        "properties": {
+          "dispute_id": {
+            "type": "string",
+            "pattern": "^dsp_"
+          },
+          "receipt_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "resolved",
+              "rejected"
+            ]
+          },
+          "ts": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DryRun": {
+        "type": "object",
+        "required": [
+          "dry_run",
+          "quote",
+          "usage",
+          "latency_ms",
+          "next_action"
+        ],
+        "properties": {
+          "result": {
+            "type": "null"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "quote": {
+            "$ref": "#/components/schemas/Usage"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          },
+          "balance_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Spendable now (integer micro-USD; 1 USD = 1000000)."
+          },
+          "sufficient": {
+            "type": "boolean"
+          },
+          "latency_ms": {
+            "type": "integer"
+          },
+          "next_action": {
+            "type": "null"
+          }
+        }
+      },
+      "JsonRpc": {
+        "type": "object",
+        "description": "A JSON-RPC 2.0 envelope. Relayed to the core untouched; the gateway never parses it."
+      },
+      "RouterDiscoverRequest": {
+        "type": "object",
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "budget_micro_usd": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Exclude tools whose typical run costs more (integer micro-USD; 1 USD = 1000000)."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RouterInspectRequest": {
+        "type": "object",
+        "required": [
+          "tool_id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "tool_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "RouterRunRequest": {
+        "type": "object",
+        "required": [
+          "tool_id",
+          "input",
+          "idempotency_key"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "tool_id": {
+            "type": "string"
+          },
+          "input": {
+            "type": "object"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "task_hint": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "hint_followed": {
+            "type": "boolean"
+          },
+          "inputResponses": {
+            "type": "object"
+          }
+        }
+      },
+      "RouterEnvelope": {
+        "type": "object",
+        "required": [
+          "usage",
+          "latency_ms",
+          "hints",
+          "next_action"
+        ],
+        "description": "The common response (plan §7.2): result, usage, latency_ms, hints, next_action.",
+        "properties": {
+          "result": {},
+          "resultType": {
+            "type": "string",
+            "enum": [
+              "result",
+              "quote",
+              "input_required",
+              "approval_required",
+              "error"
+            ]
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          },
+          "latency_ms": {
+            "type": "integer"
+          },
+          "hints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tool_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "estimated_cost_micro_usd": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Estimated (integer micro-USD; 1 USD = 1000000)."
+                }
+              }
+            }
+          },
+          "next_action": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

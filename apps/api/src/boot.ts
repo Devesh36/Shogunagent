@@ -103,12 +103,20 @@ import { FetchDeepgramGateway } from "./deepgram.js";
  *                            — the hard caps (defaults 1 / 20 / 5 / 100; src/caps.ts).
  * - STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET — secrets, both or neither: card top-ups. Without
  *                              them `POST /v1/wallet/topup` answers 503 and a 402 still names it.
+ * - AGENT_CARD_SIGNING_KEY   — secret, optional: the Ed25519 private key the A2A agent card
+ *                              (`/.well-known/agent-card.json`, E10-T3) is signed with — PKCS#8
+ *                              PEM, or the 32-byte seed as hex / base64. Unset = unsigned card.
+ * - AGENT_MCP_URL            — optional: the MCP endpoint the agent-readable documents name when
+ *                              it is not `<PUBLIC_BASE_URL>/mcp`.
  *
  * Node-only settings (PORT, RELAY_DATABASE_URL, METRICS_LOG_INTERVAL_SEC) are documented and
  * parsed in `index.ts`; the Worker's store comes from its `HYPERDRIVE` binding.
  */
+import type { KeyObject } from "node:crypto";
+
 import { REGISTER_PER_HOUR, REGISTER_WINDOW_MS } from "./agent-app.js";
 import { DEFAULT_PBKDF2_ITERATIONS, MAX_PBKDF2_ITERATIONS } from "./agent-keys.js";
+import { parseSigningKey } from "./wellknown/agent-card.js";
 import { SqlAgentStore } from "./agent-pg-store.js";
 import type { AgentStore } from "./agent-store.js";
 import { createApp, parseResultLine, planSpendCapMicros, type RelayDeps, DEFAULT_TRIAL_SPEND_SHARE } from "./app.js";
@@ -242,6 +250,12 @@ export interface AgentConfig {
   keyIterations: number;
   caps: CapSet;
   stripe?: { secretKey: string; webhookSecret: string };
+  /** `AGENT_CARD_SIGNING_KEY` (E10-T3), parsed: the Ed25519 key the A2A agent card is signed
+   * with. Absent = the card is served unsigned. */
+  agentCardSigningKey?: KeyObject;
+  /** `AGENT_MCP_URL`: the Streamable HTTP endpoint the documents name when it is not
+   * `<PUBLIC_BASE_URL>/mcp`. */
+  mcpUrl?: string;
 }
 
 /** Parse the agent-API settings, or `undefined` when the API is off. Throws `BootError` naming
@@ -266,6 +280,16 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
   const stripeKey = env.STRIPE_SECRET_KEY?.trim();
   const webhookSecret = env.STRIPE_WEBHOOK_SECRET?.trim();
   if ((stripeKey ? 1 : 0) + (webhookSecret ? 1 : 0) === 1) throw new BootError("STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be set together");
+  // The agent card's signing key (E10-T3). A value that is not an Ed25519 key stops boot: an
+  // unsigned card by accident is a silent identity downgrade. The error names only the variable.
+  let agentCardSigningKey: KeyObject | undefined;
+  try {
+    agentCardSigningKey = parseSigningKey(env.AGENT_CARD_SIGNING_KEY);
+  } catch {
+    throw new BootError("invalid AGENT_CARD_SIGNING_KEY (an Ed25519 private key: PKCS#8 PEM, or the 32-byte seed as hex or base64)");
+  }
+  const mcpUrl = env.AGENT_MCP_URL?.trim();
+  if (mcpUrl !== undefined && mcpUrl !== "" && !/^https?:\/\/[^\s]+$/.test(mcpUrl)) throw new BootError("invalid AGENT_MCP_URL (an absolute http(s) URL)");
   return {
     powSecret,
     powBits: intFromEnv(env, "AGENT_POW_BITS", DEFAULT_POW_BITS, 0, MAX_POW_BITS),
@@ -274,6 +298,8 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
     keyIterations: intFromEnv(env, "AGENT_KEY_PBKDF2_ITERATIONS", DEFAULT_PBKDF2_ITERATIONS, 1_000, MAX_PBKDF2_ITERATIONS),
     caps,
     ...(stripeKey && webhookSecret ? { stripe: { secretKey: stripeKey, webhookSecret } } : {}),
+    ...(agentCardSigningKey ? { agentCardSigningKey } : {}),
+    ...(mcpUrl ? { mcpUrl } : {}),
   };
 }
 
@@ -530,6 +556,11 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
         ...(store.registerLimiter ? { registerLimiter: store.registerLimiter } : {}),
         ...(config.agent.stripe ? { stripe: config.agent.stripe } : {}),
         ...(config.spendBreaker ? { spendBreaker: config.spendBreaker } : {}),
+        // The agent-readable documents (E10): the card's key and the MCP URL, when configured.
+        wellknown: {
+          ...(config.agent.agentCardSigningKey ? { agentCardSigningKey: config.agent.agentCardSigningKey } : {}),
+          ...(config.agent.mcpUrl ? { mcpUrl: config.agent.mcpUrl } : {}),
+        },
       },
     } : {}),
   };

@@ -1,0 +1,35 @@
+# ShogunAgent
+
+> The state layer for AI agents. Read what is true about the user's work right now (people, projects, commitments, open loops) with a quote and a confidence score on every fact; write what you learned so the next agent starts from it; run tools through a router that enforces permission tiers. Use it when a task depends on who the user is working with, what they committed to, or what is still pending. Not a transcript store and not a general web-search tool.
+
+For teams running many AI agents, ShogunAgent is the shared state layer that gives every agent one calibrated model of the user's work (people, projects, commitments, open loops) with provenance on every fact and a human gate on every consequential action.
+
+Skill version 0.1.0. Hosted MCP endpoint (Streamable HTTP, 2026-07-28): https://api.shogunagent.dev/mcp. Local: `npx shogunagent@0.1`. Reads are free; writes and runs are metered in micro-USD and the first metered call without a wallet answers 402 with a top-up URL.
+
+## Start here
+
+- [SKILL.md](https://github.com/Torutesu/Shogunagent/blob/main/SKILL.md): the skill agents install: when to use it and when not, setup, auth, precedence of facts, cost, what L1 / L2 / L3 mean for the caller, statuses and errors, numbered rules.
+- [Agent API guide](https://github.com/Torutesu/Shogunagent/blob/main/apps/api/README-agent-api.md): The agent-facing half of the gateway: `sa_` keys, a prepaid micro-USD wallet, hard caps, the `402` contract, quotes, receipts, and the metered MCP proxy. Plan: `docs/implementation-plan.md` E3 / E9…
+- [README](https://github.com/Torutesu/Shogunagent/blob/main/README.md): what the product is, the three pillars, how state is acquired, pricing and roadmap.
+
+## API reference
+
+- [402 Payment Required](https://github.com/Torutesu/Shogunagent/blob/main/docs/api/402.md): The gateway answers `402` whenever a metered call cannot proceed for a money reason. There are two reasons and one shape. Implementation: `apps/api/src/billing/402.ts`; tests:…
+- [Agent-readable surfaces](https://github.com/Torutesu/Shogunagent/blob/main/docs/api/agent-surfaces.md): Every place an agent looks before it chooses a service, and what generates it (CLAUDE.md invariant 12: these are derived from code and config; the human docs derive from them). Plan: E10.
+- [`tool-table.json` — the machine-readable tool table](https://github.com/Torutesu/Shogunagent/blob/main/docs/api/tool-table.json.md): The one input every agent-readable surface is rendered from (CLAUDE.md invariant 12): `/.well-known/mcp/server-card.json` (E10-T1), the MCP `tools/list` the core answers, the `llms.txt` tool index,…
+
+## Machine-readable surfaces
+
+- [MCP server card](https://api.shogunagent.dev/.well-known/mcp/server-card.json): endpoint, auth, the tool list with annotations (readOnlyHint = L1 read; destructiveHint + openWorldHint = L3).
+- [A2A agent card](https://api.shogunagent.dev/.well-known/agent-card.json): signed identity, provider, skills, security schemes.
+- [Pricing](https://api.shogunagent.dev/.well-known/pricing.json): the rate card, free allowance and caps, from the same table the metering enforces.
+- [Status](https://api.shogunagent.dev/.well-known/status.json): live p50 / p95, error rate over five minutes, incident history. [Health](https://api.shogunagent.dev/health) is the short form.
+- [OpenAPI 3.1](https://api.shogunagent.dev/openapi.json): the REST face (agents, keys, wallet, quote, receipts, /mcp, router verbs).
+- [MCP Registry entry](https://registry.modelcontextprotocol.io/v0/servers/io.github.torutesu%2Fshogunagent): io.github.torutesu/shogunagent.
+- [Full documentation in one file](https://api.shogunagent.dev/llms-full.txt)
+
+## Optional
+
+- [Implementation plan](https://github.com/Torutesu/Shogunagent/blob/main/docs/implementation-plan.md): epics and acceptance criteria (Japanese).
+- [Router](https://github.com/Torutesu/Shogunagent/blob/main/apps/router/README.md): discover / inspect / run, the ranking formula, connector format.
+- [Repository](https://github.com/Torutesu/Shogunagent): Apache-2.0.

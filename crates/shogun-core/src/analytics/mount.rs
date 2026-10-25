@@ -37,14 +37,33 @@ pub fn event(scope: &str) -> Option<Event> {
 /// The anonymous id to send under, read from the desktop's `analytics.json` text, or `None` —
 /// send nothing — when the user opted out or the file is missing its id or does not parse. The
 /// same file and field the Settings switch writes (`opt_out`), so one switch covers this too.
+///
+/// What a missing `opt_out` field means depends on the build
+/// ([`super::consent_default`], E13-T4): a server sends nothing until the file says
+/// `opt_out: false`; the desktop app keeps "a file without the field is on".
 pub fn consented_distinct_id(analytics_json: Option<&str>) -> Option<String> {
+    consented_distinct_id_under(analytics_json, super::consent_default())
+}
+
+/// [`consented_distinct_id`] under an explicit posture (the callers' entry is the build's).
+pub fn consented_distinct_id_under(
+    analytics_json: Option<&str>,
+    default: super::ConsentDefault,
+) -> Option<String> {
     let v: Value = serde_json::from_str(analytics_json?).ok()?;
-    if v.get("opt_out").and_then(Value::as_bool).unwrap_or(false) {
-        return None;
-    }
-    // `opt_out` present but not a bool: not a state we wrote, so not consent either.
-    if v.get("opt_out").is_some_and(|o| !o.is_boolean()) {
-        return None;
+    match v.get("opt_out") {
+        // The user opted out.
+        Some(Value::Bool(true)) => return None,
+        // The user opted in (the desktop switch, or a server operator writing the file).
+        Some(Value::Bool(false)) => {}
+        // Present but not a bool: not a state we wrote, so not consent either.
+        Some(_) => return None,
+        // Absent: consent only where the build's default is opt-out (the desktop app).
+        None => {
+            if default == super::ConsentDefault::OptIn {
+                return None;
+            }
+        }
     }
     let id = v.get("distinct_id")?.as_str()?.trim();
     (!id.is_empty()).then(|| id.to_string())
@@ -109,8 +128,10 @@ mod tests {
     }
 
     #[test]
-    fn opt_out_and_missing_state_send_nothing() {
-        let id = |json: Option<&str>| consented_distinct_id(json);
+    fn opt_out_and_missing_state_send_nothing_on_the_desktop() {
+        let id = |json: Option<&str>| {
+            consented_distinct_id_under(json, super::super::ConsentDefault::OptOut)
+        };
         assert_eq!(id(Some(r#"{"distinct_id":"abc","opt_out":false}"#)), Some("abc".into()));
         // Written before opt_out existed: the default is on, like the desktop reads it.
         assert_eq!(id(Some(r#"{"distinct_id":"abc"}"#)), Some("abc".into()));
@@ -120,5 +141,42 @@ mod tests {
         assert_eq!(id(Some(r#"{"opt_out":false}"#)), None);
         assert_eq!(id(Some("not json")), None);
         assert_eq!(id(None), None);
+    }
+
+    /// E13-T4: a server sends nothing unless `analytics.json` says `opt_out: false`. A missing
+    /// file, a file without the field, and every opted-out or malformed state all send nothing.
+    #[test]
+    fn a_server_sends_nothing_until_the_file_opts_in() {
+        let id = |json: Option<&str>| {
+            consented_distinct_id_under(json, super::super::ConsentDefault::OptIn)
+        };
+        assert_eq!(id(None), None, "no analytics.json: nothing is sent");
+        assert_eq!(id(Some(r#"{"distinct_id":"abc"}"#)), None, "no opt_out field: not consent");
+        assert_eq!(id(Some(r#"{"distinct_id":"abc","opt_out":true}"#)), None);
+        assert_eq!(id(Some(r#"{"distinct_id":"abc","opt_out":"false"}"#)), None);
+        assert_eq!(id(Some(r#"{"opt_out":false}"#)), None, "no id: nothing to send under");
+        assert_eq!(id(Some("not json")), None);
+        // The one state that sends: an explicit opt-in with an id.
+        assert_eq!(id(Some(r#"{"distinct_id":"abc","opt_out":false}"#)), Some("abc".into()));
+    }
+
+    /// The default ShogunAgent build (no `desktop`) and every `daemon-server` build take the
+    /// server posture through the one-argument entry the binaries call.
+    #[test]
+    fn the_binaries_entry_follows_the_build_posture() {
+        if std::env::var_os(super::super::SERVER_ENV).is_some() {
+            return; // the runner forced a posture; the pure test above covers the rule
+        }
+        let without_field = consented_distinct_id(Some(r#"{"distinct_id":"abc"}"#));
+        if cfg!(feature = "daemon-server") || !cfg!(feature = "desktop") {
+            assert_eq!(without_field, None);
+        } else {
+            assert_eq!(without_field, Some("abc".into()));
+        }
+        assert_eq!(consented_distinct_id(None), None);
+        assert_eq!(
+            consented_distinct_id(Some(r#"{"distinct_id":"abc","opt_out":false}"#)),
+            Some("abc".into())
+        );
     }
 }
