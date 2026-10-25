@@ -75,7 +75,10 @@ export interface LogVars {
     | "region_refused" | "tenant_directory_unavailable" | "tenant_created" | "tenant_updated" | "principal_attached" | "tenant_admin_added"
     | "scim_token_rotated" | "sso_login_started" | "sso_login_succeeded" | "sso_login_refused" | "saml_replay" | "admin_session_rejected"
     | "scim_rejected" | "scim_user_created" | "scim_user_updated" | "scim_user_deactivated" | "scim_user_deleted" | "scim_group_synced"
-    | "sidecar_unavailable" | "audit_export_streamed" | "oauth_sso_required" | "member_key_issued" | "member_key_replayed";
+    | "sidecar_unavailable" | "audit_export_streamed" | "oauth_sso_required" | "member_key_issued" | "member_key_replayed"
+    // E44 ingest hooks (ingest-hooks/app.ts): fixed words, never a hook secret, a delivery id or a payload.
+    | "ingest_hook_created" | "ingest_hook_replayed" | "ingest_hook_rotated" | "ingest_hook_deleted" | "ingest_hook_rejected"
+    | "ingest_hook_rate_limited" | "ingest_hook_handshake" | "ingest_hook_relayed" | "ingest_hook_refused_by_core" | "ingest_hook_store_unavailable";
   /** Server-chosen provider and model of the accepted batch (ids, not content). */
   relayLogModel?: string;
   /** License id (an opaque token id, not user content). */
@@ -113,6 +116,12 @@ export function routeTemplate(pathname: string): string {
   // E26 enterprise. Tenant, admin, user and group ids in the path collapse to their template.
   const enterprise = enterpriseRouteTemplate(pathname);
   if (enterprise) return enterprise;
+  // E44 ingest hooks: hook ids in the path collapse to their template.
+  if (pathname === "/v1/ingest-hooks" || pathname === "/v1/ingest-hooks/gmail") return pathname;
+  const hookDelivery = /^\/v1\/ingest-hooks\/(github|linear|slack|notion|google_calendar)\/[^/]+$/.exec(pathname);
+  if (hookDelivery) return `/v1/ingest-hooks/${hookDelivery[1]}/:hook`;
+  if (/^\/v1\/ingest-hooks\/[^/]+\/rotate$/.test(pathname)) return "/v1/ingest-hooks/:id/rotate";
+  if (/^\/v1\/ingest-hooks\/[^/]+$/.test(pathname)) return "/v1/ingest-hooks/:id";
   if (/^\/v1\/keys\/[^/]+\/revoke$/.test(pathname)) return "/v1/keys/:id/revoke";
   if (/^\/v1\/keys\/[^/]+$/.test(pathname)) return "/v1/keys/:id";
   if (/^\/v1\/receipts\/[^/]+\/dispute$/.test(pathname)) return "/v1/receipts/:id/dispute";

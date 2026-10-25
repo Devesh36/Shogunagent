@@ -35,6 +35,10 @@ pub const HEADER_METHOD: &str = "mcp-method";
 pub const HEADER_NAME: &str = "mcp-name";
 /// The reply header carrying the number of items a `memory.ingest` received.
 pub const HEADER_QUANTITY: &str = "mcp-quantity";
+/// The reply header carrying the JSON-RPC error code of a reply that is an error (E44), so the
+/// gateway can tell a store that could not serve (`-32000`, worth a retry) from a call that was
+/// refused for its arguments (`-32602`) without reading the body.
+pub const HEADER_ERROR_CODE: &str = "mcp-error-code";
 /// The `WWW-Authenticate` of a 401 (E34): the sidecar has no authorization server of its own;
 /// its bearers come from the operator or the gateway.
 pub const WWW_AUTHENTICATE: &str = r#"Bearer realm="shogun-memory""#;
@@ -88,6 +92,8 @@ pub struct HttpReply {
     pub allow: Option<&'static str>,
     /// `WWW-Authenticate` of a 401.
     pub www_authenticate: Option<&'static str>,
+    /// `Mcp-Error-Code`: the JSON-RPC error code when the reply is an error (E44).
+    pub rpc_error: Option<i64>,
 }
 
 const JSON: &str = "application/json";
@@ -194,6 +200,7 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
         mcp_quantity: None,
         allow: None,
         www_authenticate: None,
+        rpc_error: None,
     };
     if !request.method.eq_ignore_ascii_case("POST") {
         let message = if request.method.eq_ignore_ascii_case("GET") {
@@ -210,6 +217,7 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
             mcp_quantity: None,
             allow: Some("POST"),
             www_authenticate: None,
+            rpc_error: None,
         };
     }
     let header_method = request.mcp_method.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
@@ -304,9 +312,11 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
             mcp_quantity: is_call.then_some(0),
             allow: None,
             www_authenticate: None,
+            rpc_error: None,
         };
     };
     let parsed = serde_json::from_str::<Value>(&reply).ok();
+    let rpc_error = parsed.as_ref().and_then(|value| value["error"]["code"].as_i64());
     let (status, www_authenticate) = match parsed.as_ref().and_then(|value| value["error"]["code"].as_i64()) {
         Some(-32700) => (400, None),
         Some(crate::mcp::TOKEN_INVALID_CODE) => (401, Some(WWW_AUTHENTICATE)),
@@ -340,6 +350,7 @@ fn handle_unchecked(handler: &dyn McpHandler, request: &HttpRequest<'_>) -> Http
         mcp_quantity: quantity,
         allow: None,
         www_authenticate,
+        rpc_error,
     }
 }
 
@@ -363,6 +374,20 @@ mod tests {
 
     fn post<'a>(body: &'a str, method: Option<&'a str>, name: Option<&'a str>) -> HttpRequest<'a> {
         HttpRequest { method: "POST", body, mcp_method: method, mcp_name: name, accept: None, bearer: None }
+    }
+
+    /// E44: an error reply names its JSON-RPC code, so the gateway tells a store fault from a bad
+    /// argument without reading the body; a result names none.
+    #[test]
+    fn an_error_reply_names_its_rpc_code() {
+        let unavailable = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"memory.ingest","arguments":{"events":[{"content":"a"}],"source":"s","actor":"a","idempotency_key":"k"}}}"#;
+        let reply = handle(&server(), &post(unavailable, Some("tools/call"), Some("memory.ingest")));
+        assert_eq!((reply.status, reply.rpc_error), (200, Some(-32000)));
+        let bad = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"memory.ingest","arguments":{}}}"#;
+        let reply = handle(&server(), &post(bad, Some("tools/call"), Some("memory.ingest")));
+        assert_eq!(reply.rpc_error, Some(-32602));
+        let list = r#"{"jsonrpc":"2.0","id":6,"method":"tools/list"}"#;
+        assert_eq!(handle(&server(), &post(list, Some("tools/list"), None)).rpc_error, None);
     }
 
     #[test]

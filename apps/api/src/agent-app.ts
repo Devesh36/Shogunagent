@@ -17,6 +17,7 @@
  *   POST /v1/receipts/:id/dispute        open a dispute                            [write]
  *   POST /v1/internal/router/connector-token  a caller's connector token for one router run (connector-tokens.ts) [router token + caller key]
  *   POST /v1/handoff                     an A2A state-of-work handoff, relayed to the core (handoff.ts) [read]
+ *   /v1/ingest-hooks…                    provider webhooks into memory (ingest-hooks/app.ts, E44) [write / signed]
  *   ALL  /mcp                            the metered MCP proxy (metering.ts)       [by unit]
  *
  * Bodies are read only where the route's contract is JSON the gateway itself defines
@@ -55,6 +56,7 @@ import { registerPayoutRoutes, type PayoutDeps } from "./payouts-app.js";
 import { ROUTER_RESERVE_PATH, ROUTER_SETTLEMENTS_PATH, registerRouterWalletRoutes } from "./router-wallet.js";
 import { CONNECTOR_TOKEN_PATH, registerConnectorTokenRoute, type ConnectorRefresher, type ConnectorRowStore, type KmsSealer } from "./connector-tokens.js";
 import { createEnterpriseApp, ssoConsentPolicy, type EnterpriseDeps } from "./enterprise/app.js";
+import { registerIngestHookRoutes, type IngestHookDeps } from "./ingest-hooks/app.js";
 import { regionAdmission } from "./enterprise/region.js";
 
 /** Self-registration: at most this many per IP per hour (in-process default; production wires
@@ -120,6 +122,9 @@ export interface AgentDeps extends MeteringDeps {
    * separation, the tenant audit export. Absent = none of those routes exist and every principal
    * is served here. */
   enterprise?: EnterpriseDeps;
+  /** Provider webhooks into memory (E44, ingest-hooks/app.ts): `INGEST_HOOKS_SECRET`. Absent =
+   * the `/v1/ingest-hooks` routes do not exist on this gateway. */
+  ingestHooks?: IngestHookDeps;
 }
 
 /** The client IP as the edge reports it. Workers set `CF-Connecting-IP`; behind another proxy the
@@ -575,6 +580,11 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   }
 
   // --- the metered MCP proxy (E9-T5) ---
+  // --- provider webhooks into memory (E44): verified here, stored by the core over the relay ---
+  if (deps.ingestHooks) {
+    registerIngestHookRoutes(app, deps.ingestHooks, meteringDeps, lookup, (path) => app.use(path, wellknown.observe));
+  }
+
   app.all("/mcp", metered(onApprovalToken ? { ...meteringDeps, onApprovalToken } : meteringDeps));
 
   return app;

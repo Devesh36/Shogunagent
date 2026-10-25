@@ -2191,6 +2191,7 @@ fn page_list(tool: Tool, text: String, args: &Value) -> String {
 fn tool_title(tool: Tool) -> &'static str {
     match tool {
         Tool::MemoryIngest => "Ingest events or turns",
+        Tool::MemoryIngestWebhook => "Ingest a webhook delivery",
         Tool::MemoryRecall => "Recall within a budget",
         Tool::MemoryFs => "Memory as files",
         Tool::HandoffCreate => "Hand off the state of work",
@@ -2369,6 +2370,7 @@ pub fn tool_descriptor(tool: Tool) -> Value {
         // The core descriptions come from `core_tools::CORE` below; these are the fallbacks.
         Tool::MemoryIngest => ("Append events or turns to the event log under an idempotency key (L1).", crate::ingest_api::ingest_schema()),
         Tool::MemoryRecall => ("What memory holds on a question, within a token budget.", crate::ingest_api::recall_schema()),
+        Tool::MemoryIngestWebhook => (crate::webhook_ingest::DESCRIPTION, crate::webhook_ingest::schema()),
         Tool::MemoryFs => (crate::memfs_tool::DESCRIPTION, crate::memfs_tool::schema()),
         Tool::HandoffCreate => (crate::handoff_api::CREATE_DESCRIPTION, crate::handoff_api::create_schema()),
         Tool::HandoffAccept => (crate::handoff_api::ACCEPT_DESCRIPTION, crate::handoff_api::accept_schema()),
@@ -3098,6 +3100,10 @@ Records an item was linked to are not touched. Only delete what the user asked t
     }
     if tool == Tool::MemoryIngest {
         descriptor["inputSchema"]["required"] = json!(["source", "actor", "idempotency_key"]);
+        descriptor["inputSchema"]["additionalProperties"] = json!(false);
+    }
+    if tool == Tool::MemoryIngestWebhook {
+        descriptor["inputSchema"]["required"] = json!(["provider", "delivery_id", "idempotency_key"]);
         descriptor["inputSchema"]["additionalProperties"] = json!(false);
     }
     if tool == Tool::MemoryRecall {

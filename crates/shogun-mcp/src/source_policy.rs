@@ -185,6 +185,8 @@ pub fn tool_handling(tool: Tool) -> ToolHandling {
         | Tool::MemoryAppendNote
         // An agent's own events join the log; they read nothing (E4-T3).
         | Tool::MemoryIngest
+        // A provider delivery joins the log like an ingest; it reads nothing (E44).
+        | Tool::MemoryIngestWebhook
         // The `/memories` tree is state rows and the caller's scratch: no meeting or screen text.
         | Tool::MemoryFs
         // Accepting a handoff appends to the caller's scratch; it reads nothing (E35).

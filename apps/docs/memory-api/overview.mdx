@@ -60,7 +60,7 @@ Each token has a scope, set when you issue it.
 A refused call answers `scope_insufficient` before anything runs: HTTP 403 on
 REST and the CLI, JSON-RPC error `-32004` on MCP (its message starts with
 `scope_insufficient:`). A read-only MCP client is not shown the tools it cannot
-call: of the 167 tools, it lists the 91 reads. Tokens issued before scopes
+call: of the 168 tools, it lists the 91 reads. Tokens issued before scopes
 existed are `full` and keep working. Before the first token exists, local
 process trust is `full` too.
 
@@ -147,6 +147,7 @@ are read from `memory_api.json` beside the database. Approvals resolve from
 | `memory.import.preview` | read | Check a memory package, or the text of memory files you exported from another assistant, and show what would be added. Writes nothing |
 | `memory.import` | L1 | Save the items you chose from a preview |
 | `memory.import.list` / `memory.import.delete` | read / L1 | Past imports, and undoing one whole import |
+| `memory.ingest_webhook` | L1 | Store one provider webhook delivery (GitHub, Linear, Slack, Notion, Google Calendar, Gmail) as text with its provider, delivery id and URL. The hosted ingest hooks call it after checking the signature (`docs/api/ingest-sources.md` in the engine repository) |
 | `profile.set` | L1 | Update display name, role, preferences |
 | `lessons.set_active` | L1 | Switch a learned lesson on or off |
 | `state.disputes.list` | read | Open contradictions: two readings of one promise with different due dates |

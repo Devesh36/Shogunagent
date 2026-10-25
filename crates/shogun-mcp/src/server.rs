@@ -431,6 +431,9 @@ async fn handle_mcp(State(state): State<AppState>, req: Request) -> Response {
     if let Some(quantity) = reply.mcp_quantity {
         response = response.header(crate::mcp_http::HEADER_QUANTITY, quantity.to_string());
     }
+    if let Some(code) = reply.rpc_error {
+        response = response.header(crate::mcp_http::HEADER_ERROR_CODE, code.to_string());
+    }
     if let Some(allow) = reply.allow {
         response = response.header(axum::http::header::ALLOW, allow);
     }

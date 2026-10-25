@@ -157,7 +157,10 @@ whatever the gateway's table says, invariant 10), a declined L2 confirmation (`r
 write recorded as a pending intent, and a `tools/call` sent as a notification (no id: nothing
 runs, HTTP 202). Replies to other methods carry none. A call refused for its bearer is HTTP `401`
 with `WWW-Authenticate: Bearer` (the JSON-RPC `-32001` error stays the body), which the gateway
-answers as `503 core_rejected_gateway`.
+answers as `503 core_rejected_gateway`. A reply that is a JSON-RPC error also names its code in
+`Mcp-Error-Code` (E44), so the gateway tells a store that could not serve (`-32000`, worth a
+retry) from a refused argument (`-32602`, final) without reading the body; the `/mcp` relay passes
+the header on.
 
 **`actions.execute` on `/mcp`.** The call is free: it runs `local_search` (a read), refuses the
 desktop-only kinds, and only *queues* a send, post or comment for a human's approval (L3), and
@@ -196,6 +199,25 @@ A listed token wins over a derived one. Sharding (`deploy/README.md` §5.2): eac
 to its own pod's loopback sidecar; with `SHOGUN_SHARD=<index>/<count>` it refuses a principal whose
 `fnv1a64(principal_id) mod count` is another replica, so a misrouted request never creates a stray
 store. Routing a principal to its replica stays the ingress's job.
+
+## Ingest hooks (E44)
+
+Provider webhooks into memory (`docs/api/ingest-sources.md`, `apps/api/src/ingest-hooks/app.ts`).
+A verified delivery is a `memory.ingest_webhook` call on the principal's core through the same
+relay, metered as **ingest** (500 µ$ per stored event, the `memory.ingest` rate) against the
+principal's wallet and caps, with the hook id as the receipt's `key_id`:
+
+| what arrives | reserved | settled |
+|---|---|---|
+| a verified delivery | 20 events (`MAX_EVENTS_PER_DELIVERY`) | the core's `Mcp-Quantity`: the events newly stored |
+| a delivery the core answers as a change notice (Calendar, Gmail, Notion) or ignores | 20 | 0 |
+| a replay of a delivery id already stored | 20 | 0 (the core's idempotent replay) |
+| the core cannot store it now (`Mcp-Error-Code: -32000`, 5xx) | 20 | 0; the provider is answered 503 and retries |
+| a handshake: GitHub `ping`, Slack `url_verification`, Notion's `verification_token`, Calendar `sync`, a Gmail push no hook claims | nothing | — (free, no receipt) |
+| a bad signature, a stale Slack timestamp, an unknown hook | nothing | — (free; counts against a per-IP and per-hook budget of 30 failures in 10 minutes, then `429`) |
+
+Managing hooks (`POST/GET/DELETE /v1/ingest-hooks…`) is free. An empty wallet answers the provider
+`402`; the provider's own retry policy decides whether the delivery comes back after a top-up.
 
 ## Router runs (E32)
 

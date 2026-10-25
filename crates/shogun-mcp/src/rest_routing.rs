@@ -107,6 +107,15 @@ pub(super) fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
                 level: Level::L1,
             },
         ),
+        // E44: one provider webhook delivery through the ingest path (an L1 write).
+        ["v1", "memory", "ingest-webhook"] => method_is(
+            method,
+            Method::Post,
+            Routed::Write {
+                tool: Tool::MemoryIngestWebhook,
+                level: Level::L1,
+            },
+        ),
         // E15 / E18 governance reads. Deciding (`POST /v1/approvals/{id}/decide`), granting
         // (`POST /v1/acl/grant|revoke`) and teams are the server's operator routes, answered before
         // this table and never reachable with an agent's bearer.

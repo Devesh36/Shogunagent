@@ -211,6 +211,10 @@ import { DEFAULT_CLOCK_SKEW_SECS } from "./enterprise/oidc.js";
 import { DEFAULT_REGION, REGION_RE, parseRegionEndpoints, type RegionConfig } from "./enterprise/region.js";
 import { httpEnterpriseSidecar } from "./enterprise/sidecar-ops.js";
 import { SIDECAR_BINDING_ORIGIN, createMcpRelay, parseShard, parseSidecarPrincipalTokens, type FetchFn, type McpRelayConfig } from "./mcp-proxy.js";
+import { FAILURES_PER_WINDOW, FAILURE_WINDOW_MS } from "./ingest-hooks/app.js";
+import { sharedGoogleJwks } from "./ingest-hooks/pubsub-jwt.js";
+import { HookSecrets, MIN_HOOKS_SECRET_CHARS } from "./ingest-hooks/secrets.js";
+import { InMemoryHookStore, SqlHookStore, type HookStore } from "./ingest-hooks/store.js";
 import { SqlEnterpriseStore, type EnterpriseStore } from "./enterprise/store.js";
 import { DEFAULT_BATCH_PRICES, priceFor, priceTableWithOverride, spendCapMicrosFromEnv, usageMicros, usdCapMicrosFromEnv, type PriceTable, type SpendBreaker } from "./spend.js";
 import { SETTLE_WINDOW_DAYS, keepCutoff, utcDate, type UsageStore } from "./usage.js";
@@ -363,6 +367,33 @@ export interface AgentConfig {
   enterprise?: EnterpriseConfig;
   /** The hosted `/mcp` relay to the sidecar (E34, mcp-proxy.ts). Absent = `/mcp` answers 503. */
   mcpRelay?: McpRelayConfig;
+  /** Provider webhooks into memory (E44, ingest-hooks/app.ts): `INGEST_HOOKS_SECRET` turns them
+   * on; `INGEST_HOOKS_GMAIL_AUDIENCE` + `INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT` add Gmail's Pub/Sub
+   * pushes. Absent = the `/v1/ingest-hooks` routes do not exist. */
+  ingestHooks?: IngestHooksConfig;
+}
+
+/** The validated ingest-hook settings (E44). */
+export interface IngestHooksConfig {
+  secret: string;
+  gmail?: { audience: string; serviceAccount: string };
+}
+
+/** Parse the ingest-hook settings, or `undefined` when `INGEST_HOOKS_SECRET` is unset. Throws
+ * `BootError` naming the variable, never a value. */
+export function ingestHooksConfigFromEnv(env: EnvRecord): IngestHooksConfig | undefined {
+  const secret = env.INGEST_HOOKS_SECRET?.trim();
+  const audience = env.INGEST_HOOKS_GMAIL_AUDIENCE?.trim();
+  const serviceAccount = env.INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT?.trim();
+  if (!secret) {
+    if (audience || serviceAccount) throw new BootError("INGEST_HOOKS_GMAIL_AUDIENCE / INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT need INGEST_HOOKS_SECRET");
+    return undefined;
+  }
+  if (secret.length < MIN_HOOKS_SECRET_CHARS) throw new BootError(`invalid INGEST_HOOKS_SECRET (at least ${MIN_HOOKS_SECRET_CHARS} characters)`);
+  if ((audience ? 1 : 0) + (serviceAccount ? 1 : 0) === 1) throw new BootError("INGEST_HOOKS_GMAIL_AUDIENCE and INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT must be set together");
+  if (audience && !/^https:\/\/[^\s]{1,512}$/.test(audience)) throw new BootError("invalid INGEST_HOOKS_GMAIL_AUDIENCE (the push subscription's audience, an https URL)");
+  if (serviceAccount && !/^[^\s@]{1,64}@[a-z0-9.-]{1,255}$/.test(serviceAccount)) throw new BootError("invalid INGEST_HOOKS_GMAIL_SERVICE_ACCOUNT (the push service account's email)");
+  return { secret, ...(audience && serviceAccount ? { gmail: { audience, serviceAccount } } : {}) };
 }
 
 /** Parse the `/mcp` relay settings, or `undefined` when no bearer source is set. Throws
@@ -522,6 +553,7 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
   }
   const enterprise = enterpriseConfigFromEnv(env);
   const mcpRelay = mcpRelayConfigFromEnv(env);
+  const ingestHooks = ingestHooksConfigFromEnv(env);
   return {
     powSecret,
     powBits: intFromEnv(env, "AGENT_POW_BITS", DEFAULT_POW_BITS, 0, MAX_POW_BITS),
@@ -539,6 +571,7 @@ export function agentConfigFromEnv(env: EnvRecord): AgentConfig | undefined {
     ...(x402 ? { x402 } : {}),
     ...(enterprise ? { enterprise } : {}),
     ...(mcpRelay ? { mcpRelay } : {}),
+    ...(ingestHooks ? { ingestHooks } : {}),
   };
 }
 
@@ -570,7 +603,7 @@ export async function billingJobs(config: Pick<RelayConfig, "agent">, store: Pic
 /** Whether the agent API is served; one boot-log line, so a 404 on `/v1/agents` is not a mystery. */
 export function agentLaneLine(config: Pick<RelayConfig, "agent">): string {
   if (!config.agent) return "agent_api closed (AGENT_API_ENABLED unset)";
-  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"}; provider payouts ${config.agent.payouts ? "on" : "off: PAYOUTS_STATE_SECRET unset"}; x402 ${config.agent.x402 ? "on" : "off"}; mcp relay ${config.agent.mcpRelay ? `on${config.agent.mcpRelay.binding ? " (binding)" : ""}${config.agent.mcpRelay.shard ? ` (shard ${config.agent.mcpRelay.shard.index}/${config.agent.mcpRelay.shard.count})` : ""}` : "off: SHOGUN_SIDECAR_URL or its bearer source unset"}; enterprise ${config.agent.enterprise ? `on (region ${config.agent.enterprise.region.served}; sidecar ops ${config.agent.enterprise.sidecar ? "on" : "off"})` : "off"})`;
+  return `agent_api open (card top-ups ${config.agent.stripe ? "on" : "off: STRIPE_SECRET_KEY unset"}; oauth ${config.agent.oauthSecret ? "on" : "off: AGENT_OAUTH_SECRET unset"}; commit overage billing ${config.agent.stripe?.overagePriceId ? "on" : "off"}; provider payouts ${config.agent.payouts ? "on" : "off: PAYOUTS_STATE_SECRET unset"}; x402 ${config.agent.x402 ? "on" : "off"}; ingest hooks ${config.agent.ingestHooks ? `on (gmail ${config.agent.ingestHooks.gmail ? "on" : "off"})` : "off"}; mcp relay ${config.agent.mcpRelay ? `on${config.agent.mcpRelay.binding ? " (binding)" : ""}${config.agent.mcpRelay.shard ? ` (shard ${config.agent.mcpRelay.shard.index}/${config.agent.mcpRelay.shard.count})` : ""}` : "off: SHOGUN_SIDECAR_URL or its bearer source unset"}; enterprise ${config.agent.enterprise ? `on (region ${config.agent.enterprise.region.served}; sidecar ops ${config.agent.enterprise.sidecar ? "on" : "off"})` : "off"})`;
 }
 
 /** The Batch price table in force: the override, or the shipped defaults. */
@@ -732,6 +765,10 @@ export interface RelayStore {
   /** E48: the sealed connector credentials (`connector_tokens`). Read only when the runtime also
    * supplies a KMS key wrapper (`RelayShared.connectorKeyWrapper`). */
   connectorRows?: ConnectorRowStore;
+  /** E44: the ingest hook registrations and the shared failed-delivery budget. Absent = an
+   * in-process store (development). */
+  ingestHooks?: HookStore;
+  ingestHookFailures?: RateLimiter;
   close(): Promise<void>;
 }
 
@@ -742,7 +779,7 @@ export interface RelayStore {
  * one fixed warning line. `checkSchema` is the caller's: Node runs it before listening, the
  * Worker on each sweep (a missing table is otherwise a 503 per request, fail-closed).
  */
-export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker" | "agent">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore; agent: SqlAgentStore; oauth: SqlOAuthStore; payouts: SqlPayoutStore; x402: SqlX402Store; enterprise: SqlEnterpriseStore } {
+export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurst" | "ratePerMin" | "spendBreaker" | "agent">, warn: LogFn = operational.warn): RelayStore & { usage: SqlUsageStore; agent: SqlAgentStore; oauth: SqlOAuthStore; payouts: SqlPayoutStore; x402: SqlX402Store; enterprise: SqlEnterpriseStore; ingestHooks: SqlHookStore } {
   return {
     payouts: new SqlPayoutStore(db),
     x402: new SqlX402Store(db),
@@ -757,6 +794,8 @@ export function postgresStore(db: SqlClient, config: Pick<RelayConfig, "rateBurs
     webhooks: new SqlWebhookStore(db),
     enterprise: new SqlEnterpriseStore(db),
     connectorRows: new SqlConnectorRows(db),
+    ingestHooks: new SqlHookStore(db),
+    ingestHookFailures: new SqlWindowLimiter(db, FAILURES_PER_WINDOW, FAILURE_WINDOW_MS, () => warn("ratelimit_unavailable (failing open)")),
     close: () => db.close(),
   };
 }
@@ -909,6 +948,15 @@ export function createRelay(config: RelayConfig, store: RelayStore, shared: Rela
         // E30: x402 acceptance, only with X402_ENABLED=1 (off by default; docs/decisions/0002-x402.md).
         ...(config.agent.x402 && store.x402 ? {
           x402: { config: config.agent.x402, facilitator: httpFacilitator(config.agent.x402.facilitatorUrl), store: store.x402 },
+        } : {}),
+        // E44: provider webhooks into memory, relayed to the core through the same sidecar relay.
+        ...(config.agent.ingestHooks ? {
+          ingestHooks: {
+            store: store.ingestHooks ?? new InMemoryHookStore(),
+            secrets: new HookSecrets(config.agent.ingestHooks.secret),
+            ...(config.agent.ingestHooks.gmail ? { gmail: { ...config.agent.ingestHooks.gmail, jwks: sharedGoogleJwks() } } : {}),
+            ...(store.ingestHookFailures ? { failureLimiter: store.ingestHookFailures } : {}),
+          },
         } : {}),
         // Remote approvals (E15): the page, Slack and webhooks reach the sidecar through one client.
         ...(config.agent.approvals ? {

@@ -499,6 +499,15 @@ fn parse_command(positionals: &[String]) -> Result<Command, CliError> {
             shogun_mcp::ingest_api::ingest_request(&body).map_err(CliError::BadInput)?;
             Ok(Command::Ingest { body: body.to_string() })
         }
+        // E44: one provider webhook delivery as `memory.ingest_webhook` takes it (a saved delivery
+        // replayed), validated by the shared parser.
+        "ingest-webhook" => {
+            let raw = join(rest).ok_or(CliError::MissingArgument("<json>"))?;
+            let body: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|_| CliError::BadInput("ingest-webhook takes one JSON object".into()))?;
+            shogun_mcp::webhook_ingest::webhook_request(&body).map_err(CliError::BadInput)?;
+            Ok(Command::IngestWebhook { body: body.to_string() })
+        }
         // E15: approvals. Deciding is the operator's (the CLI sends SHOGUN_ADMIN_TOKEN for it).
         "approvals" => {
             use crate::command::ApprovalsCommand;
@@ -2431,6 +2440,19 @@ mod tests {
         assert!(parse(&v(&["handoff", "accept", r#"{"handoff":{},"actor":"agent:w"}"#])).is_err());
         assert!(parse(&v(&["handoff", "send", "{}"])).is_err());
         assert!(parse(&v(&["handoff"])).is_err());
+    }
+
+    /// E44: `shogun ingest-webhook <json>` is `memory.ingest_webhook` on its REST route, validated
+    /// by the shared parser before anything is sent.
+    #[test]
+    fn ingest_webhook_posts_the_shared_body() {
+        let body = r#"{"provider":"gmail","delivery_id":"m-1","idempotency_key":"hook:gmail:m-1","changed":{"history_id":"7"}}"#;
+        let inv = parse(&v(&["ingest-webhook", body])).unwrap();
+        assert_eq!(inv.command.tool(), Some(shogun_mcp::memory_api::Tool::MemoryIngestWebhook));
+        let call = crate::wire::to_call(&inv.command, false).unwrap();
+        assert_eq!((call.method, call.path.as_str()), ("POST", "/v1/memory/ingest-webhook"));
+        assert!(parse(&v(&["ingest-webhook", r#"{"provider":"jira"}"#])).is_err());
+        assert!(parse(&v(&["ingest-webhook"])).is_err());
     }
 
     /// E6-T2: `shogun fs <json>` is `memory.fs`, validated by the shared parser before it is sent.

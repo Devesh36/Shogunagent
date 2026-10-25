@@ -79,6 +79,9 @@ export const FORWARDED_REQUEST_HEADERS: readonly string[] = Object.freeze([
 export const RELAYED_REPLY_HEADERS: readonly string[] = Object.freeze([
   "content-type", "cache-control", "mcp-method", "mcp-name", "mcp-quantity", "mcp-protocol-version", "allow",
   "retry-after", "x-shogun-approval-token",
+  // E44: the JSON-RPC error code of an error reply, so the ingest hooks tell a store fault (retry)
+  // from a refused payload (final) without reading the body.
+  "mcp-error-code",
 ]);
 
 const PRINCIPAL_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;

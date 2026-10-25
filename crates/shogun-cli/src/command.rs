@@ -83,6 +83,10 @@ pub enum Command {
     /// `shogun ingest <json>` → `memory.ingest` (E4-T3): `body` is the request JSON (events or
     /// turns, source, actor, thread_key, idempotency_key), validated at parse.
     Ingest { body: String },
+    /// `shogun ingest-webhook <json>` → `memory.ingest_webhook` (E44): one provider webhook
+    /// delivery (`provider`, `delivery_id`, `idempotency_key`, `payload_b64` or `changed`),
+    /// validated at parse with the server's parser.
+    IngestWebhook { body: String },
     /// `shogun recall <query> [--budget-tokens N] [--include-scratch]` → `memory.recall`
     /// (E4-T3): `body` is the request JSON, validated at parse.
     Recall { body: String },
@@ -729,6 +733,7 @@ impl Command {
             Command::Session { .. } => Tool::MemoryReadSession,
             Command::Pack { .. } => Tool::MemoryGetContextPack,
             Command::Ingest { .. } => Tool::MemoryIngest,
+            Command::IngestWebhook { .. } => Tool::MemoryIngestWebhook,
             Command::Recall { .. } => Tool::MemoryRecall,
             Command::Fs { .. } => Tool::MemoryFs,
             Command::HandoffCreate { .. } => Tool::HandoffCreate,
@@ -959,6 +964,7 @@ COMMANDS:
     recall <query> [--budget-tokens N] [--include-scratch]
                               What memory holds on a question, within a token budget
     ingest <json>             Append events[] or turns[] under an idempotency_key (L1)
+    ingest-webhook <json>     Store one provider webhook delivery as events with provenance (L1)
     handoff create <json>     The state of work for a task as an A2A handoff (task, to_agent, ...)
     handoff accept <json>     Accept a handoff into your own scratch (handoff, actor; L1)
     approvals [list]          Queued L2/L3 approvals, redacted (kind, tier, recipient class)
