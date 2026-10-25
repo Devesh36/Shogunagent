@@ -75,8 +75,19 @@ impl Db {
     /// [`Self::capture`] with the failure kept (issue #121) — for callers that must tell a
     /// rejected write from a successful one.
     pub fn try_capture(&self, ev: &NewEvent<'_>) -> MemoryResult<(i64, bool)> {
+        self.try_capture_as(ev, &shogun_memory::actor::current_write())
+    }
+
+    /// [`Self::try_capture`] as `ctx` (E2-T4): the event records `ctx.actor` and lands in
+    /// `ctx.namespace`. The un-suffixed capture writes as the call's current context (the owner
+    /// unless a face set one for this call).
+    pub fn try_capture_as(
+        &self,
+        ev: &NewEvent<'_>,
+        ctx: &shogun_memory::actor::WriteContext,
+    ) -> MemoryResult<(i64, bool)> {
         self.with_conn("capture", |conn| {
-            let written = event_log::insert_or_touch(conn, ev)?;
+            let written = event_log::insert_or_touch_as(conn, ev, ctx)?;
             self.reconcile_hot_locked(conn, written.0);
             Ok::<_, rusqlite::Error>(written)
         })
@@ -453,6 +464,17 @@ impl Db {
     /// dedup-only or empty batch publishes nothing (nothing changed). Returns a zeroed summary on
     /// a lock failure (never panics).
     pub fn ingest_integration(&self, items: &[shogun_mcp::sync::IngestItem]) -> IngestSummary {
+        self.ingest_integration_as(items, None)
+    }
+
+    /// [`Self::ingest_integration`] with the writer named (E2-T4). `None` attributes each event
+    /// to its connector (`connector:<source>`, in the world); `Some(ctx)` writes every item as
+    /// `ctx` — the `memory.ingest` face, whose caller is an agent.
+    pub fn ingest_integration_as(
+        &self,
+        items: &[shogun_mcp::sync::IngestItem],
+        ctx: Option<&shogun_memory::actor::WriteContext>,
+    ) -> IngestSummary {
         let now = self.now_ms();
         let mut summary = IngestSummary::default();
         // Per-source newly-inserted counts for the bus. A batch normally carries one service, so a
@@ -507,7 +529,10 @@ impl Db {
                 // A service that knows its conversation id (Gmail thread id) keys the thread on
                 // it (FR-MEM-40 `gmail=threadId`), not on the subject.
                 let native = (!it.external_id.trim().is_empty()).then_some(it.external_id.as_str());
-                let Ok((id, touched)) = event_log::insert_or_touch_with_thread(&guard, &ev, native) else {
+                let item_ctx = ctx.cloned().unwrap_or_else(|| {
+                    shogun_memory::actor::WriteContext::world(shogun_memory::actor::Actor::connector(it.source))
+                });
+                let Ok((id, touched)) = event_log::insert_or_touch_with_thread_as(&guard, &ev, native, &item_ctx) else {
                     rejected += 1;
                     continue;
                 };
@@ -608,6 +633,11 @@ impl Db {
     /// Append a user note to the event log (`memory.append_note`, L1). Source `user`, kind `note`;
     /// content-hashed for dedup like any event. Returns the row id (or `None` on write failure).
     pub fn append_note(&self, text: &str) -> Option<i64> {
+        self.append_note_as(text, &shogun_memory::actor::current_write())
+    }
+
+    /// [`Self::append_note`] as `ctx` (E2-T4).
+    pub fn append_note_as(&self, text: &str, ctx: &shogun_memory::actor::WriteContext) -> Option<i64> {
         let hash = Self::content_hash(text);
         let ev = NewEvent {
             ts: self.now_ms(),
@@ -621,6 +651,6 @@ impl Db {
             display_id: None,
             window_bounds: None,
         };
-        self.capture(&ev).map(|(id, _)| id)
+        self.try_capture_as(&ev, ctx).ok().map(|(id, _)| id)
     }
 }
