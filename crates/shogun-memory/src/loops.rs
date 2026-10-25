@@ -104,14 +104,41 @@ fn eligible_signals() -> String {
 /// The signals no consolidator call has read yet.
 const UNREAD: &str = "NOT EXISTS (SELECT 1 FROM loop_signal_reads r WHERE r.signal_id = s.id)";
 
-/// Mark signals read.
+/// Mark signals read. `ids` are what [`ConsolidationInput::read`] carries: signal ids, and the
+/// outcomes the call was shown (`loop_updates`, V104) as their negated ids.
 fn mark_read(conn: &Connection, ids: &[i64], now: i64) -> Result<(), rusqlite::Error> {
     let mut stmt = conn.prepare_cached("INSERT OR IGNORE INTO loop_signal_reads (signal_id, read_at) VALUES (?1, ?2)")?;
+    let mut outcome = conn.prepare_cached("UPDATE loop_updates SET read_at = ?2 WHERE id = ?1 AND read_at IS NULL")?;
     for id in ids {
-        stmt.execute(params![id, now])?;
+        if *id < 0 {
+            outcome.execute(params![-id, now])?;
+        } else {
+            stmt.execute(params![id, now])?;
+        }
     }
     Ok(())
 }
+
+/// Outcomes read off later messages (`loop_updates`, E49) that no consolidator call has read, on
+/// open rows the consolidator lists (>= 0.5), from events the Batch lane may see. `u` is the update.
+fn unread_outcomes() -> String {
+    let excluded = crate::event_log::BATCH_EXCLUDED_SOURCES
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "loop_updates u JOIN event_log e ON e.id = u.event_id AND e.source NOT IN ({excluded})
+          WHERE u.read_at IS NULL AND (
+            (u.state_table = 'commitments' AND EXISTS (SELECT 1 FROM commitments c WHERE c.id = u.state_id
+               AND c.status IN ('open', 'overdue') AND c.aged_at IS NULL AND c.merged_into IS NULL AND c.confidence >= 0.5))
+            OR (u.state_table = 'open_loops' AND EXISTS (SELECT 1 FROM open_loops l WHERE l.id = u.state_id
+               AND l.status = 'open' AND l.aged_at IS NULL AND l.merged_into IS NULL AND l.confidence >= 0.5)))"
+    )
+}
+
+/// Outcomes one call carries.
+const MAX_OUTCOMES: usize = 20;
 
 /// The consolidator's last send: the traceability row written before every call, so a failed call
 /// counts too. Looks back two days.
@@ -123,8 +150,9 @@ fn last_run(conn: &Connection, now: i64) -> Result<Option<i64>, rusqlite::Error>
     )
 }
 
-/// Run now? Only when there are signals it has not read, the last call is an hour old, and fewer
-/// than [`RUNS_PER_DAY`] calls went out since `day_start` (local midnight).
+/// Run now? Only when there are signals (or outcomes of listed items, E49) it has not read, the
+/// last call is an hour old, and fewer than [`RUNS_PER_DAY`] calls went out since `day_start`
+/// (local midnight).
 pub fn consolidation_due(conn: &Connection, now: i64, day_start: i64) -> Result<bool, rusqlite::Error> {
     let last = last_run(conn, now)?;
     if last.is_some_and(|t| now - t < MIN_GAP_MS) {
@@ -138,11 +166,14 @@ pub fn consolidation_due(conn: &Connection, now: i64, day_start: i64) -> Result<
     if runs >= RUNS_PER_DAY {
         return Ok(false);
     }
-    conn.query_row(
+    let signals: bool = conn.query_row(
         &format!("SELECT EXISTS(SELECT 1 FROM {} WHERE {UNREAD})", eligible_signals()),
         [],
         |r| r.get(0),
-    )
+    )?;
+    // A later message said a listed item was done, called off or moved (E49): only the
+    // consolidator may change a row it owns, so that is news for it too.
+    Ok(signals || conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {})", unread_outcomes()), [], |r| r.get(0))?)
 }
 
 /// What one consolidator call is shown: `text` (raw — the caller redacts and fences it), the
@@ -241,13 +272,45 @@ pub fn consolidation_input(conn: &Connection, now: i64) -> Result<Option<Consoli
         signal_lines.push(format!("{kind} | E{event_id} | {text} | \"{quote}\""));
         read.push(*id);
     }
-    if signal_lines.is_empty() {
+    // Outcomes of listed items read off later messages (E49), newest first, with their source.
+    #[allow(clippy::type_complexity)]
+    let outcomes: Vec<(i64, String, i64, String, i64, String, Option<i64>)> = conn
+        .prepare(&format!(
+            "SELECT u.id, u.state_table, u.state_id, u.kind, u.event_id, u.quote, u.due_at FROM {}
+              ORDER BY u.id DESC LIMIT ?1",
+            unread_outcomes()
+        ))?
+        .query_map([MAX_OUTCOMES as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    let mut outcome_lines = Vec::new();
+    for (id, table, state_id, kind, event_id, quote, due) in &outcomes {
+        if !sources.iter().any(|(e, _)| e == event_id) {
+            if sources.len() == MAX_SOURCES {
+                continue; // a later call
+            }
+            match source_excerpt(conn, *event_id, quote)? {
+                Some(excerpt) => sources.push((*event_id, excerpt)),
+                None => {
+                    read.push(-id);
+                    continue;
+                }
+            }
+        }
+        let letter = if table == "commitments" { 'C' } else { 'L' };
+        let due = due.map_or_else(|| "-".to_string(), |d| format!("due {}", stamp(d)));
+        outcome_lines.push(format!("{letter}{state_id} | {kind} | E{event_id} | \"{quote}\" | {due}"));
+        read.push(-id);
+    }
+    if signal_lines.is_empty() && outcome_lines.is_empty() {
         // Every unread signal lost its source: mark them read without a call.
         mark_read(conn, &read, now)?;
         return Ok(None);
     }
     // Shown oldest to newest, as the hours happened.
     signal_lines.reverse();
+    outcome_lines.reverse();
     let mut events: Vec<i64> = sources.iter().map(|(id, _)| *id).collect();
 
     // Open items, same-day first then most recently seen (the display order).
@@ -314,7 +377,9 @@ pub fn consolidation_input(conn: &Connection, now: i64) -> Result<Option<Consoli
         "Recently closed (id | status | text):".into(),
         or_none(closed).join("\n"),
         "New signals (kind | event | text | quote):".into(),
-        signal_lines.join("\n"),
+        or_none(signal_lines).join("\n"),
+        "Outcomes noticed in later messages (id | outcome | event | quote | new due):".into(),
+        or_none(outcome_lines).join("\n"),
         "Sources:".into(),
         sources.into_iter().map(|(_, s)| s).collect::<Vec<_>>().join("\n\n"),
     ]
@@ -441,6 +506,40 @@ fn same_source(conn: &Connection, table: StateTable, event_id: i64, quote: &str)
     .optional()
 }
 
+/// A row of `table` that is closed (not aged, not merged) and already cites this span of
+/// `event_id`.
+fn closed_source(conn: &Connection, table: StateTable, event_id: i64, quote: &str) -> Result<bool, rusqlite::Error> {
+    conn.query_row(
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM {t} s JOIN state_provenance p ON p.state_table = ?1 AND p.state_id = s.id
+              WHERE p.event_id = ?2 AND p.quote IS NOT NULL AND (instr(p.quote, ?3) > 0 OR instr(?3, p.quote) > 0)
+                AND s.status NOT IN {open} AND s.aged_at IS NULL AND s.merged_into IS NULL)",
+            t = table.as_str(),
+            open = open_statuses(table)
+        ),
+        params![table.as_str(), event_id, quote],
+        |r| r.get(0),
+    )
+}
+
+/// A re-listed commitment whose cited words are newer than anything the row was seen in and name a
+/// due date ("Update: the memo moves to Thursday", or the promise said again "by Monday") takes
+/// that date (E49). The user's own date stands.
+fn redate_on_relist(conn: &Connection, id: i64, quote: &str, said_at: i64, now: i64) -> Result<(), rusqlite::Error> {
+    let lower = quote.to_lowercase();
+    let Some(due) = crate::loop_updates::redated_due(&lower, said_at).or_else(|| crate::due::due_at(quote, said_at)) else {
+        return Ok(());
+    };
+    conn.execute(
+        "UPDATE commitments SET due_at = ?2, updated_at = MAX(updated_at, ?4),
+                status = CASE WHEN status = 'overdue' AND ?2 > ?4 THEN 'open' ELSE status END
+          WHERE id = ?1 AND last_evidence_at < ?3 AND user_pinned = 0 AND user_edited_at IS NULL
+            AND (due_at IS NULL OR due_at != ?2)",
+        params![id, due, said_at, now],
+    )?;
+    Ok(())
+}
+
 /// The open-loop kind for a new loop: `followup` says it; otherwise the kind of the signal its
 /// quote came from.
 fn loop_kind(conn: &Connection, kind: &str, event_id: i64) -> Result<&'static str, rusqlite::Error> {
@@ -504,10 +603,18 @@ fn open_item(conn: &mut Connection, item: &Value, events: &[i64], now: i64, ctx:
             },
         },
     };
+    // The cited words are already the evidence of a row that is closed (done, called off, resolved):
+    // re-listing them would reopen it on its old words (E49). New evidence opens it again.
+    if existing.is_none() && (closed_source(conn, kind_table, event_id, &quote)? || closed_source(conn, other, event_id, &quote)?) {
+        return Ok(None);
+    }
     let t = table.as_str();
     let tx = conn.savepoint()?;
     let id = match existing {
         Some(id) => {
+            if table == StateTable::Commitments {
+                redate_on_relist(&tx, id, &quote, said_at, now)?;
+            }
             tx.execute(
                 &format!(
                     "UPDATE {t} SET horizon = ?2, last_evidence_at = MAX(last_evidence_at, ?6), updated_at = ?3,
@@ -1010,5 +1117,89 @@ mod tests {
         let mut conn = conn;
         ran(&mut conn, NOW);
         assert!(consolidation_input(&conn, NOW + 1).unwrap().is_none(), "nothing new after a run");
+    }
+
+    fn threaded(conn: &Connection, hash: &str, ts: i64, thread: &str, content: &str) -> i64 {
+        let id = event(conn, hash, ts, content);
+        conn.execute("UPDATE event_log SET thread_key = ?2 WHERE id = ?1", params![id, thread]).unwrap();
+        id
+    }
+
+    fn commitment_item(event_id: i64, quote: &str) -> Value {
+        json!({"id": null, "kind": "commitment", "horizon": "short", "source_event_id": event_id,
+               "source_quote": quote, "confidence": 0.9, "text": "Send Toru the launch deck"})
+    }
+
+    const PROMISE: &str = "I'll send Toru the launch deck by Friday.";
+
+    /// E49: an outcome a later message reports for a row the consolidator owns is shown to it once,
+    /// with its source, and only its quoted resolution closes the row.
+    #[test]
+    fn outcomes_of_listed_items_reach_the_consolidator_once() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let day_start = NOW - 10 * HOUR;
+        let ev = threaded(&conn, "h1", NOW - 3 * HOUR, "t1", PROMISE);
+        apply(&mut conn, &json!({"open": [commitment_item(ev, PROMISE)]}), &[ev], &[], NOW - 3 * HOUR).unwrap();
+        let id: i64 = conn.query_row("SELECT id FROM commitments", [], |r| r.get(0)).unwrap();
+        let done = threaded(&conn, "h2", NOW - HOUR, "t1", "Sent the launch deck to Toru.");
+        let found = crate::loop_updates::reconcile(&mut conn, NOW - HOUR / 2).unwrap();
+        assert_eq!((found.recorded, found.closed), (1, 0), "a reviewed row is the consolidator's: {found:?}");
+        assert_eq!(count(&conn, "SELECT count(*) FROM commitments WHERE status = 'open'"), 1);
+
+        assert!(consolidation_due(&conn, NOW, day_start).unwrap(), "an outcome of a listed item is news");
+        let input = consolidation_input(&conn, NOW).unwrap().unwrap();
+        assert!(input.text.contains("Outcomes noticed in later messages"), "{}", input.text);
+        assert!(input.text.contains(&format!("C{id} | resolved | E{done} | \"Sent the launch deck to Toru\"")), "{}", input.text);
+        assert!(input.text.contains(&format!("[E{done}]")), "its source is shown: {}", input.text);
+        assert!(input.events.contains(&done));
+        assert!(input.read.iter().any(|r| *r < 0), "the outcome is read by this call: {:?}", input.read);
+
+        trace(&conn, NOW);
+        let answer = json!({"resolved": [{"id": format!("C{id}"), "event_id": done, "quote": "Sent the launch deck to Toru"}]});
+        assert_eq!(apply(&mut conn, &answer, &input.events, &input.read, NOW).unwrap().resolved, 1);
+        assert_eq!(count(&conn, "SELECT count(*) FROM commitments WHERE status = 'done'"), 1);
+        assert_eq!(count(&conn, "SELECT count(*) FROM loop_updates WHERE read_at IS NULL"), 0);
+        assert!(!consolidation_due(&conn, NOW + 2 * HOUR, day_start).unwrap(), "read once");
+        assert!(consolidation_input(&conn, NOW + 2 * HOUR).unwrap().is_none());
+    }
+
+    /// E49: a re-list citing newer words with a date moves a commitment's due date; older words do
+    /// not move it back; and a closed row is not reopened on the words it already cites.
+    #[test]
+    fn a_newer_relist_redates_and_a_closed_row_is_not_reopened_on_old_words() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let ev = event(&conn, "h1", NOW, PROMISE);
+        apply(&mut conn, &json!({"open": [commitment_item(ev, PROMISE)]}), &[ev], &[], NOW).unwrap();
+        let (id, first): (i64, i64) = conn.query_row("SELECT id, due_at FROM commitments", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        let moved = "Update: the launch deck for Toru moves to Monday.";
+        let later = event(&conn, "h2", NOW + DAY_MS, moved);
+        let mut relist = commitment_item(later, moved);
+        relist["id"] = json!(format!("C{id}"));
+        assert_eq!(apply(&mut conn, &json!({"open": [relist]}), &[later], &[], NOW + DAY_MS).unwrap().relisted, 1);
+        let due = |conn: &Connection| conn.query_row("SELECT due_at FROM commitments WHERE id = ?1", [id], |r| r.get::<_, i64>(0)).unwrap();
+        let monday = due(&conn);
+        assert!(monday > first, "moved later");
+        // The first words again (older than the move) do not move it back.
+        let mut again = commitment_item(ev, PROMISE);
+        again["id"] = json!(format!("C{id}"));
+        apply(&mut conn, &json!({"open": [again]}), &[ev], &[], NOW + 2 * DAY_MS).unwrap();
+        assert_eq!(due(&conn), monday);
+        // A user's own date stands.
+        conn.execute("UPDATE commitments SET user_edited_at = ?2 WHERE id = ?1", params![id, NOW]).unwrap();
+        let other = "Heads up, the launch deck for Toru slips to Thursday.";
+        let latest = event(&conn, "h4", NOW + 3 * DAY_MS, other);
+        let mut relist = commitment_item(latest, other);
+        relist["id"] = json!(format!("C{id}"));
+        apply(&mut conn, &json!({"open": [relist]}), &[latest], &[], NOW + 3 * DAY_MS).unwrap();
+        assert_eq!(due(&conn), monday);
+        conn.execute("UPDATE commitments SET user_edited_at = NULL WHERE id = ?1", [id]).unwrap();
+
+        let done = event(&conn, "h3", NOW + 4 * DAY_MS, "Sent the launch deck to Toru.");
+        let answer = json!({"resolved": [{"id": format!("C{id}"), "event_id": done, "quote": "Sent the launch deck to Toru"}]});
+        assert_eq!(apply(&mut conn, &answer, &[done], &[], NOW + 4 * DAY_MS).unwrap().resolved, 1);
+        // The promise's own words, re-reported as new, are not a new promise.
+        let applied = apply(&mut conn, &json!({"open": [commitment_item(ev, PROMISE)]}), &[ev], &[], NOW + 5 * DAY_MS).unwrap();
+        assert_eq!((applied.opened, applied.dropped), (0, 1));
+        assert_eq!(count(&conn, "SELECT count(*) FROM commitments"), 1);
     }
 }

@@ -602,6 +602,9 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // Review signals (V83): captured quotes; they also cascade with the event log.
     tx.execute("DELETE FROM loop_signal_reads", [])?;
     tx.execute("DELETE FROM loop_signals", [])?;
+    // Outcome updates (V104): captured quotes too; the scan watermark goes with the event log.
+    tx.execute("DELETE FROM loop_updates", [])?;
+    tx.execute("DELETE FROM loop_update_scan", [])?;
     // Learned self names (V86): display names captured from chat windows, and their markers.
     tx.execute("DELETE FROM self_name_evidence", [])?;
     tx.execute("DELETE FROM memory_markers", [])?;

@@ -26,6 +26,9 @@ pub struct NewlyOverdue {
 /// Both apply to user-pinned rows too (issue #290): they are the passage of time measured against
 /// the row's own dates — including a due date the user set — not a competing reading of it.
 ///
+/// First, the outcomes later messages report for open rows of their thread are read and the local
+/// candidates among those rows closed or re-dated ([`crate::loop_updates::reconcile`], E49).
+///
 /// Returns `(commitments_flagged_overdue, open_loops_whose_staleness_changed)`. Idempotent:
 /// re-running with the same `now` flags nothing new and writes nothing.
 pub fn recompute_overdue_and_staleness(
@@ -44,6 +47,10 @@ pub fn recompute_overdue_and_staleness_detailed(
     conn: &mut Connection,
     now_ms: i64,
 ) -> Result<(Vec<NewlyOverdue>, usize), rusqlite::Error> {
+    // Later messages in a thread close or move its local candidates first (E49), so a commitment
+    // moved to next week is not flagged overdue on its old date. Best effort: the pass rolls back
+    // on its own and is retried next run; it never holds up the overdue flip.
+    let _ = crate::loop_updates::reconcile(conn, now_ms);
     let tx = conn.savepoint()?;
     let newly: Vec<NewlyOverdue> = {
         let mut stmt = tx.prepare(
