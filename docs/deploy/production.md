@@ -339,6 +339,11 @@ Core (Batch relay):
 | `SETTLE_RECHECK_SECONDS` | var | no | default 900 |
 | `SPEND_PRICE_TABLE_JSON` | var | no | price rows merged over the shipped table |
 | `METRICS_TOKEN` | secret | no | bearer for `GET /metrics`; unset = 404 |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | var | no | opt-in OTLP span export (E37); https, or http to a loopback collector; unset = off |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | var | no | overrides the traces URL derived from the endpoint |
+| `OTEL_EXPORTER_OTLP_HEADERS` | secret | no | `k=v,k2=v2` sent to the collector only |
+| `OTEL_SERVICE_NAME` | var | no | default `shogunagent-gateway` |
+| `OTEL_TRACES_SAMPLER_ARG` | var | no | span sample ratio 0–1, default 1 |
 | `RELAY_DENY_SUBJECTS` | var (dashboard) | no | emergency deny list; kept across deploys by `keep_vars` |
 | `HYPERDRIVE` | binding | yes | the relay's Postgres; caching disabled |
 
@@ -430,6 +435,12 @@ Node entry only (`src/index.ts`: development, BYOC compose / Helm gateway contai
 | `ROUTER_WALLET_URL` | var | yes in production | the relay's origin; unset = in-memory development wallet |
 | `ROUTER_TOPUP_URL` | var | no | development wallet only; leave unset in production |
 | `HYPERDRIVE` | binding | with `ROUTER_WALLET_URL` | the outbox's Postgres; caching disabled |
+| `ROUTER_METRICS_TOKEN` | secret | no | bearer for `GET /metrics` (E37, Prometheus text); unset = 404 |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | var | no | opt-in OTLP span export (E37); https, or http to a loopback collector; unset = off |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | var | no | overrides the traces URL derived from the endpoint |
+| `OTEL_EXPORTER_OTLP_HEADERS` | secret | no | `k=v,k2=v2` sent to the collector only |
+| `OTEL_SERVICE_NAME` | var | no | default `shogunagent-router` |
+| `OTEL_TRACES_SAMPLER_ARG` | var | no | span sample ratio 0–1, default 1 |
 
 First-party connector credentials (named by `credential_env` in `apps/router/connectors/*/provider.ts`;
 **never Worker secrets in production**, see §3 step 8):
