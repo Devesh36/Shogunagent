@@ -22,6 +22,8 @@ describe("catalog compile (E8-T2)", () => {
       "gmail.messages.search",
       "gmail.messages.send",
       "linear.issues.create",
+      "notion.pages.text",
+      "notion.search",
       "shogunagent.actions.execute",
       "shogunagent.memory.recall",
       "shogunagent.state.commitments.list",

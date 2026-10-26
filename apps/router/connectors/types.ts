@@ -151,7 +151,7 @@ export interface EndpointDefinition {
  * The connector-token slots each principal's token store keeps (on its sidecar, E50; the
  * `<source>-tokenset` names of `shogun_integrations::token_store::CredentialSlot`).
  */
-export type ConnectorSlot = "gmail-tokenset" | "gcal-tokenset" | "github-tokenset" | "linear-tokenset" | "slack-tokenset";
+export type ConnectorSlot = "gmail-tokenset" | "gcal-tokenset" | "github-tokenset" | "linear-tokenset" | "slack-tokenset" | "notion-tokenset";
 
 /**
  * How the transport authenticates to the provider. Names an environment variable, never a

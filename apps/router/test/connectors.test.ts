@@ -26,6 +26,8 @@ const EXPECTED_LEVELS: Record<string, { cls: string; level: string }> = {
   "github.issues.list": { cls: "read", level: "L1" },
   "linear.issues.create": { cls: "external_send", level: "L3" },
   "slack.messages.post": { cls: "external_send", level: "L3" },
+  "notion.search": { cls: "read", level: "L1" },
+  "notion.pages.text": { cls: "read", level: "L1" },
 };
 
 const SAMPLE_INPUT: Record<string, Record<string, unknown>> = {
@@ -183,5 +185,48 @@ describe("first-party connectors (E22)", () => {
     const bad = await run(deps, { input: { tool_id: "gmail.messages.get", input: { message_id: "../drafts" }, idempotency_key: "gm3" }, bearer: bearer() });
     expect(bad.status).toBe(400);
     expect(seen).toHaveLength(2);
+  });
+
+  it("E51: Notion reads run at L1 with the caller's own token, the pinned API version, and never fetch a file", async () => {
+    const seen: { url: string; method: string; auth: string | null; version: string | null; body: string }[] = [];
+    const deps = makeDeps();
+    deps.transport = createFetchTransport({
+      env: { NOTION_TOKEN: "NOTION-TOKEN-SENTINEL" },
+      connectors: { mode: "dev_shared" },
+      fetch: async (url, init) => {
+        const h = new Headers(init?.headers);
+        seen.push({ url: String(url), method: init?.method ?? "GET", auth: h.get("authorization"), version: h.get("notion-version"), body: typeof init?.body === "string" ? init.body : "" });
+        const body = String(url).includes("/blocks/")
+          ? { results: [{ type: "paragraph", paragraph: { rich_text: [{ plain_text: "Ship it." }] } }, { type: "file", file: { type: "file", file: { url: "https://files.example/x.pdf" } } }], has_more: false, next_cursor: null }
+          : { results: [{ object: "page", id: "1a2b3c4d-0000-1111-2222-333344445555", url: "https://www.notion.so/x", last_edited_time: "2026-10-24T08:00:00.000Z", properties: { title: { type: "title", title: [{ plain_text: "Q3 plan" }] } } }], has_more: false, next_cursor: null };
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    const found = await run(deps, { input: { tool_id: "notion.search", input: { query: "Q3 plan" }, idempotency_key: "n1" }, bearer: bearer() });
+    expect(found.status).toBe(200);
+    expect(found.body.resultType).toBe("result");
+    expect(seen[0]).toMatchObject({ url: "https://api.notion.com/v1/search", method: "POST", auth: "Bearer NOTION-TOKEN-SENTINEL", version: "2022-06-28" });
+    expect(JSON.parse(seen[0]?.body ?? "{}")).toMatchObject({ query: "Q3 plan", filter: { property: "object", value: "page" }, page_size: 20 });
+    const read = await run(deps, { input: { tool_id: "notion.pages.text", input: { page_id: "1a2b3c4d-0000-1111-2222-333344445555" }, idempotency_key: "n2" }, bearer: bearer() });
+    expect(read.status).toBe(200);
+    expect(seen[1]).toMatchObject({ url: "https://api.notion.com/v1/blocks/1a2b3c4d-0000-1111-2222-333344445555/children?page_size=100", method: "GET", version: "2022-06-28" });
+    expect(JSON.stringify(read.body)).toContain('"text":"Ship it."');
+    expect(JSON.stringify(read.body)).toContain('"skipped_blocks":1');
+    expect(seen).toHaveLength(2);
+    expect(JSON.stringify(found.body) + JSON.stringify(read.body)).not.toContain("SENTINEL");
+    // An id that is not Notion's shape never reaches the vendor.
+    const bad = await run(deps, { input: { tool_id: "notion.pages.text", input: { page_id: "../../users" }, idempotency_key: "n3" }, bearer: bearer() });
+    expect(bad.status).toBe(400);
+    expect(seen).toHaveLength(2);
+  });
+
+  it("E51: discover ranks the Notion reads on their own tasks, first-party, by the same published score", () => {
+    const catalog = fullCatalog();
+    const top = (task: string) => discover(catalog, noopHealthStore, { task, limit: 3 }).result.candidates.map((c) => c.tool_id);
+    expect(top("find the notion page about the q3 plan")[0]).toBe("notion.search");
+    expect(top("read the text of this notion page")[0]).toBe("notion.pages.text");
+    const best = discover(catalog, noopHealthStore, { task: "search my notion workspace pages", limit: 1 }).result.candidates[0];
+    expect(best?.first_party).toBe(true);
+    expect(best?.scoreBreakdown.price).toBeLessThan(1);
   });
 });
