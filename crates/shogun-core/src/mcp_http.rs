@@ -22,7 +22,7 @@ use shogun_integrations::endpoints;
 /// and bounds the sync poller's worst case: a stalled server cannot hang a blocking call
 /// indefinitely. A timeout error's text contains "timed out".
 pub const HTTP_TIMEOUT_MS: u64 = 10_000;
-use shogun_integrations::oauth::TokenExchange;
+use shogun_integrations::oauth::{ExchangeAuth, ExchangeBody, ExchangeMethod, ExchangeRequest, TokenExchange};
 use shogun_integrations::rpc::{McpRpc, TokenProvider};
 use shogun_mcp::scope::Service;
 
@@ -502,18 +502,53 @@ impl TokenExchange for HttpTokenExchange {
             .form(form)
             .send()
             .map_err(|e| format!("token exchange failed: {}", redact(&e.to_string())))?;
-        let status = resp.status();
-        use std::io::Read;
-        let mut body = Vec::new();
-        resp.take(65_537).read_to_end(&mut body).map_err(|_| "token response read failed")?;
-        if body.len() > 65_536 { return Err("token response exceeded size limit".into()); }
-        let body = String::from_utf8(body).map_err(|_| "token response was not UTF-8")?;
-        if !status.is_success() {
-            // Status only — the body can echo the code/verifier, so it is not surfaced.
-            return Err(format!("token endpoint http {status}"));
-        }
-        Ok(body)
+        read_token_response(resp)
     }
+
+    /// Notion's token endpoint (Basic client auth, JSON body), Linear's revocation (bearer) and
+    /// GitHub's grant deletion (`DELETE`, Basic) — E51. Same client, limits and error words as
+    /// [`Self::post_form`]; credentials go only into the `Authorization` header.
+    fn send(&self, request: &ExchangeRequest<'_>) -> Result<String, String> {
+        let mut builder = match request.method {
+            ExchangeMethod::Post => self.client.post(request.endpoint),
+            ExchangeMethod::Delete => self.client.delete(request.endpoint),
+        }
+        .header(reqwest::header::ACCEPT, "application/json");
+        for (name, value) in request.headers {
+            builder = builder.header(*name, *value);
+        }
+        builder = match &request.auth {
+            ExchangeAuth::None => builder,
+            ExchangeAuth::Basic { user, password } => builder.basic_auth(user, Some(password)),
+            ExchangeAuth::Bearer(token) => builder.bearer_auth(token),
+        };
+        builder = match &request.body {
+            ExchangeBody::Form(form) => builder.form(form),
+            ExchangeBody::Json(value) => builder.json(value),
+            ExchangeBody::Empty => builder,
+        };
+        let resp = builder
+            .send()
+            .map_err(|e| format!("token exchange failed: {}", redact(&e.to_string())))?;
+        read_token_response(resp)
+    }
+}
+
+/// A token endpoint's answer: the body (≤ 64 KiB, UTF-8) of a 2xx, else the status only.
+fn read_token_response(resp: reqwest::blocking::Response) -> Result<String, String> {
+    use std::io::Read;
+    let status = resp.status();
+    let mut body = Vec::new();
+    resp.take(65_537).read_to_end(&mut body).map_err(|_| "token response read failed")?;
+    if body.len() > 65_536 {
+        return Err("token response exceeded size limit".into());
+    }
+    let body = String::from_utf8(body).map_err(|_| "token response was not UTF-8")?;
+    if !status.is_success() {
+        // Status only — the body can echo the code/verifier, so it is not surfaced.
+        return Err(format!("token endpoint http {status}"));
+    }
+    Ok(body)
 }
 
 /// Strip anything after a `?` from an error string before returning it for logging (defense in
@@ -758,5 +793,80 @@ mod tests {
             "{:?}",
             TokenError::Refresh("token endpoint http 400 Bad Request".into())
         )));
+    }
+
+    /// E51: `send` puts the client credentials into Basic auth (Notion's token endpoint, GitHub's
+    /// grant deletion) or the token into a bearer (Linear's revocation), the body as JSON, the
+    /// method as asked, and answers a 204 with an empty body and a refusal with its status only.
+    #[test]
+    fn send_speaks_basic_auth_json_and_delete_and_keeps_bodies_out_of_errors() {
+        use std::io::{BufRead, Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        let server = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for (status, reply) in [("200 OK", r#"{"access_token":"ok"}"#), ("204 No Content", ""), ("401 Unauthorized", r#"{"error":"secret-echo"}"#)] {
+                let (mut socket, _) = listener.accept().expect("accept");
+                let mut reader = std::io::BufReader::new(socket.try_clone().expect("clone"));
+                let mut head = String::new();
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).expect("line") > 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length: ") {
+                        length = value.trim().parse::<usize>().expect("length");
+                    }
+                    head.push_str(&line);
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).expect("body");
+                seen.push((head, String::from_utf8(body).expect("utf8")));
+                write!(socket, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).expect("write");
+            }
+            seen
+        });
+        let exchange = HttpTokenExchange::new().expect("client");
+        let token_body = json!({ "grant_type": "authorization_code", "code": "c-1" });
+        let answer = exchange
+            .send(&ExchangeRequest {
+                method: ExchangeMethod::Post,
+                endpoint: &format!("{base}/v1/oauth/token"),
+                auth: ExchangeAuth::Basic { user: "client-id", password: "client-secret" },
+                body: ExchangeBody::Json(&token_body),
+                headers: &[],
+            })
+            .expect("200");
+        assert_eq!(answer, r#"{"access_token":"ok"}"#);
+        let grant = json!({ "access_token": "ghu_x" });
+        let deleted = exchange
+            .send(&ExchangeRequest {
+                method: ExchangeMethod::Delete,
+                endpoint: &format!("{base}/applications/client-id/grant"),
+                auth: ExchangeAuth::Basic { user: "client-id", password: "client-secret" },
+                body: ExchangeBody::Json(&grant),
+                headers: &[("x-github-api-version", "2022-11-28")],
+            })
+            .expect("204");
+        assert_eq!(deleted, "");
+        let refused = exchange
+            .send(&ExchangeRequest { method: ExchangeMethod::Post, endpoint: &format!("{base}/oauth/revoke"), auth: ExchangeAuth::Bearer("lin_access"), body: ExchangeBody::Empty, headers: &[] })
+            .expect_err("401");
+        assert_eq!(refused, "token endpoint http 401 Unauthorized", "the status only, never the body");
+        let seen = server.join().expect("server");
+        use base64::Engine as _;
+        let basic = format!("authorization: basic {}", base64::engine::general_purpose::STANDARD.encode("client-id:client-secret"));
+        assert!(seen[0].0.starts_with("POST /v1/oauth/token "));
+        assert!(seen[0].0.to_ascii_lowercase().contains(&basic.to_ascii_lowercase()));
+        assert!(seen[0].0.to_ascii_lowercase().contains("content-type: application/json"));
+        assert_eq!(serde_json::from_str::<Value>(&seen[0].1).expect("json"), token_body);
+        assert!(seen[1].0.starts_with("DELETE /applications/client-id/grant "));
+        assert!(seen[1].0.to_ascii_lowercase().contains("x-github-api-version: 2022-11-28"));
+        assert_eq!(serde_json::from_str::<Value>(&seen[1].1).expect("json"), grant);
+        assert!(seen[2].0.to_ascii_lowercase().contains("authorization: bearer lin_access"));
+        assert!(seen[2].1.is_empty());
     }
 }

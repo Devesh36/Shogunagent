@@ -1506,33 +1506,47 @@ impl<B: MemoryBackend> McpServer<B> {
                         } else {
                             String::new()
                         };
-                        match self.backend.write(tool, &body) {
-                            // The note is a user note (memory.notes.list / notes.change see it).
-                            Ok(Some(note_id)) if tool == Tool::MemoryAppendNote => {
-                                format!(r#"{{"accepted":true,"note_id":{note_id}}}"#)
+                        // A hosted disconnect answers what it did (E51): the vault's receipt with
+                        // `vendor_revoke`, as REST and the CLI answer it.
+                        let receipt = if tool == Tool::ConnectionsDisconnect {
+                            self.backend.connections_disconnect(&body)
+                        } else {
+                            None
+                        };
+                        if let Some(receipt) = receipt {
+                            match receipt {
+                                Ok(receipt) => crate::connections_api::disconnect_answer(json!({ "accepted": true }), &receipt),
+                                Err(e) => return error(id, -32000, &e),
                             }
-                            Ok(Some(row_id)) => {
-                                format!(r#"{{"accepted":true,"id":{row_id}{pending}}}"#)
+                        } else {
+                            match self.backend.write(tool, &body) {
+                                // The note is a user note (memory.notes.list / notes.change see it).
+                                Ok(Some(note_id)) if tool == Tool::MemoryAppendNote => {
+                                    format!(r#"{{"accepted":true,"note_id":{note_id}}}"#)
+                                }
+                                Ok(Some(row_id)) => {
+                                    format!(r#"{{"accepted":true,"id":{row_id}{pending}}}"#)
+                                }
+                                Ok(None) if tool == Tool::CaptureExclusionsSet => self
+                                    .backend
+                                    .read_structured(Tool::CaptureExclusionsGet, &ReadParams::default())
+                                    .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string()),
+                                Ok(None) => format!(r#"{{"accepted":true{pending}}}"#),
+                                // Granting a standing approval is the user's alone (issue #779): the
+                                // caller cannot fix that by retrying, so it is an invalid request.
+                                Err(e) if e.starts_with("Standing approval required") => {
+                                    return error(id, -32602, &e)
+                                }
+                                // Withholding names a connected app; there is no way to allow (2026-10-20).
+                                Err(e) if tool == Tool::ApiConnectionsRestrict => {
+                                    return error(id, -32602, &e)
+                                }
+                                // A note the notes store refuses (a secret in it, control chars).
+                                Err(e) if tool == Tool::MemoryAppendNote && e == "invalid_text" => {
+                                    return error(id, -32602, "invalid_text: the note was refused (it looks like it holds a secret, or has control characters).")
+                                }
+                                Err(e) => return error(id, -32000, &e),
                             }
-                            Ok(None) if tool == Tool::CaptureExclusionsSet => self
-                                .backend
-                                .read_structured(Tool::CaptureExclusionsGet, &ReadParams::default())
-                                .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string()),
-                            Ok(None) => format!(r#"{{"accepted":true{pending}}}"#),
-                            // Granting a standing approval is the user's alone (issue #779): the
-                            // caller cannot fix that by retrying, so it is an invalid request.
-                            Err(e) if e.starts_with("Standing approval required") => {
-                                return error(id, -32602, &e)
-                            }
-                            // Withholding names a connected app; there is no way to allow (2026-10-20).
-                            Err(e) if tool == Tool::ApiConnectionsRestrict => {
-                                return error(id, -32602, &e)
-                            }
-                            // A note the notes store refuses (a secret in it, control chars).
-                            Err(e) if tool == Tool::MemoryAppendNote && e == "invalid_text" => {
-                                return error(id, -32602, "invalid_text: the note was refused (it looks like it holds a secret, or has control characters).")
-                            }
-                            Err(e) => return error(id, -32000, &e),
                         }
                     } else {
                         match operation
@@ -2512,7 +2526,7 @@ pub fn tool_descriptor(tool: Tool) -> Value {
             json!({ "client": { "type": "string", "description": "the connection id from api.tokens.list connections[].client" } }),
         ),
         Tool::ConnectionsDisconnect => (
-            "Disconnect one service (L1: it only removes access). ShogunAI deletes the stored sign-in and stops syncing, exactly like Disconnect in the app; memory already saved stays. The app applies it within seconds, or when it next starts (connections.list shows disconnect_pending until then); on the hosted service the grant is deleted at once and revoked at Google and Slack. Request it only when the user asked. Reconnecting needs the user in the app",
+            "Disconnect one service (L1: it only removes access). ShogunAI deletes the stored sign-in and stops syncing, exactly like Disconnect in the app; memory already saved stays. The app applies it within seconds, or when it next starts (connections.list shows disconnect_pending until then); on the hosted service the grant is deleted at once and revoked at the vendor where it can (Google, Slack, Linear, GitHub), and the answer's vendor_revoke says revoked, failed, not_supported or nothing_stored. Request it only when the user asked. Reconnecting needs the user in the app",
             json!({ "service": { "enum": crate::connections_api::listed_services().map(|s| s.source_str()).collect::<Vec<_>>() } }),
         ),
         Tool::ConnectionsGmailSet => (

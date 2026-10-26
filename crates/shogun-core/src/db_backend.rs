@@ -664,9 +664,11 @@ impl DbBackend {
         })
     }
 
-    /// `connections.disconnect` on a hosted sidecar: the vault deletes the grant (revoking it at the
-    /// vendor where it can; `connections.list` then shows it disconnected).
-    fn hosted_disconnect(&self, body: &str) -> Option<WriteResult> {
+    /// `connections.disconnect` on a hosted sidecar: the vault deletes the grant and revokes it at
+    /// the vendor where it can (`connections.list` then shows it disconnected). The receipt is the
+    /// sidecar route's and the gateway's (`connector_vault::disconnected_json`): every face returns
+    /// `vendor_revoke` (E51).
+    fn hosted_disconnect(&self, body: &str) -> Option<Result<serde_json::Value, String>> {
         let (vault, principal) = self.hosted_connectors.as_ref()?;
         let service = match shogun_mcp::connections_api::parse_disconnect(body) {
             Ok(service) => service,
@@ -675,7 +677,7 @@ impl DbBackend {
         Some(
             vault
                 .disconnect(principal, service, self.db.now_ms())
-                .map(|_| None)
+                .map(|done| shogun_mcp::connector_vault::disconnected_json(&done))
                 .map_err(|_| "connections_unavailable: the credential store did not answer; retry shortly".to_string()),
         )
     }
@@ -3215,6 +3217,15 @@ impl MemoryBackend for DbBackend {
         }))
     }
 
+    /// E51: on a hosted sidecar the disconnect's receipt (with `vendor_revoke`) for every face; on
+    /// the Mac `None`, and the faces queue it for the desktop through [`Self::write`].
+    fn connections_disconnect(&self, body: &str) -> Option<Result<serde_json::Value, String>> {
+        if self.connections.is_some() {
+            return None;
+        }
+        self.hosted_disconnect(body)
+    }
+
     fn write(&self, tool: Tool, body: &str) -> WriteResult {
         // Where a tool can widen something (grant a subscription, turn sharing or Visual recall on,
         // shorten a pause, drop an exclusion), the faces queue the request for the user's in-app
@@ -3234,7 +3245,7 @@ impl MemoryBackend for DbBackend {
             Tool::ConnectionsDisconnect => {
                 if self.connections.is_none() {
                     if let Some(answer) = self.hosted_disconnect(body) {
-                        return answer;
+                        return answer.map(|_| None);
                     }
                 }
                 shogun_mcp::connections_api::disconnect(self.connections_paths()?, body)?;

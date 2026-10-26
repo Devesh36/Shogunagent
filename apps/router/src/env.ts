@@ -23,9 +23,9 @@
  *   OTEL_TRACES_SAMPLER_ARG    span sample ratio 0–1 (default 1)
  *   ROUTER_DEV_SHARED_CREDENTIALS
  *                              E48, development only. `1` = the first-party `caller_connector` tools
- *                              (Gmail, Calendar, GitHub, Linear, Slack) read one shared token from
- *                              the env variable each names (GOOGLE_OAUTH_ACCESS_TOKEN, GITHUB_TOKEN,
- *                              LINEAR_OAUTH_TOKEN, SLACK_TOKEN). Ignored (and logged as
+ *                              (Gmail, Calendar, GitHub, Linear, Slack, Notion) read one shared token
+ *                              from the env variable each names (GOOGLE_OAUTH_ACCESS_TOKEN, GITHUB_TOKEN,
+ *                              LINEAR_OAUTH_TOKEN, SLACK_TOKEN, NOTION_TOKEN). Ignored (and logged as
  *                              `dev_shared_credentials_ignored`) whenever ROUTER_WALLET_URL is set:
  *                              production always fetches the calling principal's own token from
  *                              apps/api (docs/api/connector-tokens.md). Unset = those tools answer

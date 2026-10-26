@@ -118,7 +118,8 @@ pub struct Disconnected {
     /// Whether a grant was stored (and is now deleted).
     pub removed: bool,
     /// `revoked`, `failed` (the grant is deleted here anyway), `not_supported` (the vendor has no
-    /// revocation API the core can call) or `nothing_stored`.
+    /// revocation API the core can call, or the core lacks the credential it needs: GitHub's app
+    /// secret) or `nothing_stored`. Every face's `connections.disconnect` returns it (E51).
     pub vendor_revoke: &'static str,
 }
 

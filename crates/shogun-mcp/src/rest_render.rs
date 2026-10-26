@@ -761,6 +761,25 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
                     } else {
                         ""
                     };
+                    // A hosted disconnect answers what it did (E51), as MCP does: the standard
+                    // write fields plus the vault's receipt with `vendor_revoke`.
+                    if tool == Tool::ConnectionsDisconnect {
+                        if let Some(receipt) = backend.connections_disconnect(body) {
+                            return match receipt {
+                                Ok(receipt) => (
+                                    202,
+                                    crate::connections_api::disconnect_answer(
+                                        serde_json::json!({ "tool": tool_name(tool), "level": level_label(level), "accepted": true }),
+                                        &receipt,
+                                    ),
+                                ),
+                                Err(reason) => match write_error_status(&reason) {
+                                    500 => (500, r#"{"error":"write_failed"}"#.to_string()),
+                                    status => (status, format!(r#"{{"error":"write_failed","reason":"{}"}}"#, escape(&reason))),
+                                },
+                            };
+                        }
+                    }
                     return match backend.write(tool, body) {
                         // A user note: memory.notes.list / notes.change see it by this id.
                         Ok(Some(id)) if tool == Tool::MemoryAppendNote => (

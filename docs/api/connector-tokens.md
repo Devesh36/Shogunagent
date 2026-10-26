@@ -1,6 +1,6 @@
-# Connector tokens for the router (E48 contract, E50 credentials)
+# Connector tokens for the router (E48 contract, E50 credentials, E51 Notion and revocation)
 
-The router's first-party connectors (Gmail, Google Calendar, GitHub, Linear, Slack) act as the
+The router's first-party connectors (Gmail, Google Calendar, GitHub, Linear, Slack, Notion) act as the
 **calling principal's own account** at the vendor. In production the router never holds a vendor
 token in its Worker environment: for each run it asks apps/api for the token of the principal behind
 the caller's agent key, uses it for that one vendor request, and drops it.
@@ -13,7 +13,7 @@ connects an account in the first place. All of it is built:
 | The router's client (`caller_connector` auth) | `apps/router/src/transport.ts` | `apps/router/test/hardening.test.ts` |
 | apps/api's route for the router | `apps/api/src/connector-tokens.ts` | `apps/api/test/connector-tokens.test.ts` (drives the router's real client in-process) |
 | The sidecar vault apps/api calls (open, refresh, write back) | `crates/shogun-mcp/src/connector_vault.rs` (routes), `crates/shogun-integrations/src/hosted_connect.rs` (vault), composed in `shogun-api --multi` | `hosted_connect` unit tests, `crates/shogun-core/tests/connector_vault.rs` (the real server) |
-| The hosted connect flow (OAuth redirect; GitHub's device flow) | `apps/api/src/connector-connect.ts` + the sidecar's connect routes; `crates/shogun-integrations/src/device_flow.rs` | `apps/api/test/connector-connect.test.ts`, `hosted_connect` and `device_flow` unit tests |
+| The hosted connect flow (OAuth redirect, Notion's Basic-auth exchange; GitHub's device flow) | `apps/api/src/connector-connect.ts` + the sidecar's connect routes; `crates/shogun-integrations/src/device_flow.rs`; the core's `HttpTokenExchange::send` (`crates/shogun-core/src/mcp_http.rs`) | `apps/api/test/connector-connect.test.ts`, `hosted_connect` and `device_flow` unit tests |
 | Status and disconnect on every face | the sidecar's `status` / `disconnect` routes; `connections.list` / `connections.disconnect` (MCP, REST, CLI) served from the vault (`crates/shogun-core/src/db_backend.rs`); the gateway's `GET /v1/connectors`, `POST /v1/connectors/{provider}/disconnect` | `crates/shogun-core/tests/connector_vault.rs` (REST and MCP faces), `apps/api/test/connector-connect.test.ts` |
 | Audit rows (connect, refresh, revoke, disconnect, read-sync fetch) | `hosted_connect::AuditSink`, written by `shogun_core::tenancy::connector_sync::record_audit` into the principal's traceability log | `hosted_connect` unit tests, `crates/shogun-core/tests/connector_vault.rs` |
 
@@ -46,13 +46,13 @@ Accept: application/json
 
   | Field | Type | Meaning |
   |---|---|---|
-  | `slot` | string, one of `gmail-tokenset`, `gcal-tokenset`, `github-tokenset`, `linear-tokenset`, `slack-tokenset` | the slot of the principal's token store to open (`shogun_integrations::token_store::CredentialSlot::Connector`) |
-  | `provider_id` | string | the router provider id (`gmail`, `calendar`, `github`, `linear`, `slack`); for audit and for checking that the slot belongs to the provider |
+  | `slot` | string, one of `gmail-tokenset`, `gcal-tokenset`, `github-tokenset`, `linear-tokenset`, `slack-tokenset`, `notion-tokenset` | the slot of the principal's token store to open (`shogun_integrations::token_store::CredentialSlot::Connector`) |
+  | `provider_id` | string | the router provider id (`gmail`, `calendar`, `github`, `linear`, `slack`, `notion`); for audit and for checking that the slot belongs to the provider |
   | `run_id` | string, optional | the router's run id, for correlating with the run's settlement; not a secret |
 
   `provider_id` → `slot` is fixed: `gmail` → `gmail-tokenset`, `calendar` → `gcal-tokenset`,
-  `github` → `github-tokenset`, `linear` → `linear-tokenset`, `slack` → `slack-tokenset`. A pair
-  outside this table is `400`.
+  `github` → `github-tokenset`, `linear` → `linear-tokenset`, `slack` → `slack-tokenset`,
+  `notion` → `notion-tokenset`. A pair outside this table is `400`.
 
 ## What apps/api does
 
@@ -119,7 +119,7 @@ X-Shogun-Principal-Authorization: Bearer <the principal's sidecar bearer>
   `404 connector_not_connected`; one that does not get through while the stored token is still valid
   serves the stored token, and once it has expired `503 connector_unavailable`. A refresh response
   without a refresh token keeps the stored one. A vendor with no hosted OAuth client configured
-  (GitHub always, below) serves a stored token while valid and `503 connect_not_configured` after.
+  (any vendor whose `SHOGUN_CONNECT_*` client is unset) serves a stored token while valid and `503 connect_not_configured` after.
   The grant is never deleted by a failed refresh: an operator's misconfigured client must not
   disconnect everyone.
 - **Connect**: `start` generates a PKCE pair and keeps the verifier **sealed in the principal's own
@@ -134,6 +134,17 @@ X-Shogun-Principal-Authorization: Bearer <the principal's sidecar bearer>
   neither the code nor the token goes back to the gateway. `400 connect_rejected` when the vendor
   refused the code or the scopes; `503 connect_not_configured` when the provider has no client on
   this sidecar.
+- **Notion (E51)**: `start` for `notion` answers Notion's authorize URL
+  (`api.notion.com/v1/oauth/authorize`, `owner=user`, the hosted callback, the gateway's state; no
+  scopes and no PKCE, which Notion does not take). `finish` exchanges the code at
+  `api.notion.com/v1/oauth/token` with the integration's client id and secret as **HTTP Basic
+  auth** and a JSON body (`grant_type`, `code`, `redirect_uri`), through the same single egress
+  (`TokenExchange::send`, the core's `HttpTokenExchange`). The answer must carry an
+  `access_token`, `token_type: bearer` and a `bot_id`; the workspace's name is kept as the account
+  label (never returned). A Notion token without `expires_in` does not expire; one with
+  `expires_in` and a `refresh_token` is refreshed the same way (Basic auth, `grant_type:
+  refresh_token`). The tokenset lands in `notion-tokenset`, which the router's `notion.*` tools
+  and the read-sync both read.
 - **GitHub (device flow)**: `start` for `github` asks GitHub for a device code
   (`github.com/login/device/code`, the core's egress), seals the device code in the same slot and
   answers `200 { authorize_url: "https://github.com/login/device", expires_at, device: { user_code,
@@ -147,14 +158,24 @@ X-Shogun-Principal-Authorization: Bearer <the principal's sidecar bearer>
   for every service on the Connections list: `connected` (a valid token, or an expired one the
   sidecar can refresh), `needs_reauth`, `disconnected`, or `coming_soon` (a service the hosted
   deployment does not serve). A free read; no vendor call; never a token or an account identity.
-- **Disconnect**: deletes the grant and any pending flow for that provider, and revokes the grant at
-  the vendor where the core can with the token alone: Google (`oauth2.googleapis.com/revoke`,
-  RFC 7009) and Slack (`auth.revoke`). Linear's and GitHub's revocation need the app's secret or are
-  not verified here, so they are deleted only (`vendor_revoke: "not_supported"`; the human can also
-  remove the app at the vendor). A revocation that fails still deletes (`"failed"`). Answers
-  `200 { disconnected: true, provider, slot, removed, vendor_revoke }`; idempotent
+- **Disconnect**: deletes the grant and any pending flow for that provider first, then revokes the
+  grant at the vendor through the core's egress where the credentials the core holds allow it
+  (E51; `shogun_integrations::hosted_connect::Revocation`). Fail-soft: the local deletion never
+  waits on the vendor, and a revocation that fails still leaves the grant deleted.
+
+  | Vendor | Request | What it needs | `vendor_revoke` |
+  |---|---|---|---|
+  | Google | `POST oauth2.googleapis.com/revoke`, form `token=<refresh token>` (RFC 7009) | the stored grant | `revoked` / `failed` |
+  | Slack | `POST slack.com/api/auth.revoke`, form `token=<access token>`; only `ok: true` counts | the stored grant | `revoked` / `failed` |
+  | Linear | `POST api.linear.app/oauth/revoke`, `Authorization: Bearer <access token>` | a valid access token: an expired one is refreshed first with the hosted Linear client (the fresh tokenset is not stored) | `revoked` / `failed` |
+  | GitHub | `DELETE api.github.com/applications/{client_id}/grant`, Basic `client_id:client_secret`, `{"access_token": …}`, `X-GitHub-Api-Version: 2022-11-28`; removes the grant and every token of it | the GitHub App's client secret (`SHOGUN_CONNECT_GITHUB_CLIENT_SECRET`) and a valid access token (refreshed first when expired) | `revoked` / `failed`; `not_supported` without the secret (no vendor call) |
+  | Notion | none: Notion documents no revocation endpoint the core can call for a public integration | — | `not_supported`; the human removes the connection in Notion (*Settings → Connections*) |
+
+  Answers `200 { disconnected: true, provider, slot, removed, vendor_revoke }`; idempotent
   (`removed: false`, `"nothing_stored"`). `provider` is a router provider id or a Connections
-  service id (`calendar` or `gcal`).
+  service id (`calendar` or `gcal`). Each revocation writes a `connector.revoke.<provider>.<ok|failed>`
+  audit row with the vendor host (`api.github.com` for GitHub), and any refresh it needed a
+  `connector.refresh.…` row.
 - **Audit**: every connect (and device start), refresh, revocation, disconnect and read-sync fetch
   writes one traceability row in the principal's own store: route `mcp`, purpose
   `connector.<action>.<provider>.<outcome>` (`connector.refresh.gmail.ok`,
@@ -175,7 +196,7 @@ POST /v1/connectors/{provider}/connect          Authorization: Bearer <agent key
         "expires_at": "<ISO, 15 minutes>", "next_action": "ask_human", "message": "…" }
 ```
 
-`provider` is `gmail`, `calendar`, `slack`, `linear` or `github` (`404 unknown_connector`
+`provider` is `gmail`, `calendar`, `slack`, `linear`, `github` or `notion` (`404 unknown_connector`
 otherwise). The request starts nothing.
 
 1. The human opens `connect_url` (`GET`): a page saying which account will be connected for which
@@ -204,7 +225,8 @@ the sidecar, into the principal's store. Every page is `no-store`, `no-referrer`
 | `calendar` | `https://www.googleapis.com/auth/calendar.events` (list and insert) | the same Google flow |
 | `slack` | `chat:write` (user token) | Slack `oauth.v2_user` + PKCE (`AuthConfig::slack` / `slack_public`) |
 | `linear` | `read`, `issues:create` (user actor) | Linear PKCE (`AuthConfig::linear`) |
-| `github` | the GitHub App's permissions (no scopes) | GitHub's device flow (`shogun_integrations::device_flow`, the same steps as the Mac app's `shogun_core::github_device`), polled once per human Check; refreshed with `SHOGUN_CONNECT_GITHUB_CLIENT_ID` (secret optional) |
+| `github` | the GitHub App's permissions (no scopes) | GitHub's device flow (`shogun_integrations::device_flow`, the same steps as the Mac app's `shogun_core::github_device`), polled once per human Check; refreshed with `SHOGUN_CONNECT_GITHUB_CLIENT_ID` (secret optional; needed to revoke at disconnect) |
+| `notion` | the integration's capabilities (no scopes; read content only), on the pages the human shares at Notion's consent page | Notion's authorization code (no PKCE), exchanged with Basic `client_id:client_secret` and a JSON body (`SHOGUN_CONNECT_NOTION_CLIENT_{ID,SECRET}`, both required), E51 |
 
 The sidecar's OAuth clients and the callback URL are `SHOGUN_CONNECT_*` (`deploy/README.md` §3.3):
 the callback must be `<gateway public base URL>/v1/connectors/callback`, registered with each vendor.
@@ -229,6 +251,20 @@ On a hosted sidecar the core faces answer from the vault (`hosted: true`, each s
 Mac they keep answering from the desktop's Connections files. The gateway routes call the sidecar's
 `status` / `disconnect` and copy the known fields only.
 
+A hosted disconnect answers the same receipt on every face (E51, invariant 4): the face's standard
+write fields plus the vault's `disconnected`, `provider`, `slot`, `removed` and `vendor_revoke`
+(`MemoryBackend::connections_disconnect`, merged by `connections_api::disconnect_answer`; a receipt
+key never overwrites a standard field):
+
+```
+MCP   connections.disconnect {"service":"gcal"}  → {"accepted":true,"disconnected":true,"provider":"calendar","slot":"gcal-tokenset","removed":true,"vendor_revoke":"revoked"}
+REST  POST /v1/connections/disconnect            → 202 {"tool":"connections.disconnect","level":"L1","accepted":true, …the same five fields}
+CLI   shogun connections disconnect gcal         → prints the REST body
+```
+
+On the Mac the disconnect is queued for the desktop, which alone deletes the Keychain credential,
+so the answer stays `{accepted: true}` and `connections.list` shows `disconnect_pending`.
+
 ## Guarantees the router keeps
 
 - The access token exists only inside `src/transport.ts`, between the token response and the vendor
@@ -238,7 +274,7 @@ Mac they keep answering from the desktop's Connections files. The gateway routes
 - The caller's key goes to apps/api in `X-Caller-Authorization` and never to the vendor, and apps/api
   never forwards it to the sidecar.
 - With `ROUTER_WALLET_URL` set, the Worker env variables the connectors name
-  (`GOOGLE_OAUTH_ACCESS_TOKEN`, `GITHUB_TOKEN`, `LINEAR_OAUTH_TOKEN`, `SLACK_TOKEN`) are never read,
+  (`GOOGLE_OAUTH_ACCESS_TOKEN`, `GITHUB_TOKEN`, `LINEAR_OAUTH_TOKEN`, `SLACK_TOKEN`, `NOTION_TOKEN`) are never read,
   even if set, and `ROUTER_DEV_SHARED_CREDENTIALS` is ignored (logged
   `dev_shared_credentials_ignored` at isolate start).
 
@@ -270,15 +306,16 @@ until it is done:
 
 - **OAuth clients.** A Google "Web application" client (verification of the restricted
   `gmail.modify` scope, with its security assessment, before external users), a Slack app with user
-  scopes and the hosted redirect, a Linear OAuth app, a GitHub App with the device flow enabled;
-  their ids and secrets in the sidecar's `SHOGUN_CONNECT_*`, the callback registered with each
-  redirect vendor.
+  scopes and the hosted redirect, a Linear OAuth app, a GitHub App with the device flow enabled
+  (and its client secret, to revoke grants at disconnect), a Notion public integration with
+  read-content capability and the hosted redirect; their ids and secrets in the sidecar's
+  `SHOGUN_CONNECT_*`, the callback registered with each redirect vendor.
 - **The Worker → sidecar path** (E34) live in each region, with `SHOGUN_SIDECAR_ADMIN_TOKEN` and
   `CONNECTOR_CONNECT_SECRET` on the gateway, and the sidecar's egress open to the vendors' token
-  endpoints (`oauth2.googleapis.com`, `slack.com`, `api.linear.app`, `github.com`; and, for the
-  read-sync, `gmail.googleapis.com`, `www.googleapis.com`, `api.notion.com`; `deploy/README.md`
-  §5.4).
-- **Notion**: the core has no hosted Notion sign-in (its Notion sign-in is the Mac app's loopback
-  registration with Notion's MCP server, whose tokens do not open the REST API; a Notion public
-  integration's token exchange uses HTTP Basic auth the core's exchange does not speak). There is
-  no Notion router connector and no Notion connect link until that exchange is added to the core.
+  and revocation endpoints (`oauth2.googleapis.com`, `slack.com`, `api.linear.app`, `github.com`,
+  `api.github.com`, `api.notion.com`; and, for the read-sync, `gmail.googleapis.com`,
+  `www.googleapis.com`; `deploy/README.md` §5.4).
+- **Staging checks against the real vendors** that the fakes cannot prove: Notion's token response
+  shape for a public integration (`bot_id`, and whether it now carries `expires_in` /
+  `refresh_token`), Linear's bearer revocation and GitHub's grant deletion answering 2xx, and that
+  each revoked grant then fails at the vendor.

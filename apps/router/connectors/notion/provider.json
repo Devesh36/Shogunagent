@@ -1,0 +1,18 @@
+{
+  "format": "shogunagent-provider/1",
+  "provider_id": "notion",
+  "legal_name": "Select, Inc.",
+  "contact": { "url": "https://shogunai.si" },
+  "payout_account_ref": "first-party:select",
+  "pricing": [
+    { "endpoint": "search", "model": "per_call", "cost_micro_usd": 2000 },
+    { "endpoint": "pages.text", "model": "per_call", "cost_micro_usd": 2000 }
+  ],
+  "data_handling": {
+    "retention": "user_account",
+    "retention_days": 0,
+    "zero_retention": false,
+    "regions": ["global"],
+    "statement": "The router relays each call to Notion's REST API and keeps no request or response body. Searches and page reads return the user's own Notion pages, only those shared with ShogunAgent at sign-in, to the calling agent only; images, files and embeds are never fetched. Nothing is written to Notion."
+  }
+}

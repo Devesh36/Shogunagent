@@ -10,12 +10,13 @@ import { calendarProvider } from "./calendar/provider.js";
 import { githubProvider } from "./github/provider.js";
 import { gmailProvider } from "./gmail/provider.js";
 import { linearProvider } from "./linear/provider.js";
+import { notionProvider } from "./notion/provider.js";
 import { shogunagentProvider } from "./shogunagent/provider.js";
 import { slackProvider } from "./slack/provider.js";
 
-/** First-party connectors (E8, E22): ranked by the same score as everything else, labeled first_party. */
+/** First-party connectors (E8, E22, E51): ranked by the same score as everything else, labeled first_party. */
 export function firstPartyProviders(): ProviderDefinition[] {
-  return [shogunagentProvider, gmailProvider, calendarProvider, githubProvider, linearProvider, slackProvider];
+  return [shogunagentProvider, gmailProvider, calendarProvider, githubProvider, linearProvider, slackProvider, notionProvider];
 }
 
 export function allProviders(): ProviderDefinition[] {
