@@ -531,6 +531,16 @@ pub trait MemoryBackend: Send + Sync {
         Ok(None)
     }
 
+    /// `connections.disconnect` when the backend removes the grant itself and can say what it did
+    /// (a hosted sidecar's vault, E51): `Some(Ok(receipt))` with
+    /// `{disconnected, provider, slot, removed, vendor_revoke}`, which every face merges into its
+    /// standard write answer, so MCP, REST and the CLI return the same detail. `None`: the face
+    /// writes it through [`Self::write`] (the Mac queues it for the desktop, which has no receipt
+    /// to give yet). `Some(Err)` is refused exactly as a write error.
+    fn connections_disconnect(&self, _body: &str) -> Option<Result<serde_json::Value, String>> {
+        None
+    }
+
     /// Structured JSON for tools that do not use [`ReadItem`] / the confidence gate (visual recall).
     /// `None` → fall back to [`Self::read`].
     fn read_structured(&self, _tool: Tool, _params: &ReadParams) -> Option<String> {
@@ -777,6 +787,9 @@ impl<T: MemoryBackend + ?Sized> MemoryBackend for std::sync::Arc<T> {
     }
     fn write(&self, tool: Tool, body: &str) -> WriteResult {
         (**self).write(tool, body)
+    }
+    fn connections_disconnect(&self, body: &str) -> Option<Result<serde_json::Value, String>> {
+        (**self).connections_disconnect(body)
     }
     fn read_structured(&self, tool: Tool, params: &ReadParams) -> Option<String> {
         (**self).read_structured(tool, params)

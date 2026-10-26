@@ -333,9 +333,32 @@ fn connects_and_disconnects_are_audited_and_listed_on_every_face() {
     assert!(PrincipalGrants::new(tokens.as_ref(), "prn_erin").load(Service::GoogleCalendar).unwrap().is_none());
     let revoke = vendor.forms.lock().unwrap().last().unwrap().clone();
     assert_eq!(revoke, vec![("token".to_string(), "1//flow-refresh".to_string())]);
+    // E51: the answer keeps the standard write receipt and says what the vendor did.
+    assert_eq!(gone.body["accepted"], true, "{}", gone.body);
+    assert_eq!((gone.body["tool"].as_str(), gone.body["level"].as_str()), (Some("connections.disconnect"), Some("L1")), "{}", gone.body);
+    assert_eq!(
+        (gone.body["disconnected"].as_bool(), gone.body["provider"].as_str(), gone.body["slot"].as_str(), gone.body["removed"].as_bool(), gone.body["vendor_revoke"].as_str()),
+        (Some(true), Some("calendar"), Some("gcal-tokenset"), Some(true), Some("revoked")),
+        "{}",
+        gone.body
+    );
     let after = mcp_tool(port, &erin, "connections.list", serde_json::json!({}));
     let after = if after.get("result").is_some() { after["result"].clone() } else { after };
     assert_eq!(service_row(&after, "gcal")["state"], "disconnected");
+
+    // The same on the MCP face: connect again, disconnect over MCP, the same receipt fields.
+    let state_again = "gateway-sealed-state-erin-again-0123";
+    call(port, "POST", "/v1/internal/connectors/connect/start", Some(ADMIN), Some(&erin), &format!(r#"{{"provider":"calendar","state":"{state_again}"}}"#));
+    let done = call(port, "POST", "/v1/internal/connectors/connect/finish", Some(ADMIN), Some(&erin), &format!(r#"{{"state":"{state_again}","code":"vendor-code-1"}}"#));
+    assert_eq!(done.status, 200, "{}", done.body);
+    let over_mcp = mcp_tool(port, &erin, "connections.disconnect", serde_json::json!({ "service": "gcal" }));
+    assert_eq!(over_mcp["accepted"], true, "{over_mcp}");
+    for key in ["disconnected", "provider", "slot", "removed", "vendor_revoke"] {
+        assert_eq!(over_mcp[key], gone.body[key], "{key}: {over_mcp} vs {}", gone.body);
+    }
+    let twice = mcp_tool(port, &erin, "connections.disconnect", serde_json::json!({ "service": "gcal" }));
+    assert_eq!((twice["removed"].as_bool(), twice["vendor_revoke"].as_str()), (Some(false), Some("nothing_stored")), "{twice}");
+    assert!(!gone.body.to_string().contains("ya29") && !over_mcp.to_string().contains("1//flow-refresh"));
     // The internal route disconnects too (idempotent: nothing stored any more).
     let again = call(port, "POST", "/v1/internal/connectors/disconnect", Some(ADMIN), Some(&erin), r#"{"provider":"calendar"}"#);
     assert_eq!((again.status, again.body["removed"].as_bool(), again.body["vendor_revoke"].as_str()), (200, Some(false), Some("nothing_stored")));

@@ -220,6 +220,23 @@ struct DisconnectBody {
     service: String,
 }
 
+/// One face's `connections.disconnect` answer (E51): its standard write fields (`base`: MCP's
+/// `{accepted}`, REST's `{tool, level, accepted}`) with the backend's disconnect receipt
+/// (`disconnected`, `provider`, `slot`, `removed`, `vendor_revoke`) added. A receipt key never
+/// overwrites a standard field, so the faces differ only in the fields they already differed in.
+pub fn disconnect_answer(base: serde_json::Value, receipt: &serde_json::Value) -> String {
+    let mut answer = match base {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    if let Some(receipt) = receipt.as_object() {
+        for (key, value) in receipt {
+            answer.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    serde_json::Value::Object(answer).to_string()
+}
+
 /// The service a `connections.disconnect` body names.
 pub fn parse_disconnect(body: &str) -> Result<Service, Invalid> {
     let body: DisconnectBody = serde_json::from_str(body).map_err(|_| Invalid::BadRequest)?;
