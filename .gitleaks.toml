@@ -47,3 +47,15 @@ regexes = [
   '''<[A-Za-z_ -]+>''',
   '''\$\{?[A-Z_]+\}?''',
 ]
+
+# These are fixed public constants, not credentials. Keep the exceptions scoped
+# to their detector and exact value so nearby real credentials are still caught.
+[[rules]]
+id = "curl-auth-header"
+[rules.allowlist]
+regexes = ['''^dev-token$''']
+
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+regexes = ['''^NFR-SLO-03-final$''']

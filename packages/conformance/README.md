@@ -14,7 +14,7 @@ only with `SHOGUN_CONFORMANCE_STRICT=1`) or is skipped with its reason.
 
 ```bash
 # A throwaway local sidecar (temp store, random keys, loopback), the whole suite, writes included:
-cargo build -p shogun-core --features daemon-server --bin shogun-api --example conformance_store
+cargo build -p shogun-core --features daemon-server --bin shogun-api
 pnpm --filter @shogunagent/conformance local          # add -- --build to build first
 
 # Any endpoint (read-only checks unless SHOGUN_CONFORMANCE_WRITES=1):
@@ -24,3 +24,6 @@ SHOGUN_CONFORMANCE_URL=https://api.example/mcp SHOGUN_CONFORMANCE_TOKEN=sa_live_
 
 Variables: see `src/config.mjs`. Write checks ingest one test turn, append one note and queue one
 L3 approval in the target store; run them only against a store that may hold test rows.
+
+The local fixture uses `--multi`, the server deployment mode. It needs no desktop trial or
+hardware-bound licence, and creates its encrypted principal store only inside its temporary folder.

@@ -258,10 +258,12 @@ describe("ingest hooks: GitHub end to end", () => {
     const rig = makeHookRig();
     const { key, principalId } = await registerAgent(rig);
     const hook = await createHook(rig, key, { provider: "github" });
-    await post(rig, pathOf(hook.url), githubBody, { "x-github-event": "issues", "x-github-delivery": "d-1", "x-hub-signature-256": sign.github(String(hook.secret), githubBody) });
+    const delivery = "privacy-test-delivery-marker";
+    await post(rig, pathOf(hook.url), githubBody, { "x-github-event": "issues", "x-github-delivery": delivery, "x-hub-signature-256": sign.github(String(hook.secret), githubBody) });
     await post(rig, pathOf(hook.url), githubBody, { "x-github-event": "issues", "x-hub-signature-256": "sha256=" + "0".repeat(64) });
     const persisted = JSON.stringify([await rig.hooks.listByPrincipal(principalId), await rig.store.receipts(principalId, 0, 10), rig.logLines]);
-    for (const needle of [ISSUE_TEXT, "Renewal", "acme/web", String(hook.secret), "4242", "d-1"]) expect(persisted).not.toContain(needle);
+    // Short hex fragments such as "d-1" or "4242" can occur in unrelated random UUIDs.
+    for (const needle of [ISSUE_TEXT, "Renewal", "acme/web", String(hook.secret), "event_ids", delivery]) expect(persisted).not.toContain(needle);
     expect(rig.logLines.some((l) => l.includes("/v1/ingest-hooks/github/:hook") && l.includes("event=ingest_hook_relayed"))).toBe(true);
     expect(rig.logLines.some((l) => l.includes(hook.hook_id))).toBe(false);
   });

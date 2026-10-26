@@ -42,7 +42,16 @@ jobs:
           else
             base="$BEFORE"
           fi
-          python3 scripts/check-migrations.py --immutable-against "$base" --immutable-against-releases
+          args=(--immutable-against "$base")
+          # A new upstream may have no releases. Confirm that with the remote;
+          # a failed lookup must stop the job, never silently skip release checks.
+          releases="$(git ls-remote --tags origin 'refs/tags/v*')"
+          if [ -n "$releases" ] || [ -n "$(git tag --list 'v*')" ]; then
+            args+=(--immutable-against-releases)
+          else
+            echo "Upstream has no release tags; migrations remain frozen against $base."
+          fi
+          python3 scripts/check-migrations.py "${args[@]}"
 
   upgrade:
     name: MIGRATION UPGRADE — every version upgrades

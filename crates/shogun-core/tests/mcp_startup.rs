@@ -3,9 +3,9 @@
 //! every `plan_required` answer. Runs the real binary.
 //!
 //! Debug builds only: the `SHOGUN_*_JSON` path overrides that keep the plan and analytics files in
-//! a temp folder exist only there. Not on macOS: there the binary reads the token list from the
-//! real login Keychain, which a test must not touch; elsewhere it takes `SHOGUN_API_TOKEN`, which
-//! the harness removes. CI runs this on Linux (`cargo test -p shogun-core --features daemon-server`, a superset of `db`).
+//! a temp folder exist only there. The non-desktop build takes `SHOGUN_API_TOKEN` on every OS;
+//! the Keychain token loader is not used. The trial fixture still honours the host's hardware
+//! binding. CI runs this with `cargo test -p shogun-core --features daemon-server` (a superset of `db`).
 #![cfg(all(feature = "db", debug_assertions, not(feature = "desktop")))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -32,7 +32,9 @@ impl Dir {
             std::process::id()
         ));
         std::fs::create_dir_all(&path).unwrap();
-        Self(path)
+        // SQLite's NOFOLLOW upgrade path also rejects macOS's /var → /private/var
+        // alias. Use the real temp path without weakening the store's symlink guard.
+        Self(path.canonicalize().unwrap())
     }
 }
 
@@ -42,7 +44,7 @@ impl Drop for Dir {
     }
 }
 
-/// The token the harness issues (off macOS the binary registers `SHOGUN_API_TOKEN` as issued and
+/// The token the harness issues (the non-desktop binary registers `SHOGUN_API_TOKEN` as issued and
 /// checks the same value). Audit 2026-10-20 M5: there is no process trust, so a session needs it.
 const HARNESS_TOKEN: &str = "shogun_harness_token";
 
@@ -131,8 +133,9 @@ fn stamp(dir: &Path, trial_started_at: i64) {
     )
     .unwrap();
     let (iat, end) = (trial_started_at, trial_started_at + 7 * 86_400);
+    let device = shogun_license::hardware_device_id().unwrap_or("dev-test");
     let body = serde_json::json!({
-        "v": 1, "lic": "trial_dev-test", "plan": "trial", "status": "trialing", "device": "dev-test",
+        "v": 1, "lic": "trial_dev-test", "plan": "trial", "status": "trialing", "device": device,
         "iat": iat, "exp": iat + 24 * 3600, "period_end": end,
         "cancel_at_period_end": true, "grace_days": 0,
     })
@@ -145,7 +148,7 @@ fn stamp(dir: &Path, trial_started_at: i64) {
     std::fs::write(
         dir.join("trial_relay.json"),
         serde_json::json!({
-            "version": 1, "device_id": "dev-test", "token": token, "expires_at": iat + 24 * 3600,
+            "version": 1, "device_id": device, "token": token, "expires_at": iat + 24 * 3600,
             "checked_at": iat, "trial_ends_at": end,
         })
         .to_string(),

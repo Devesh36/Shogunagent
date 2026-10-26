@@ -2077,6 +2077,379 @@
         ]
       }
     },
+    "/v1/state/commitments": {
+      "get": {
+        "tags": [
+          "state"
+        ],
+        "summary": "state.commitments.list: a free read from the caller's own state store.",
+        "description": "Relayed to the principal's core without reading or storing bodies. The path pins the tool's free-read classification; caller-supplied MCP headers cannot change it.",
+        "operationId": "get_v1_state_commitments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The core's REST response, relayed untouched."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid core arguments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_key | invalid_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Core unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/state/open_loops": {
+      "get": {
+        "tags": [
+          "state"
+        ],
+        "summary": "state.open_loops.list: a free read from the caller's own state store.",
+        "description": "Relayed to the principal's core without reading or storing bodies. The path pins the tool's free-read classification; caller-supplied MCP headers cannot change it.",
+        "operationId": "get_v1_state_open_loops",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The core's REST response, relayed untouched."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid core arguments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_key | invalid_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Core unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/state/people/{person}": {
+      "get": {
+        "tags": [
+          "state"
+        ],
+        "summary": "state.people.get: a free read from the caller's own state store.",
+        "description": "Relayed to the principal's core without reading or storing bodies. The path pins the tool's free-read classification; caller-supplied MCP headers cannot change it.",
+        "operationId": "get_v1_state_people_person",
+        "parameters": [
+          {
+            "name": "person",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "The core's numeric person id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The core's REST response, relayed untouched."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid core arguments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_key | invalid_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Core unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/memory/recall": {
+      "post": {
+        "tags": [
+          "state"
+        ],
+        "summary": "memory.recall: a free read from the caller's own state store.",
+        "description": "Relayed to the principal's core without reading or storing bodies. The path pins the tool's free-read classification; caller-supplied MCP headers cannot change it.",
+        "operationId": "post_v1_memory_recall",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string"
+                  },
+                  "budget_tokens": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 20000
+                  },
+                  "namespace": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "query"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The core's REST response, relayed untouched."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid core arguments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "missing_key | invalid_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Core unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
     "/v1/ingest-hooks": {
       "post": {
         "tags": [

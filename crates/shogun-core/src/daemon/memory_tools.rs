@@ -584,7 +584,12 @@ mod tests {
         assert_eq!(parse_day("yesterday"), None);
         let now = 20_740 * DAY_MS + 9 * 3_600_000;
         let w = window(&json!({"from":"2026-10-13","to":"2026-10-13"}), now, true).expect("ok").expect("some");
-        assert_eq!((w.0, w.1), (20_739 * DAY_MS, 20_740 * DAY_MS));
+        let conn = shogun_memory::open_in_memory().expect("memory store");
+        let expected: (i64, i64) = conn.query_row(
+            "SELECT strftime('%s','2026-10-13','utc')*1000,strftime('%s','2026-10-14','utc')*1000",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).expect("local calendar bounds");
+        assert_eq!((w.0, w.1), expected);
         assert!(window(&json!({}), now, true).is_err());
         assert_eq!(window(&json!({}), now, false), Ok(None));
         assert!(window(&json!({"from":"2026-10-14","to":"2026-10-01"}), now, true).is_err());

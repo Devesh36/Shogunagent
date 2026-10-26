@@ -33,8 +33,13 @@ export const memoryRecall = defineEndpoint({
   },
   output: {
     isEmpty: (output) => {
-      const ex = output && typeof output === "object" && !Array.isArray(output) ? output["excerpts"] : null;
-      return !Array.isArray(ex) || ex.length === 0;
+      if (!output || typeof output !== "object" || Array.isArray(output)) return true;
+      const result = output["result"];
+      const pack = result && typeof result === "object" && !Array.isArray(result) ? result : output;
+      return !["items", "facts", "possibly", "evidence", "excerpts"].some((key) => {
+        const rows = pack[key];
+        return Array.isArray(rows) && rows.length > 0;
+      });
     },
   },
   usage: { model: "per_call", cost_micro_usd: 0 },

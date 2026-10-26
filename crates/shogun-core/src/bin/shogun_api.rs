@@ -439,18 +439,22 @@ async fn dream_tick(root: std::path::PathBuf) -> std::io::Result<()> {
     let audit_store: Arc<std::sync::OnceLock<std::sync::Weak<PrincipalStore>>> = Arc::default();
     let _ = audit_store.set(Arc::downgrade(&store));
     match shogun_core::tenancy::multi::hosted_connectors(tokens.clone(), &vars, Some(shogun_core::tenancy::multi::connector_audit_sink(audit_store))) {
-        Ok(vault) => match shogun_core::provider_fetch::HttpProviderFetch::new() {
-            Ok(http) => {
-                let (store, principals) = (store.clone(), principals.clone());
-                let sync = tokio::task::spawn_blocking(move || {
+        Ok(vault) => {
+            let (store, principals) = (store.clone(), principals.clone());
+            // A blocking reqwest client owns a runtime: create and drop it on the
+            // blocking worker too, not just the requests it executes.
+            let sync = tokio::task::spawn_blocking(move || {
+                shogun_core::provider_fetch::HttpProviderFetch::new().map(|http| {
                     shogun_core::tenancy::connector_sync::drain_tick(&store, &vault, &http, &principals, now)
                 })
-                .await
-                .map_err(std::io::Error::other)?;
-                println!("{FACE}: connector read-sync: {}", shogun_core::tenancy::connector_sync::summary(&sync));
+            })
+            .await
+            .map_err(std::io::Error::other)?;
+            match sync {
+                Ok(sync) => println!("{FACE}: connector read-sync: {}", shogun_core::tenancy::connector_sync::summary(&sync)),
+                Err(_) => eprintln!("{FACE}: connector read-sync skipped (http client unavailable)"),
             }
-            Err(_) => eprintln!("{FACE}: connector read-sync skipped (http client unavailable)"),
-        },
+        }
         Err(var) => eprintln!("{FACE}: connector read-sync skipped ({var} is malformed)"),
     }
     let report = dream_tick::hourly_tick_routed(

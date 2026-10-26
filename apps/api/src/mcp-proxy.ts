@@ -49,6 +49,14 @@ import type { AdmitRefusal, AgentPrincipal } from "./agent-keys.js";
 
 /** The sidecar's transport path. */
 export const SIDECAR_MCP_PATH = "/mcp";
+/** REST reads used by the router's first-party state connector. These have the same
+ * authentication and free-read classification as their MCP tools. */
+export const STATE_READ_ROUTES = Object.freeze([
+  { method: "get", path: "/v1/state/commitments", tool: "state.commitments.list" },
+  { method: "get", path: "/v1/state/open_loops", tool: "state.open_loops.list" },
+  { method: "get", path: "/v1/state/people/:person", tool: "state.people.get" },
+  { method: "post", path: "/v1/memory/recall", tool: "memory.recall" },
+] as const);
 /** The sidecar paths the relay serves: the MCP transport, the REST handoff route whose object the
  * core assembles (E35), and the REST face of `payments.*` (E51, docs/api/payments.md). The
  * request's own path picks one; anything else goes to `/mcp`. */
@@ -61,7 +69,11 @@ export const SIDECAR_PATHS: readonly string[] = Object.freeze([
 export function sidecarPathOf(request: Request): string {
   let path = SIDECAR_MCP_PATH;
   try {
-    path = new URL(request.url).pathname;
+    const url = new URL(request.url);
+    path = url.pathname;
+    const stateRead = STATE_READ_ROUTES.some((route) => route.method.toUpperCase() === request.method &&
+      (route.path === path || (route.path === "/v1/state/people/:person" && /^\/v1\/state\/people\/[^/]+$/.test(path))));
+    if (stateRead) return path + url.search;
   } catch {
     return SIDECAR_MCP_PATH;
   }

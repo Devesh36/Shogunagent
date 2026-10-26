@@ -21,6 +21,24 @@ Conventions:
   writer; the log line carries the route template, status, a fixed event word and a hash of the
   key *id*).
 
+## Local end-to-end test
+
+Build `shogun-api` with `cargo build --locked -p shogun-core --features daemon-server --bin shogun-api`,
+then run `pnpm test:e2e` from the repository root. This runs the real encrypted sidecar, gateway,
+PostgreSQL store, router, and TypeScript and Python SDKs over loopback. It checks tenant isolation,
+ingest and router replay, billing, pending L3 approval, the local Dream Cycle and persistence after
+a sidecar restart. No model, connector or payment provider is called.
+
+Prerequisites: Node 22+, installed pnpm dependencies, Python 3.10+ with `httpx`, and a local
+PostgreSQL account allowed to create databases. `SHOGUN_E2E_POSTGRES_URL` selects that local admin
+connection (default `postgres://127.0.0.1:5432/postgres?sslmode=disable`). The runner creates and
+removes a randomly named `shogun_e2e_*` database and temporary principal stores. `SHOGUN_API_BIN`
+and `SHOGUN_E2E_PYTHON` optionally select the server binary and Python interpreter.
+
+The optional SQL integration suites use `RELAY_TEST_DATABASE_URL`, `RELAY_LIVE_TEST_DATABASE_URL`
+and `SHOGUN_ASR_TEST_DATABASE_URL`; each needs its own disposable database. The speech test accepts
+only local `shogun_e2e_*` databases, or its original disposable Unix-socket configuration.
+
 ## Routes
 
 | Method | Path | Auth | Purpose |
@@ -39,6 +57,8 @@ Conventions:
 | GET | `/v1/receipts?since=&limit=` | `read` | Per-call receipts, oldest first |
 | POST | `/v1/receipts/{id}/dispute` | `write` | Open a dispute on a receipt (one per receipt) |
 | POST | `/v1/handoff` | `read` | An A2A state-of-work handoff for a task, assembled by the core (`handoff.create`) and relayed untouched (free; `docs/api/handoff.md`) |
+| GET | `/v1/state/commitments`, `/v1/state/open_loops`, `/v1/state/people/{person}` | `read` | Free state reads used by the router, relayed to the principal's core with query parameters intact; `person` is the core's numeric id |
+| POST | `/v1/memory/recall` | `read` | Free recall, with the MCP arguments as the body and the core's response relayed untouched |
 | GET, POST | `/v1/payments/mandates`, `/v1/payments/mandates/list` | `read` | `payments.mandates.list`, relayed to the core untouched (free; [payments](../../docs/api/payments.md)) |
 | POST | `/v1/payments/mandates/request`, `/v1/payments/mandates/revoke`, `/v1/payments/spend` | `run` | `payments.*` relayed to the core untouched: a new mandate and a payment outside one answer `202` with an approval URL for a human (free at the call) |
 | GET | `/v1/statements?month=&format=` | `read` | The month's statement, JSON or CSV; immutable once the month closes ([billing](../../docs/api/billing.md)) |

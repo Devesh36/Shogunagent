@@ -9,6 +9,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:e2e": "pnpm --filter @shogun-ai/api test:e2e",
     "registry:validate": "node scripts/validate-server-json.mjs",
     "llms:gen": "node scripts/gen-llms-txt.mjs --write",
     "llms:check": "node scripts/gen-llms-txt.mjs --check",

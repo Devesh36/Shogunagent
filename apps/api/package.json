@@ -15,6 +15,7 @@
     "test": "vitest run && vitest run -c vitest.workers.config.ts",
     "test:node": "vitest run",
     "test:workers": "vitest run -c vitest.workers.config.ts",
+    "test:e2e": "tsx scripts/stack-e2e.ts",
     "check:bundle": "rm -rf dist/dry-run && wrangler deploy --config wrangler.jsonc --dry-run --outdir dist/dry-run && ! grep -lE 'node-server|node:fs|node:child_process|node:worker_threads' dist/dry-run/*.js",
     "deploy": "wrangler deploy --config wrangler.jsonc",
     "load-test": "tsx scripts/load-test.ts",

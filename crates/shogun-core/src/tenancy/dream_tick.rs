@@ -552,7 +552,7 @@ mod tests {
         let report = hourly_tick_local(&store, &principals, now);
         assert_eq!(report[0].outcome, TickOutcome::Ran { complete: true }, "{report:?}");
         let open = store.open(&busy).unwrap();
-        assert_eq!(open.db().try_last_consolidated_to().unwrap(), Some(crate::dreamcycle::hourly::window_end_ms(now, 0)));
+        assert_eq!(open.db().try_last_consolidated_to().unwrap(), Some(crate::dreamcycle::hourly::window_end_ms(now, crate::daemon::os_gmt_offset_secs(now))));
         let report = hourly_tick_local(&store, &principals, now + 60_000);
         assert!(matches!(report[0].outcome, TickOutcome::NothingNew | TickOutcome::AlreadyDone), "{report:?}");
         assert!(report.iter().all(|t| t.loops.is_none()), "the local lane never consolidates");
@@ -665,7 +665,10 @@ mod tests {
     #[tokio::test]
     async fn the_batch_tick_runs_the_consolidator_after_a_review_with_signals() {
         use std::sync::atomic::AtomicI64;
-        let start = 240 * 24 * HOUR + 10 * HOUR + 30 * 60_000;
+        // Put the fixture at 10:30 in the host calendar, so the 11:10 tick crosses
+        // an hourly boundary even in timezones with a half-hour UTC offset.
+        let start = crate::daemon::local_day_bounds(240 * 24 * HOUR + 12 * HOUR).today_start_ms
+            + 10 * HOUR + 30 * 60_000;
         let clock = Arc::new(AtomicI64::new(start));
         let root = TempRoot::new("loops");
         let keys = EnvKeyProvider::with_default(DbKey::new([0x3c; 32]));
