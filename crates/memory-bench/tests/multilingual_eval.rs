@@ -56,7 +56,11 @@ fn multilingual_suite_lexical_baseline() {
             // gram units and stopped letting a project name alone carry a CJK question). The R@5
             // they gave up (ja 0.933, zh 0.857) is the name-only cross-lingual and paraphrase
             // finds: the same evidence the false answers rested on.
-            (Lang::Ja, 0.867, 0.0),
+            // E51: 0.733 (was 0.867). The two cross-lingual finds left (Robin, Tern) were the
+            // name-only answer row riding along with an unrelated row that passed the floor on
+            // half of the question's CJK part; an abstaining search now returns only rows that
+            // clear the floor on their own, and the CJK part alone must cover more than half.
+            (Lang::Ja, 0.733, 0.0),
             (Lang::Es, 0.429, 0.0),
             (Lang::De, 0.571, 0.0),
             (Lang::Fr, 0.429, 0.0),
@@ -72,8 +76,9 @@ fn multilingual_suite_lexical_baseline() {
             (Kind::Paraphrase, 0.286),
             // Only the project name is shared; the relevance floor refuses a row that holds the
             // name and none of the question's other words, in every language (was 0.333: the
-            // Japanese and Chinese questions passed on the name alone).
-            (Kind::CrossLingual, 0.111),
+            // Japanese and Chinese questions passed on the name alone; then 0.111 until E51, two
+            // Japanese questions whose name-only answer rode along with another passing row).
+            (Kind::CrossLingual, 0.0),
             // An unbroken CJK sentence is one compound term no row contains.
             (Kind::CjkSentence, 0.0),
         ],
@@ -94,14 +99,16 @@ fn multilingual_suite_with_the_test_embedder() {
             (Lang::Ja, 1.0, 0.0),
             (Lang::Es, 1.0, 0.0),
             (Lang::De, 0.857, 0.0),
-            (Lang::Fr, 0.857, 0.0),
+            // E51: 1.000 (was 0.857). "Y a-t-il une erreur dans la facture de Swift ?" was
+            // ranked 8th behind lexical rows that did not clear the floor themselves.
+            (Lang::Fr, 1.0, 0.0),
             (Lang::Zh, 0.929, 0.0),
         ],
         &[
             (Kind::Lexical, 1.0),
             (Kind::CjkShort, 1.0),
             (Kind::Paraphrase, 1.0),
-            (Kind::CrossLingual, 0.889),
+            (Kind::CrossLingual, 0.944),
             (Kind::CjkSentence, 0.667),
         ],
         0.0,
