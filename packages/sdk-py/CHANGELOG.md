@@ -6,6 +6,21 @@ Format and rules: `docs/release.md` (Keep a Changelog sections, SemVer, newest f
 
 ## Unreleased
 
+## 0.2.0 — 2026-10-26
+
+### Added
+
+- `client.payments` (docs/api/payments.md), on the sync and the async client:
+  `list_mandates(mandate_id=None, limit=None)`, `request_mandate(...)` (a `PaymentOutcome` of type
+  `approval_required` with the URL to hand to the human, or `narrowed` / `replayed`),
+  `revoke_mandate(mandate_id)` and `spend(payee=..., currency=..., amount_minor=..., memo=None,
+  mandate_id=None, idempotency_key=None)` (`settled`, `approval_required` with `spend_ref` and
+  `reason`, or `not_settled` for a replay that is awaiting a human, rejected, expired or failed).
+  An idempotency key is generated when you pass none and returned as `idempotency_key`: reuse it
+  to retry, and a retry never pays twice. The SDK never approves anything.
+- `client.connections.status()` (`connections.list`, free) and `client.connections.disconnect(service)`.
+- `PaymentOutcome` is exported.
+
 ### Changed
 
 - `accept_handoff()` calls the core's `handoff.accept` (E35) instead of assembling `memory.ingest`

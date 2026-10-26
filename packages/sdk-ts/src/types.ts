@@ -331,3 +331,100 @@ export interface PaymentPayload {
   balance_micro_usd?: number;
   cap?: { scope: string; period: string; limit_micro_usd: number; spent_micro_usd: number };
 }
+
+// --- payments (E46 / E51, docs/api/payments.md) ---
+
+/** A payment mandate: a human's pre-approval for one agent to pay within bounds. */
+export interface PaymentMandate {
+  mandate_id: string;
+  agent: string;
+  payee: { kind: "payee" | "class"; value: string };
+  currency: string;
+  max_per_payment_minor: number;
+  total_cap_minor: number;
+  spent_minor: number;
+  remaining_minor: number;
+  payments: number;
+  expires_at_ms: number;
+  purpose: string;
+  single_use: boolean;
+  status: "active" | "expired" | "exhausted" | "revoked";
+  revision: number;
+  granted: { approval_id: number; by: string; at_ms: number };
+  revoked: { by: string; at_ms: number } | null;
+}
+
+/** A spend's status. `rejected` / `expired`: its per-payment approval never ran; nothing was paid. */
+export type SpendStatus = "awaiting_approval" | "authorized" | "executing" | "settled" | "failed" | "not_queued" | "rejected" | "expired";
+
+/** One recorded payment (no memo: it is never stored). */
+export interface PaymentSpend {
+  spend_ref: string;
+  actor: string;
+  idempotency_key: string;
+  mandate_id: string | null;
+  authorization: "mandate" | "approval";
+  approval_id: number | null;
+  decided_by: string | null;
+  payee: string;
+  currency: string;
+  amount_minor: number;
+  status: SpendStatus;
+  reason_class: string | null;
+  rail: string;
+  rail_ref: string | null;
+  created_at_ms: number;
+  settled_at_ms: number | null;
+}
+
+export interface MandateListParams {
+  /** One mandate with its recent spends. */
+  mandateId?: string;
+  limit?: number;
+}
+
+export interface MandateListResult {
+  mandates: PaymentMandate[];
+  /** With `mandateId`: that mandate and its recent spends. */
+  mandate?: PaymentMandate;
+  spends?: PaymentSpend[];
+}
+
+/** `payments.mandates.request`. Give exactly one of `payee` and `payeeClass`; amounts are integer
+ * minor units of `currency` (ISO 4217). */
+export interface MandateRequestParams {
+  payee?: string;
+  payeeClass?: string;
+  currency: string;
+  maxPerPaymentMinor: number;
+  totalCapMinor: number;
+  expiresInDays?: number;
+  expiresAtMs?: number;
+  purpose: string;
+  singleUse?: boolean;
+  /** Change this mandate: narrower terms apply at once, wider or longer ones wait for a human. */
+  mandateId?: string;
+  /** Generated when absent; reuse it to retry the same request. */
+  idempotencyKey?: string;
+}
+
+/** `payments.spend`. */
+export interface SpendParams {
+  payee: string;
+  currency: string;
+  amountMinor: number;
+  /** Travels to the approval page and the rail; never stored. */
+  memo?: string;
+  mandateId?: string;
+  /** Generated when absent; reuse it to retry: a retry never pays twice. */
+  idempotencyKey?: string;
+}
+
+// --- connections (docs/api/connector-tokens.md) ---
+
+/** `connections.list`: which accounts the principal has connected (free read). */
+export interface ConnectionsStatus {
+  connections?: Array<Record<string, unknown>>;
+  hosted?: boolean;
+  [key: string]: unknown;
+}

@@ -31,7 +31,7 @@ from .types import (
 LOCAL_BASE_URL = "http://127.0.0.1:7464"
 HOSTED_BASE_URL = "https://api.shogunagent.dev"
 MCP_PROTOCOL_VERSION = "2026-07-28"
-SDK_VERSION = "0.1.0"
+SDK_VERSION = "0.2.0"
 MAX_INGEST_ITEMS = 200
 
 R = TypeVar("R")
@@ -94,6 +94,54 @@ class ApprovalRequired(Generic[R]):
 
 
 ActionOutcome = Union[ActionResult, ActionDeclined, InputRequired[Any], ApprovalRequired[Any]]
+
+
+# --- payments (E46 / E51, docs/api/payments.md) ---
+
+
+@dataclass
+class PaymentOutcome:
+    """What ``payments.mandates.request`` or ``payments.spend`` answered.
+
+    ``type``:
+
+    - ``approval_required``: an L3 waits for a human. Hand ``approval.url`` to them and poll
+      ``status()`` / ``wait()``; this SDK never approves. A spend also carries ``spend_ref`` and
+      ``reason`` (why no mandate covered it).
+    - ``narrowed`` / ``replayed`` (a mandate request): narrower terms applied at once, or a retried
+      request whose mandate a human already granted; ``mandate`` is the mandate.
+    - ``settled`` (a spend): paid, ``spend`` is the record; ``replayed`` when it was a retry.
+    - ``not_settled`` (a spend): a replay of a spend that is still awaiting a human, was rejected,
+      expired or failed (``spend["status"]``). ``rejected`` / ``expired`` paid nothing: ask the
+      human before trying again under a new key.
+
+    Never report a payment as made unless ``type`` is ``settled``.
+    """
+
+    type: str
+    idempotency_key: str
+    raw: Any = None
+    approval: ApprovalInfo | None = None
+    mandate_id: str | None = None
+    mandate: dict[str, Any] | None = None
+    spend: dict[str, Any] | None = None
+    spend_ref: str | None = None
+    reason: str | None = None
+    replayed: bool = False
+    _status: Callable[[], Any] | None = field(default=None, repr=False)
+    _wait: Callable[..., Any] | None = field(default=None, repr=False)
+
+    def status(self) -> Any:
+        """One ``actions.status`` read of the pending approval (async client: an awaitable)."""
+        if self._status is None:
+            raise ShogunAgentError("Nothing is waiting for approval.", code="not_pending", next_action="fix_input")
+        return self._status()
+
+    def wait(self, *, interval: float = 2.0, timeout: float = 900.0) -> Any:
+        """Poll ``actions.status`` until the approval leaves pending (async client: an awaitable)."""
+        if self._wait is None:
+            raise ShogunAgentError("Nothing is waiting for approval.", code="not_pending", next_action="fix_input")
+        return self._wait(interval=interval, timeout=timeout)
 
 
 @dataclass
@@ -192,7 +240,10 @@ class _Core:
         if result.get("resultType") == "input_required":
             return _Raw("input_required", input_requests=[InputRequest.from_dict(x) for x in result.get("inputRequests") or []])
         if result.get("resultType") == "approval_required" and isinstance(result.get("approval"), dict):
-            return _Raw("approval_required", approval=ApprovalInfo.from_dict(result["approval"]))
+            content = result.get("content")
+            first = content[0] if isinstance(content, list) and content else None
+            text = _parse_json(first["text"]) if isinstance(first, dict) and isinstance(first.get("text"), str) else None
+            return _Raw("approval_required", payload=text, approval=ApprovalInfo.from_dict(result["approval"]))
         payload = result.get("structuredContent")
         if payload is None:
             content = result.get("content")
@@ -307,6 +358,81 @@ class _Core:
             )
         return "result", payload
 
+    # payments (E46 / E51) and connections
+
+    @staticmethod
+    def _mandate_list_args(mandate_id: str | None, limit: int | None) -> dict[str, Any]:
+        args: dict[str, Any] = {}
+        if mandate_id is not None:
+            args["mandate_id"] = mandate_id
+        if limit is not None:
+            args["limit"] = limit
+        return args
+
+    @staticmethod
+    def _mandate_list(payload: Any) -> dict[str, Any]:
+        obj = payload if isinstance(payload, dict) else {}
+        mandate = obj.get("mandate") if isinstance(obj.get("mandate"), dict) else None
+        out: dict[str, Any] = {"mandates": obj["mandates"] if isinstance(obj.get("mandates"), list) else ([mandate] if mandate else [])}
+        if mandate is not None:
+            out["mandate"] = mandate
+        if isinstance(obj.get("spends"), list):
+            out["spends"] = obj["spends"]
+        return out
+
+    @staticmethod
+    def _mandate_request_args(*, currency: str, max_per_payment_minor: int, total_cap_minor: int, purpose: str, payee: str | None, payee_class: str | None,
+                              expires_in_days: int | None, expires_at_ms: int | None, single_use: bool | None, mandate_id: str | None,
+                              idempotency_key: str | None) -> dict[str, Any]:
+        if (payee is None) == (payee_class is None):
+            raise ShogunAgentError("Give exactly one of payee (an exact payee id) or payee_class.", code="invalid_payee", next_action="fix_input")
+        args: dict[str, Any] = {
+            "currency": currency, "max_per_payment_minor": max_per_payment_minor, "total_cap_minor": total_cap_minor,
+            "purpose": purpose, "idempotency_key": idempotency_key or new_idempotency_key("mandate"),
+        }
+        for name, value in (("payee", payee), ("payee_class", payee_class), ("expires_in_days", expires_in_days), ("expires_at_ms", expires_at_ms),
+                            ("single_use", single_use), ("mandate_id", mandate_id)):
+            if value is not None:
+                args[name] = value
+        return args
+
+    @staticmethod
+    def _spend_args(*, payee: str, currency: str, amount_minor: int, memo: str | None, mandate_id: str | None, idempotency_key: str | None) -> dict[str, Any]:
+        args: dict[str, Any] = {"payee": payee, "currency": currency, "amount_minor": amount_minor, "idempotency_key": idempotency_key or new_idempotency_key("pay")}
+        if memo is not None:
+            args["memo"] = memo
+        if mandate_id is not None:
+            args["mandate_id"] = mandate_id
+        return args
+
+    def _payment_outcome(self, tool: str, raw: _Raw, key: str, mandate_id: str | None = None) -> PaymentOutcome:
+        """One shape for both payment tools, from the MRTR approval or the core's payload."""
+        payload = raw.payload
+        p = payload if isinstance(payload, dict) else {}
+        approval = raw.approval
+        if approval is None:
+            kind, value = self._action_from_payload(payload)
+            approval = value if kind == "pending" else None
+        if approval is not None:
+            info = approval
+            return PaymentOutcome(
+                "approval_required", key, payload, approval=info,
+                mandate_id=p.get("mandate_id") if isinstance(p.get("mandate_id"), str) else mandate_id,
+                spend_ref=p.get("spend_ref") if isinstance(p.get("spend_ref"), str) else None,
+                reason=p.get("reason") if isinstance(p.get("reason"), str) else None,
+                _status=lambda: self._status(info.approval_id), _wait=lambda **k: self._wait(info.approval_id, **k),  # type: ignore[attr-defined]
+            )
+        if tool == "payments.mandates.request":
+            if raw.kind != "payload" or not isinstance(p.get("mandate"), dict):
+                raise ToolError(f"{tool} answered neither an approval nor a mandate.", status=200, code="invalid_response", body=payload)
+            m = p["mandate"]
+            return PaymentOutcome("narrowed" if p.get("narrowed") is True else "replayed", key, payload, mandate_id=m.get("mandate_id"), mandate=m, replayed=p.get("replayed") is True)
+        if raw.kind != "payload" or not isinstance(p.get("spend"), dict):
+            raise ToolError(f"{tool} answered neither a spend nor an approval.", status=200, code="invalid_response", body=payload)
+        spend = p["spend"]
+        return PaymentOutcome("settled" if spend.get("status") == "settled" else "not_settled", key, payload,
+                              mandate_id=spend.get("mandate_id"), spend=spend, spend_ref=spend.get("spend_ref"), replayed=p.get("replayed") is True)
+
 
 class _StateNoun:
     def __init__(self, list_fn: Callable[..., Any], get_fn: Callable[[int], Any] | None = None) -> None:
@@ -334,6 +460,8 @@ class ShogunAgent(_Core):
         )
         self.actions = _Namespace(execute=self._execute, status=self._status, wait_for_approval=self._wait)
         self.router = _Namespace(discover=self._discover, inspect=self._inspect, run=self._run)
+        self.payments = _Namespace(list_mandates=self._list_mandates, request_mandate=self._request_mandate, revoke_mandate=self._revoke_mandate, spend=self._spend)
+        self.connections = _Namespace(status=self._connections_status, disconnect=self._disconnect)
 
     def close(self) -> None:
         self._http.close()
@@ -441,6 +569,42 @@ class ShogunAgent(_Core):
         h, args, quantity = self._accept_plan(value, as_agent, check_addressee)
         return self._accepted(h, self.call_tool("handoff.accept", args, quantity=quantity))
 
+    # payments (docs/api/payments.md): never approves; an L3 answers the URL for a human.
+
+    def _list_mandates(self, *, mandate_id: str | None = None, limit: int | None = None) -> dict[str, Any]:
+        """``payments.mandates.list``: ``{"mandates": [...]}``; with ``mandate_id`` also ``mandate`` and its ``spends``. Free."""
+        return self._mandate_list(self.call_tool("payments.mandates.list", self._mandate_list_args(mandate_id, limit)))
+
+    def _request_mandate(self, *, currency: str, max_per_payment_minor: int, total_cap_minor: int, purpose: str, payee: str | None = None,
+                         payee_class: str | None = None, expires_in_days: int | None = None, expires_at_ms: int | None = None,
+                         single_use: bool | None = None, mandate_id: str | None = None, idempotency_key: str | None = None) -> PaymentOutcome:
+        """``payments.mandates.request`` (L3): ``approval_required`` with the URL for the human, or ``narrowed`` / ``replayed``."""
+        args = self._mandate_request_args(currency=currency, max_per_payment_minor=max_per_payment_minor, total_cap_minor=total_cap_minor, purpose=purpose,
+                                          payee=payee, payee_class=payee_class, expires_in_days=expires_in_days, expires_at_ms=expires_at_ms,
+                                          single_use=single_use, mandate_id=mandate_id, idempotency_key=idempotency_key)
+        return self._payment_outcome("payments.mandates.request", self._tool("payments.mandates.request", args), args["idempotency_key"], mandate_id)
+
+    def _revoke_mandate(self, mandate_id: str, *, idempotency_key: str | None = None) -> dict[str, Any]:
+        """``payments.mandates.revoke`` (L1): revoked at once; twice is harmless."""
+        args: dict[str, Any] = {"mandate_id": mandate_id}
+        if idempotency_key is not None:
+            args["idempotency_key"] = idempotency_key
+        return self.call_tool("payments.mandates.revoke", args)
+
+    def _spend(self, *, payee: str, currency: str, amount_minor: int, memo: str | None = None, mandate_id: str | None = None,
+               idempotency_key: str | None = None) -> PaymentOutcome:
+        """``payments.spend`` (L3): ``settled`` inside a mandate, else ``approval_required``. A retry with the same key never pays twice."""
+        args = self._spend_args(payee=payee, currency=currency, amount_minor=amount_minor, memo=memo, mandate_id=mandate_id, idempotency_key=idempotency_key)
+        return self._payment_outcome("payments.spend", self._tool("payments.spend", args), args["idempotency_key"])
+
+    def _connections_status(self) -> dict[str, Any]:
+        """``connections.list``: the principal's connected accounts and their state. Free."""
+        return self.call_tool("connections.list", {})
+
+    def _disconnect(self, service: str) -> dict[str, Any]:
+        """``connections.disconnect``: remove one connected account; reconnecting is the human's."""
+        return self.call_tool("connections.disconnect", {"service": service})
+
 
 class AsyncShogunAgent(_Core):
     """Asynchronous client (same surface; every call is awaited)."""
@@ -456,6 +620,8 @@ class AsyncShogunAgent(_Core):
         )
         self.actions = _Namespace(execute=self._execute, status=self._status, wait_for_approval=self._wait)
         self.router = _Namespace(discover=self._discover, inspect=self._inspect, run=self._run)
+        self.payments = _Namespace(list_mandates=self._list_mandates, request_mandate=self._request_mandate, revoke_mandate=self._revoke_mandate, spend=self._spend)
+        self.connections = _Namespace(status=self._connections_status, disconnect=self._disconnect)
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -557,4 +723,32 @@ class AsyncShogunAgent(_Core):
     async def accept_handoff(self, value: Any, *, as_agent: str | None = None, check_addressee: bool = True) -> dict[str, Any]:
         h, args, quantity = self._accept_plan(value, as_agent, check_addressee)
         return self._accepted(h, await self.call_tool("handoff.accept", args, quantity=quantity))
+
+    async def _list_mandates(self, *, mandate_id: str | None = None, limit: int | None = None) -> dict[str, Any]:
+        return self._mandate_list(await self.call_tool("payments.mandates.list", self._mandate_list_args(mandate_id, limit)))
+
+    async def _request_mandate(self, *, currency: str, max_per_payment_minor: int, total_cap_minor: int, purpose: str, payee: str | None = None,
+                               payee_class: str | None = None, expires_in_days: int | None = None, expires_at_ms: int | None = None,
+                               single_use: bool | None = None, mandate_id: str | None = None, idempotency_key: str | None = None) -> PaymentOutcome:
+        args = self._mandate_request_args(currency=currency, max_per_payment_minor=max_per_payment_minor, total_cap_minor=total_cap_minor, purpose=purpose,
+                                          payee=payee, payee_class=payee_class, expires_in_days=expires_in_days, expires_at_ms=expires_at_ms,
+                                          single_use=single_use, mandate_id=mandate_id, idempotency_key=idempotency_key)
+        return self._payment_outcome("payments.mandates.request", await self._tool("payments.mandates.request", args), args["idempotency_key"], mandate_id)
+
+    async def _revoke_mandate(self, mandate_id: str, *, idempotency_key: str | None = None) -> dict[str, Any]:
+        args: dict[str, Any] = {"mandate_id": mandate_id}
+        if idempotency_key is not None:
+            args["idempotency_key"] = idempotency_key
+        return await self.call_tool("payments.mandates.revoke", args)
+
+    async def _spend(self, *, payee: str, currency: str, amount_minor: int, memo: str | None = None, mandate_id: str | None = None,
+                     idempotency_key: str | None = None) -> PaymentOutcome:
+        args = self._spend_args(payee=payee, currency=currency, amount_minor=amount_minor, memo=memo, mandate_id=mandate_id, idempotency_key=idempotency_key)
+        return self._payment_outcome("payments.spend", await self._tool("payments.spend", args), args["idempotency_key"])
+
+    async def _connections_status(self) -> dict[str, Any]:
+        return await self.call_tool("connections.list", {})
+
+    async def _disconnect(self, service: str) -> dict[str, Any]:
+        return await self.call_tool("connections.disconnect", {"service": service})
 

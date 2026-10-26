@@ -57,6 +57,9 @@ Options: `budgetTokens` (default 2000), `threadKey`, `ingest: false`, `recall: f
 | `quote({ name, quantity })` | `POST /v1/quote` | free |
 | `handoff({ task, toAgent })` | `POST /v1/handoff`: a typed state-of-work object + its A2A data part (`docs/api/handoff.md`) | free |
 | `acceptHandoff(partOrMessage)` | `handoff.accept`: the core validates a received handoff and stores it in **your** `agent_scratch` namespace, never the user's world | per event |
+| `payments.mandates.list()` / `.request(terms)` / `.revoke(id)` | `payments.mandates.*` (`docs/api/payments.md`): a new or wider mandate answers `approval_required` with the URL for the human; the SDK never approves | free |
+| `payments.spend({ payee, currency, amountMinor })` | `payments.spend`: `settled` inside a mandate, else `approval_required`; key generated when absent, a retry never pays twice | rail fee (0 with the stub) |
+| `connections.status()` / `.disconnect(service)` | `connections.list` / `connections.disconnect` | free / model op |
 
 Errors are typed: `AuthenticationError` (401), `PaymentRequiredError` (402: `payment`, `paymentRequiredHeader`, `topUpUrl`, `shortfallMicroUsd`), `PermissionDeniedError` (403), `RateLimitError` (429, `retryAfter`), `ServiceUnavailableError` (5xx), `ToolError` (the tool refused), `TransportError`, `HandoffError`. Each carries `code` and `nextAction`; branch on those, not on `message`.
 

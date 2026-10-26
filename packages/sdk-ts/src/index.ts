@@ -6,7 +6,7 @@
  */
 export {
   HOSTED_BASE_URL, LOCAL_BASE_URL, MAX_INGEST_ITEMS, MCP_PROTOCOL_VERSION, SDK_VERSION, ShogunAgent, newIdempotencyKey,
-  type ActionOutcome, type ShogunAgentOptions, type WaitOptions,
+  type ActionOutcome, type MandateRequestOutcome, type PendingApproval, type ShogunAgentOptions, type SpendOutcome, type WaitOptions,
 } from "./client.js";
 export {
   AuthenticationError, HandoffError, PaymentRequiredError, PermissionDeniedError, RateLimitError, ServiceUnavailableError,

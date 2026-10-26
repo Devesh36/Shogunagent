@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "shogunagent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python client of ShogunAgent, the state layer for AI agents: recall, ingest, state reads, permission-tiered actions, the router, quotes and typed A2A handoffs, plus with_shogun_agent() middleware for the OpenAI Agents SDK, Claude Agent SDK, LangGraph and CrewAI."
 readme = "README.md"
 license = { text = "Apache-2.0" }
