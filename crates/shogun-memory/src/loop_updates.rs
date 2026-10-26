@@ -22,6 +22,20 @@
 //! phrases, a question / future / negation veto, the same thread, and at least two shared content
 //! words with the row (the artifact and the person), with a tie refused.
 //!
+//! E51 adds the passive voice ("the deck was handed to Oren", "has been rescheduled; the new date
+//! is Friday"), Japanese sentences around English names and dates ("the Q3 budgetはOren Valeさんへ
+//! 送付済みです", "the board memoの締切はSeptember 21に変更になりました"), and **outcomes posted on
+//! another thread** (a new email, another channel). A threaded outcome that names no row of its
+//! own thread may name a row of another thread, under a stricter rule than the thread's
+//! ([`pick_cross_thread`]): at least [`MIN_SHARED_WORDS_CROSS_THREAD`] shared content words and at
+//! least half of its own, among them a name (the counterparty or the project, written capitalised)
+//! and a word that is not a name (the artifact), and no other open row anywhere within two shared
+//! words of it. What it may then do is what an outcome on the row's own thread may do: close or
+//! re-date a local candidate, never lift it; leave a consolidator-owned row as it is, with the
+//! update unread for the consolidator. Screen text never takes this path (it has no thread, and an
+//! app-scoped source is refused even if it had one), and meeting text never leaves a lead for a
+//! consolidator-owned row, which the consolidator would never be shown.
+//!
 //! **Text without a thread** (screen capture, a note ingested with no `thread_key`) never changes
 //! a row here, local candidate or not ([`reconcile_unthreaded_event`]). Nothing says which row it
 //! is about; its time is when it was *seen*, not when it was said (an old "Sent …" scrolled into
@@ -51,6 +65,11 @@ pub const SCAN_BATCH: i64 = 5_000;
 pub const MIN_SHARED_WORDS: usize = 2;
 /// Content words an outcome in text without a thread must share with the one row it names.
 pub const MIN_SHARED_WORDS_UNTHREADED: usize = 3;
+/// Content words an outcome on another thread must share with the row it names (E51).
+pub const MIN_SHARED_WORDS_CROSS_THREAD: usize = 3;
+/// How many more shared words the row an outcome on another thread names must have than any other
+/// open row: closer than this, the sentence could be about either (E51).
+pub const CROSS_THREAD_MARGIN: usize = 2;
 /// The confidence below which a row is a local candidate the local path may change.
 pub const DASHBOARD_LINE: f64 = 0.5;
 
@@ -105,6 +124,58 @@ const REDATED: &[&str] = &[
     "postponed to ", "postponed until ", "rescheduled to ", "rescheduled for ", "delayed to ", "delayed until ",
     "deferred to ", "new deadline is ", "new due date is ",
 ];
+/// The passive of a resolution (E51): "the deck was handed to Oren", "the budget has been
+/// shared". An auxiliary from [`RESOLVED_PASSIVE_AUX`] directly before a participle from
+/// [`RESOLVED_PARTICIPLES`], as whole words.
+const RESOLVED_PASSIVE_AUX: &[&str] = &["was ", "were ", "has been ", "have been ", "had been ", "is now ", "got "];
+const RESOLVED_PARTICIPLES: &[&str] = &[
+    "sent", "shared", "forwarded", "handed", "given", "passed", "submitted", "approved", "completed", "finished",
+    "signed", "merged", "handled", "taken care of", "answered", "resolved", "decided", "uploaded", "published",
+    "filed", "paid", "delivered", "returned", "reviewed", "settled", "fixed", "emailed", "posted", "signed off",
+];
+/// The passive of a cancellation (E51): "the offsite has been called off", "the brief was
+/// shelved". "dropped off" is a delivery, not a cancellation, and is refused.
+const CANCELLED_PASSIVE: &[&str] = &[
+    "been dropped", "was dropped", "were dropped", "been scrapped", "was scrapped", "were scrapped",
+    "been shelved", "was shelved", "were shelved", "been withdrawn", "was withdrawn", "been abandoned",
+    "was abandoned", "been called off", "been cancelled", "been canceled",
+];
+/// Moves whose new date may come anywhere after the cue, not right behind it (E51): "the review
+/// has been rescheduled; the new date is Friday", "the deadline was extended to September 30".
+const REDATED_LOOSE: &[&str] = &[
+    "rescheduled", "postponed", "pushed back", "delayed", "deferred", "extended to", "extended until",
+    "extended till", "brought forward to", "moved up to", "moved forward to", "new date is", "new date:",
+    "new deadline", "new due date",
+];
+
+/// Japanese outcomes (E51). A re-date names the new date just before the cue ("Mondayに変更",
+/// "9月30日まで延期"); [`ja_redated_due`] reads it.
+const JA_REDATED: &[&str] = &[
+    "に変更", "へ変更", "に延期", "まで延期", "に延び", "まで延び", "に繰り下げ", "に繰り上げ", "に前倒し",
+    "にずれ", "にずらし", "にリスケ", "変更になりました", "延期になりました",
+];
+/// Called off. [`JA_CANCELLED_NEGATIVE`] says it with a negative ending, which vetoes the others.
+const JA_CANCELLED: &[&str] = &[
+    "中止", "キャンセル", "不要になりました", "必要なくなりました", "取りやめ", "取り止め", "見送り",
+    "なしになりました", "無しになりました", "白紙", "取り下げ",
+];
+const JA_CANCELLED_NEGATIVE: &[&str] = &["必要ありません", "要りません", "いりません", "不要です"];
+/// Done: sent, delivered, answered, decided, received.
+const JA_RESOLVED: &[&str] = &[
+    "送付済み", "送信済み", "提出済み", "共有済み", "対応済み", "返信済み", "完了しました", "完了です", "送りました",
+    "お送りしました", "送付しました", "送信しました", "提出しました", "共有しました", "対応しました",
+    "返信しました", "回答しました", "お渡ししました", "渡しました", "決定しました", "決まりました",
+    "承認しました", "承認されました", "マージしました", "マージされました", "届きました", "受け取りました",
+    "受領しました", "終わりました", "済みです", "済ませました", "送られてきました",
+];
+/// Not stated as having happened: a condition, a maybe, a question, a plan under review.
+const JA_NOT_STATED: &[&str] = &[
+    "もし", "たら", "なら", "れば", "かもしれ", "かも", "でしょうか", "ますか", "ましたか", "ですか", "検討",
+    "キャンセル待ち",
+];
+/// Not done: a negative, "not yet", a plan, or long ago.
+const JA_NOT_DONE: &[&str] = &["ません", "まだ", "予定", "先月", "去年", "昨年", "以前", "前回"];
+
 /// An outcome is stated, not planned, asked, denied or remembered from long ago.
 const NOT_DONE: &[&str] = &[
     "will ", "'ll ", "going to", " not ", "n't", "if ", "unless ", "still ", " yet", "should ", "need to",
@@ -124,6 +195,10 @@ const STOPWORDS: &[&str] = &[
     "dropping", "decided", "decide", "settled", "settle", "whether", "ships", "ship", "goes", "out", "back",
     "please", "hi", "hello", "hey", "best", "cheers", "user", "promise", "sure", "it'll", "i'll", "i'm",
     "is", "it", "to", "of", "on", "in", "by", "be", "me", "my", "we", "us", "or", "an", "a", "i",
+    // E51: the passive's and the re-date's own words.
+    "shared", "handed", "given", "passed", "submitted", "approved", "completed", "finished", "delivered",
+    "received", "rescheduled", "postponed", "delayed", "deferred", "extended", "cancelled", "canceled",
+    "called", "off", "went", "new", "date", "deadline",
     "today", "tomorrow", "tonight", "week", "next", "monday", "tuesday", "wednesday", "thursday", "friday",
     "saturday", "sunday", "january", "february", "march", "april", "may", "june", "july", "august",
     "september", "october", "november", "december",
@@ -165,12 +240,118 @@ fn any_in(haystack: &str, cues: &[&str]) -> bool {
 }
 
 /// The new due instant a re-date sentence names, read against when it was said: the words after
-/// the cue, read as a deadline ("moves to Thursday" → "by Thursday").
+/// the cue, read as a deadline ("moves to Thursday" → "by Thursday"); for a loose cue
+/// ([`REDATED_LOOSE`]) the first date anywhere after it ("rescheduled; the new date is Friday").
 pub fn redated_due(lower: &str, said_at_ms: i64) -> Option<i64> {
-    REDATED.iter().find_map(|cue| {
-        let at = lower.find(cue)? + cue.len();
-        crate::due::due_at(&format!("by {}", &lower[at..]), said_at_ms)
+    REDATED
+        .iter()
+        .find_map(|cue| {
+            let at = lower.find(cue)? + cue.len();
+            crate::due::due_at(&format!("by {}", &lower[at..]), said_at_ms)
+        })
+        .or_else(|| {
+            REDATED_LOOSE.iter().find_map(|cue| {
+                let at = lower.find(cue)? + cue.len();
+                first_date_after(&lower[at..], said_at_ms)
+            })
+        })
+}
+
+/// The first date in `rest`, read as a deadline from each word on ("the new date is friday" →
+/// "by friday").
+fn first_date_after(rest: &str, said_at_ms: i64) -> Option<i64> {
+    let starts = rest.char_indices().filter(|&(i, c)| {
+        c.is_alphanumeric() && rest[..i].chars().next_back().map_or(true, |p| !p.is_alphanumeric())
+    });
+    for (i, _) in starts {
+        if let Some(due) = crate::due::due_at(&format!("by {}", &rest[i..]), said_at_ms) {
+            return Some(due);
+        }
+    }
+    None
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32, 0x3040..=0x30FF | 0x4E00..=0x9FFF | 0xFF66..=0xFF9F)
+}
+
+/// Whether `lower` holds an auxiliary + participle of a resolution as whole words.
+fn passive_resolved(lower: &str) -> bool {
+    RESOLVED_PASSIVE_AUX.iter().any(|aux| {
+        RESOLVED_PARTICIPLES.iter().any(|pp| {
+            let phrase = format!("{aux}{pp}");
+            lower.match_indices(&phrase).any(|(at, _)| {
+                let before = lower[..at].chars().next_back().map_or(true, |c| !c.is_alphanumeric());
+                let after = lower[at + phrase.len()..].chars().next().map_or(true, |c| !c.is_alphanumeric());
+                before && after
+            })
+        })
     })
+}
+
+/// The passive of a cancellation, "dropped off" (a delivery) refused.
+fn passive_cancelled(lower: &str) -> bool {
+    CANCELLED_PASSIVE.iter().any(|cue| {
+        lower.match_indices(cue).any(|(at, _)| !lower[at + cue.len()..].starts_with(" off"))
+    })
+}
+
+/// The new due instant a Japanese re-date names next to its cue at byte `cue_at`: the nearest date
+/// before the cue (after a "から", the old date's end), else the first one after it.
+fn ja_redated_due(lower: &str, cue_at: usize, cue_len: usize, said_at_ms: i64) -> Option<i64> {
+    let before = &lower[..cue_at];
+    let before = before.rfind("から").map_or(before, |i| &before[i + "から".len()..]);
+    // The shortest suffix that holds a date is the date nearest the cue; a suffix starts at a word
+    // boundary so "21" is not read out of "september 21".
+    let mut found = None;
+    for (i, _) in before.char_indices().rev().take(80) {
+        let boundary = before[..i]
+            .chars()
+            .next_back()
+            .map_or(true, |p| !(p.is_ascii_alphanumeric() || p == '/' || p == '-'));
+        if !boundary {
+            continue;
+        }
+        if let Some(due) = crate::due::due_at(&format!("{}までに", &before[i..]), said_at_ms) {
+            found = Some((i, due));
+            break;
+        }
+    }
+    if let Some((i, due)) = found {
+        // "来週の金曜に変更": the week word before the shortest date belongs to it.
+        let head = &before[..i];
+        for week in ["来週の", "来週"] {
+            if head.ends_with(week) {
+                let start = i - week.len();
+                return crate::due::due_at(&format!("{}までに", &before[start..]), said_at_ms).or(Some(due));
+            }
+        }
+        return Some(due);
+    }
+    let after = &lower[cue_at + cue_len..];
+    first_date_after(after, said_at_ms)
+}
+
+/// The outcome a Japanese sentence states (E51), if any.
+fn detect_ja(span: &str, said_at_ms: i64) -> Option<Outcome<'_>> {
+    let lower = span.to_lowercase();
+    if any_in(&lower, JA_NOT_STATED) {
+        return None;
+    }
+    if let Some((at, cue)) = JA_REDATED.iter().find_map(|cue| lower.find(cue).map(|at| (at, *cue))) {
+        if lower.contains("ません") {
+            return None;
+        }
+        let due = ja_redated_due(&lower, at, cue.len(), said_at_ms)?;
+        return Some(Outcome { kind: UpdateKind::Redated, quote: span, due_at: Some(due) });
+    }
+    if any_in(&lower, JA_CANCELLED_NEGATIVE) || (any_in(&lower, JA_CANCELLED) && !lower.contains("ません")) {
+        return Some(Outcome { kind: UpdateKind::Cancelled, quote: span, due_at: None });
+    }
+    if any_in(&lower, JA_RESOLVED) && !any_in(&lower, JA_NOT_DONE) && !any_in(&format!(" {lower}"), NOT_DONE) {
+        return Some(Outcome { kind: UpdateKind::Resolved, quote: span, due_at: None });
+    }
+    None
 }
 
 /// The outcome sentences of `text` (English), said at `said_at_ms`. A question, a plan, a
@@ -181,36 +362,90 @@ pub fn detect(text: &str, said_at_ms: i64) -> Vec<Outcome<'_>> {
         if question {
             continue;
         }
+        if span.chars().any(is_cjk) {
+            if let Some(outcome) = detect_ja(span, said_at_ms) {
+                out.push(outcome);
+                continue;
+            }
+        }
         let lower = format!(" {}", span.to_lowercase());
         let (bare, body) = bodies(lower.trim_start());
         let stated = !any_in(&lower, NOT_STATED);
-        if stated && any_in(&lower, REDATED) {
+        if stated && (any_in(&lower, REDATED) || any_in(&lower, REDATED_LOOSE)) {
             if let Some(due) = redated_due(&lower, said_at_ms) {
                 out.push(Outcome { kind: UpdateKind::Redated, quote: span, due_at: Some(due) });
             }
             continue;
         }
-        if stated && any_in(&lower, CANCELLED) {
+        if stated && (any_in(&lower, CANCELLED) || passive_cancelled(&lower)) {
             out.push(Outcome { kind: UpdateKind::Cancelled, quote: span, due_at: None });
             continue;
         }
         let opener = |s: &str| RESOLVED_OPENERS.iter().any(|o| s.starts_with(o));
-        if !any_in(&lower, NOT_DONE) && (opener(bare) || opener(body) || any_in(&lower, RESOLVED_ANYWHERE)) {
+        if !any_in(&lower, NOT_DONE)
+            && (opener(bare) || opener(body) || any_in(&lower, RESOLVED_ANYWHERE) || passive_resolved(&lower))
+        {
             out.push(Outcome { kind: UpdateKind::Resolved, quote: span, due_at: None });
         }
     }
     out
 }
 
+/// The word tokens of `text`, as exact slices: runs of alphanumerics and apostrophes, also split
+/// where Latin script meets Japanese ("budgetはfridayまでにoren" is budget / は / friday / までに /
+/// oren), so an English name or artifact inside a Japanese sentence is a word of its own (E51).
+fn tokens(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start: Option<(usize, bool)> = None;
+    for (i, c) in text.char_indices() {
+        let word = c.is_alphanumeric() || c == '\'';
+        let cjk = is_cjk(c);
+        match start {
+            Some((s, script)) if !word || script != cjk => {
+                out.push(&text[s..i]);
+                start = word.then_some((i, cjk));
+            }
+            None if word => start = Some((i, cjk)),
+            _ => {}
+        }
+    }
+    if let Some((s, _)) = start {
+        out.push(&text[s..]);
+    }
+    out
+}
+
 /// The content words of `text`: lower-cased alphanumeric tokens of three or more characters (two
-/// when they hold a digit, "q3"), stop words and date words removed.
+/// when they hold a digit, "q3"), stop words and date words removed. Japanese runs are left out:
+/// particles and verb endings say nothing about which item a sentence is about, and the names and
+/// artifacts in a Japanese sentence about an English-named item are written in Latin script.
 pub fn content_words(text: &str) -> HashSet<String> {
-    text.to_lowercase()
-        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+    tokens(text)
+        .into_iter()
         .map(|w| w.trim_matches('\''))
+        .filter(|w| !w.chars().any(is_cjk))
+        .map(str::to_lowercase)
         .filter(|w| w.chars().count() >= 3 || (w.chars().count() == 2 && w.chars().any(|c| c.is_ascii_digit())))
-        .filter(|w| !STOPWORDS.contains(w))
-        .map(str::to_string)
+        // A bare one- or two-digit number is a day of a date ("September 21"), not an item's name.
+        .filter(|w| !(w.len() <= 2 && w.chars().all(|c| c.is_ascii_digit())))
+        .filter(|w| !STOPWORDS.contains(&w.as_str()))
+        .collect()
+}
+
+/// The content words of `text` written as names: capitalised, and not the first word of the text
+/// or of a speaker label's line ("Oren Vale: sent it" → vale … but Oren as the label is the
+/// speaker, not the subject; "Sent the deck to Oren" → oren).
+fn name_words(text: &str) -> HashSet<String> {
+    let body = text.split_once(": ").map_or(text, |(label, rest)| {
+        if label.split_whitespace().count() <= 3 { rest } else { text }
+    });
+    let content = content_words(body);
+    tokens(body)
+        .into_iter()
+        .skip(1)
+        .filter(|w| w.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
+        .map(|w| w.trim_matches('\'').to_lowercase())
+        .filter(|w| content.contains(w))
         .collect()
 }
 
@@ -295,6 +530,45 @@ fn pick<'t>(targets: &'t [Target], outcome: &Outcome<'_>) -> Option<&'t Target> 
     best.map(|(t, _)| t)
 }
 
+/// The one open row anywhere an outcome posted on another thread names (E51): at least
+/// [`MIN_SHARED_WORDS_CROSS_THREAD`] shared content words and at least half of the outcome's own;
+/// among them a name (capitalised in the row or the outcome: the counterparty or the project) and
+/// a word that is not one (the artifact); and every other open row at least
+/// [`CROSS_THREAD_MARGIN`] shared words behind it. A re-date names commitments only, and a hedged
+/// sentence or a retracted offer names nothing.
+fn pick_cross_thread<'t>(targets: &'t [Target], outcome: &Outcome<'_>) -> Option<&'t Target> {
+    // A retracted offer ("Scratch my offer on the schedule for Tamsin") withdraws the offer it
+    // states itself; on another thread it is no evidence about an earlier promise.
+    if crate::extract::hedged_or_retracted(outcome.quote) {
+        return None;
+    }
+    let words = content_words(outcome.quote);
+    if words.len() < MIN_SHARED_WORDS_CROSS_THREAD {
+        return None;
+    }
+    let mut scored = targets
+        .iter()
+        .filter(|t| outcome.kind != UpdateKind::Redated || t.table == StateTable::Commitments)
+        .map(|t| {
+            let shared: HashSet<String> = content_words(&t.description).intersection(&words).cloned().collect();
+            (t, shared)
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by_key(|(_, shared)| std::cmp::Reverse(shared.len()));
+    let (target, shared) = scored.first()?;
+    let runner_up = scored.get(1).map_or(0, |(_, s)| s.len());
+    if shared.len() < MIN_SHARED_WORDS_CROSS_THREAD
+        || 2 * shared.len() < words.len()
+        || shared.len() < runner_up + CROSS_THREAD_MARGIN
+    {
+        return None;
+    }
+    let names: HashSet<String> = name_words(outcome.quote).union(&name_words(&target.description)).cloned().collect();
+    let named = shared.iter().any(|w| names.contains(w));
+    let artifact = shared.iter().any(|w| !names.contains(w));
+    (named && artifact).then_some(*target)
+}
+
 /// What one pass did, counts only.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Reconciled {
@@ -373,12 +647,15 @@ fn record(conn: &Connection, target: &Target, event_id: i64, outcome: &Outcome<'
 /// Read the outcomes of one event (its content, time and thread) and record / apply them.
 pub fn reconcile_event(conn: &Connection, event_id: i64, now: i64) -> Result<Reconciled, rusqlite::Error> {
     let mut done = Reconciled { scanned: 1, ..Reconciled::default() };
-    let row: Option<(String, i64, Option<String>)> = conn
-        .query_row("SELECT content, ts, thread_key FROM event_log WHERE id = ?1", [event_id], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+    let row: Option<(String, i64, Option<String>, String)> = conn
+        .query_row("SELECT content, ts, thread_key, source FROM event_log WHERE id = ?1", [event_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })
         .optional()?;
-    let Some((content, ts, thread)) = row else { return Ok(done) };
+    let Some((content, ts, thread, source)) = row else { return Ok(done) };
+    // Screen text never names a row of another thread, whatever thread it was filed under.
+    let cross_thread_allowed = !crate::event_log::APP_SCOPED_SOURCES.contains(&source.as_str());
+    let batch_visible = !crate::event_log::BATCH_EXCLUDED_SOURCES.contains(&source.as_str());
     let Some(thread) = thread else { return reconcile_unthreaded_event(conn, event_id, &content, ts, now) };
     let outcomes = detect(&content, ts);
     if outcomes.is_empty() {
@@ -387,7 +664,20 @@ pub fn reconcile_event(conn: &Connection, event_id: i64, now: i64) -> Result<Rec
     for outcome in &outcomes {
         // Re-read per outcome: an earlier outcome of this event may have closed a row.
         let targets = thread_targets(conn, &thread, event_id, ts)?;
-        let Some(target) = pick(&targets, outcome) else { continue };
+        let target = match pick(&targets, outcome) {
+            Some(target) => target.clone(),
+            None if cross_thread_allowed => {
+                // E51: an outcome posted on another thread, under the stricter rule.
+                let everywhere = self::targets(conn, None, event_id, ts)?;
+                match pick_cross_thread(&everywhere, outcome) {
+                    // A lead for the consolidator must be text it is shown.
+                    Some(target) if target.local || batch_visible => target.clone(),
+                    _ => continue,
+                }
+            }
+            None => continue,
+        };
+        let target = &target;
         let (recorded, applied) = record(conn, target, event_id, outcome, now)?;
         done.recorded += usize::from(recorded);
         if applied {
@@ -672,6 +962,9 @@ mod tests {
         assert_eq!(updates, 3);
     }
 
+    /// E51: before the cross-thread rule this test was "another thread changes nothing"; the
+    /// outcome on t9 below is now refused because three open rows fit it equally (c, a and b), not
+    /// because it is on another thread ([`an_outcome_on_another_thread_closes_the_one_row_it_clearly_names`]).
     #[test]
     fn another_thread_an_unrelated_sentence_or_a_tie_changes_nothing() {
         let mut conn = crate::open_in_memory().unwrap();
@@ -783,6 +1076,236 @@ mod tests {
         event(&conn, 9, MON + 6 * HOUR, None, "Sent the board stuff to Priya Nand.");
         let out = reconcile(&mut conn, MON + 7 * HOUR).unwrap();
         assert_eq!(out.recorded, 0, "{out:?}");
+    }
+
+    fn days(due: Option<i64>) -> Option<(u32, u32)> {
+        due.map(|ms| {
+            let d = crate::due::civil_from_days(ms.div_euclid(86_400_000));
+            (d.month, d.day)
+        })
+    }
+
+    /// E51: passive resolutions, cancellations and moves.
+    #[test]
+    fn passive_outcomes_are_read() {
+        for text in [
+            "The Q3 budget was handed to Oren Vale this morning.",
+            "The vendor contract has been signed by Kenji Arai.",
+            "The design spec review was submitted to Sven Morrow.",
+            "The pricing deck got approved by Priya Nand.",
+            "The onboarding guide has been taken care of for Felix Dorn.",
+        ] {
+            assert_eq!(kinds(text), vec![(UpdateKind::Resolved, text.trim_end_matches('.'))], "{text}");
+        }
+        for text in [
+            "The offsite with Amara Quist has been called off.",
+            "The partner brief was shelved after the reorg.",
+            "The training schedule for Felix has been dropped.",
+        ] {
+            assert_eq!(kinds(text)[0].0, UpdateKind::Cancelled, "{text}");
+        }
+        // Monday 2026-09-07: Thursday is 09-10.
+        let moved = detect("The design review with Sven has been rescheduled; the new date is Thursday.", MON);
+        assert_eq!((moved[0].kind, days(moved[0].due_at)), (UpdateKind::Redated, Some((9, 10))));
+        let moved = detect("The deadline for the board memo was extended to September 21.", MON);
+        assert_eq!((moved[0].kind, days(moved[0].due_at)), (UpdateKind::Redated, Some((9, 21))));
+        let moved = detect("The launch checklist was postponed, it is now planned for Friday.", MON);
+        assert_eq!((moved[0].kind, days(moved[0].due_at)), (UpdateKind::Redated, Some((9, 11))));
+    }
+
+    #[test]
+    fn passive_plans_denials_questions_and_deliveries_are_not_outcomes() {
+        for text in [
+            "The budget will be shared with Oren on Friday.",
+            "The contract has not been signed yet.",
+            "The contract hasn't been sent.",
+            "Was the deck sent to Oren?",
+            "If the memo is rescheduled to Friday, tell me.",
+            "The review may be postponed to Friday.",
+            "The launch was postponed until further notice.",
+            "The deck was dropped off at reception.",
+            "The report was sentenced to another review cycle.",
+        ] {
+            assert!(kinds(text).is_empty(), "{text}: {:?}", kinds(text));
+        }
+    }
+
+    /// E51: Japanese sentences around English names and dates.
+    #[test]
+    fn japanese_outcomes_are_read_with_their_exact_span() {
+        for text in [
+            "the Q3 budgetはOren Valeさんへ送付済みです",
+            "Kenjiさんからvendor contractが届きました",
+            "design specのレビューを返信しました",
+            "pricing deckはPriyaさんにお渡ししました",
+        ] {
+            assert_eq!(kinds(text), vec![(UpdateKind::Resolved, text)], "{text}");
+        }
+        for text in ["the offsite planは中止になりました", "pricing deckはもう必要ありません", "partner briefは見送りになりました"] {
+            assert_eq!(kinds(text), vec![(UpdateKind::Cancelled, text)], "{text}");
+        }
+        let moved = detect("the board memoの締切はSeptember 21に変更になりました。", MON);
+        assert_eq!(moved[0].quote, "the board memoの締切はSeptember 21に変更になりました");
+        assert_eq!((moved[0].kind, days(moved[0].due_at)), (UpdateKind::Redated, Some((9, 21))));
+        // From the old date to the new: the date next to the cue is the new one.
+        let moved = detect("design reviewは金曜日から9月14日に延期になりました", MON);
+        assert_eq!((moved[0].kind, days(moved[0].due_at)), (UpdateKind::Redated, Some((9, 14))));
+        let moved = detect("launch checklistの期限はFridayからThursdayに変更です", MON);
+        assert_eq!((moved[0].kind, days(moved[0].due_at)), (UpdateKind::Redated, Some((9, 10))));
+        let moved = detect("Heronの定例は来週の金曜に変更になりました", MON);
+        assert_eq!((moved[0].kind, days(moved[0].due_at)), (UpdateKind::Redated, Some((9, 18))));
+    }
+
+    #[test]
+    fn japanese_plans_denials_questions_and_maybes_are_not_outcomes() {
+        for text in [
+            "the Q3 budgetはまだ送っていません",
+            "予算が通ったらOrenさんに送付済みにします",
+            "the offsiteは中止になるかもしれません",
+            "the board memoは来週送付予定です",
+            "締切は変更になりましたか",
+            "キャンセル待ちです",
+            "会議の日程が変更になりました",
+            "先月vendor contractを送りました",
+            "中止はしません",
+        ] {
+            assert!(kinds(text).is_empty(), "{text}: {:?}", kinds(text));
+        }
+    }
+
+    #[test]
+    fn content_words_split_latin_from_japanese() {
+        let words = content_words("the Q3 budgetはFridayまでにOren Valeさんへお送りします");
+        let mut sorted: Vec<_> = words.into_iter().collect();
+        sorted.sort();
+        assert_eq!(sorted, vec!["budget", "oren", "q3", "vale"]);
+        let names = name_words("Sent the Q3 budget to Oren Vale.");
+        assert!(names.contains("oren") && names.contains("vale") && names.contains("q3"), "{names:?}");
+        assert!(!name_words("Oren Vale: sent the deck").contains("oren"), "the speaker label is not the subject");
+    }
+
+    fn open_loop(conn: &mut Connection, ev: i64, text: &str, confidence: f64) -> i64 {
+        insert_open_loop_with_quote(
+            conn,
+            &NewOpenLoop { kind: OpenLoopKind::WaitingOnThem, description: text, counterparty_id: None, project_id: None, opened_at: MON, confidence, now: MON },
+            &[Provenance::new(ev)],
+            Some(text),
+        )
+        .unwrap()
+    }
+
+    /// E51: an outcome posted on another thread closes or re-dates the one local candidate it
+    /// clearly names, never lifting it, and leaves a consolidator-owned row to the consolidator.
+    #[test]
+    fn an_outcome_on_another_thread_closes_the_one_row_it_clearly_names() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let said = "I'll send the Q3 budget to Oren Vale by Friday.";
+        let e1 = event(&conn, 1, MON, Some("mail-1"), said);
+        let c = commitment(&mut conn, e1, said, crate::due::due_at(said, MON), 0.35);
+        let memo = "I'll send the board memo to Priya Nand by Friday.";
+        let e2 = event(&conn, 2, MON, Some("mail-2"), memo);
+        let m = commitment(&mut conn, e2, memo, crate::due::due_at(memo, MON), 0.35);
+        let waiting = "Waiting on Kenji Arai for the signed vendor contract.";
+        let e3 = event(&conn, 3, MON, Some("chat-1"), waiting);
+        let l = open_loop(&mut conn, e3, waiting, 0.35);
+        let reviewed_said = "I'll send the pricing deck to Dana Okafor by Friday.";
+        let e4 = event(&conn, 4, MON, Some("mail-3"), reviewed_said);
+        let reviewed = commitment(&mut conn, e4, reviewed_said, None, 0.9);
+
+        let e5 = event(&conn, 5, MON + HOUR, Some("mail-9"), "Hi all,\nThe Q3 budget was handed to Oren Vale this morning.\nThanks");
+        event(&conn, 6, MON + HOUR, Some("chat-7"), "the board memoのPriya Nandさんへの締切はSeptember 21に変更になりました");
+        // Without the counterparty the same move names no row: two content words, no name.
+        event(&conn, 9, MON + HOUR, Some("chat-9"), "the board memoの締切はSeptember 22に変更になりました");
+        event(&conn, 7, MON + HOUR, Some("chat-8"), "Kenji Arai sent the signed vendor contract over.");
+        event(&conn, 8, MON + HOUR, Some("mail-10"), "The pricing deck has been shared with Dana Okafor.");
+        let out = reconcile(&mut conn, MON + 2 * HOUR).unwrap();
+        assert_eq!((out.recorded, out.closed, out.redated), (4, 2, 1), "{out:?}");
+        assert_eq!(status(&conn, "commitments", c), ("done".into(), 0.35, crate::due::due_at(said, MON)));
+        let (st, conf, due) = status(&conn, "commitments", m);
+        assert_eq!((st.as_str(), conf, days(due)), ("open", 0.35, Some((9, 21))));
+        assert_eq!(status(&conn, "open_loops", l).0, "closed");
+        let (st, conf, _) = status(&conn, "commitments", reviewed);
+        assert_eq!((st.as_str(), conf), ("open", 0.9), "the consolidator's row is left to it");
+        assert_eq!(unread(&conn).len(), 1);
+        let quote: String = conn
+            .query_row(
+                "SELECT quote FROM state_provenance WHERE state_table = 'commitments' AND state_id = ?1 AND event_id = ?2",
+                params![c, e5],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(quote, "The Q3 budget was handed to Oren Vale this morning");
+    }
+
+    /// E51 distractors: on another thread, an outcome that only shares a name, only shares the
+    /// artifact, fits two rows nearly as well, or is screen or meeting text changes nothing.
+    #[test]
+    fn an_outcome_on_another_thread_that_is_ambiguous_or_thin_changes_nothing() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let budget = "I'll send the Q3 budget to Oren Vale by Friday.";
+        let e1 = event(&conn, 1, MON, Some("mail-1"), budget);
+        let b = commitment(&mut conn, e1, budget, None, 0.35);
+        let forecast = "I'll send the Q3 forecast to Oren Vale by Monday.";
+        let e2 = event(&conn, 2, MON, Some("mail-2"), forecast);
+        let f = commitment(&mut conn, e2, forecast, None, 0.35);
+        let unnamed = "i'll send the hiring scorecard draft numbers soon.";
+        let e3 = event(&conn, 3, MON, Some("mail-3"), unnamed);
+        let u = commitment(&mut conn, e3, unnamed, None, 0.35);
+        let reviewed_said = "I'll send the board memo to Priya Nand by Friday.";
+        let e4 = event(&conn, 4, MON, Some("mail-4"), reviewed_said);
+        let reviewed = commitment(&mut conn, e4, reviewed_said, None, 0.9);
+        let brief = "I'll send the partner brief to Amara Quist by Friday.";
+        let e11 = event(&conn, 11, MON, Some("mail-5"), brief);
+        let p = commitment(&mut conn, e11, brief, None, 0.35);
+
+        // Fits the budget row and the forecast row by four words each: no margin.
+        event(&conn, 5, MON + HOUR, Some("chat-1"), "Sent the Q3 budget forecast to Oren Vale.");
+        // Only the counterparty.
+        event(&conn, 6, MON + HOUR, Some("chat-2"), "Sent everything to Oren Vale.");
+        // Only the artifact, no name.
+        event(&conn, 7, MON + HOUR, Some("chat-3"), "sent the hiring scorecard draft numbers.");
+        // A retracted offer of its own, about the same artifact and person.
+        event(&conn, 10, MON + HOUR, Some("chat-4"), "Scratch my offer on the partner brief for Amara Quist, someone else has it.");
+        // Screen text filed under a thread, and meeting text for the consolidator's row.
+        crate::event_log::insert(
+            &conn,
+            &crate::event_log::NewEvent {
+                ts: MON + HOUR,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: Some("com.apple.mail"),
+                window_title: Some("Mail"),
+                content: "Sent the Q3 budget to Oren Vale.",
+                content_hash: "s1",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+        conn.execute("UPDATE event_log SET thread_key = 'mail-77' WHERE content_hash = 's1'", []).unwrap();
+        let meeting = crate::event_log::insert(
+            &conn,
+            &crate::event_log::NewEvent {
+                ts: MON + HOUR,
+                source: "meeting",
+                kind: "transcript",
+                app_bundle_id: None,
+                window_title: None,
+                content: "The board memo was handed to Priya Nand.",
+                content_hash: "m1",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+        conn.execute("UPDATE event_log SET thread_key = 'meet-1' WHERE id = ?1", [meeting]).unwrap();
+        let out = reconcile(&mut conn, MON + 2 * HOUR).unwrap();
+        assert_eq!((out.recorded, out.closed, out.redated), (0, 0, 0), "{out:?}");
+        for id in [b, f, u, reviewed, p] {
+            assert_eq!(status(&conn, "commitments", id).0, "open");
+        }
     }
 
     /// Meeting text never reaches the Batch lane, so it leaves no lead for the consolidator.

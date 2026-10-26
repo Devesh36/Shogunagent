@@ -690,7 +690,8 @@ pub fn search_federated(
     if options.prefer_latest || query_asks_for_latest(query) {
         apply_latest_ordering(&mut candidates);
     }
-    let relevance = relevance_floor(&concepts, &concept_weights, &candidates, options, limit);
+    let (relevance, clearing) =
+        relevance_floor(&concepts, &concept_weights, &candidates, options, limit);
     if !relevance.passed && options.abstain_below_floor {
         return Ok(FederatedSearchResult {
             hits: Vec::new(),
@@ -700,6 +701,21 @@ pub fn search_federated(
             cold: cold.stats,
             elapsed_micros: elapsed_micros(started),
         });
+    }
+    // E51: the verdict passing says some candidate is evidence, not that every one is. A caller
+    // that abstains below the floor reads every returned row as evidence, so each row must clear
+    // the floor on its own: a row that only shares the project name does not ride along with an
+    // unrelated row that passes. A cluster (rows of one session) stays when any member clears
+    // it, since its members are the same evidence seen through different lanes.
+    if options.abstain_below_floor {
+        if let Some(clearing) = clearing {
+            let kept_clusters = candidates
+                .values()
+                .filter(|candidate| clearing.contains(&candidate.key))
+                .map(Candidate::cluster_key)
+                .collect::<BTreeSet<_>>();
+            candidates.retain(|_, candidate| kept_clusters.contains(&candidate.cluster_key()));
+        }
     }
 
     let mut raw_event_ranks = candidates
@@ -892,15 +908,20 @@ fn apply_latest_ordering(candidates: &mut BTreeMap<CandidateKey, Candidate>) {
 ///
 /// A candidate passes when it covers more than half of the question's weight, or exactly half
 /// while missing a single unit (one of two words found is a plausible answer; two of four is a
-/// question more specific than the row). The candidates considered are the `limit` best by score
-/// among those the source constraint accepts; the floor passes if any of them does.
+/// question more specific than the row). The verdict considers the `limit` best by score among
+/// those the source constraint accepts and passes if any of them does.
+///
+/// The second value is every accepted candidate that clears the floor on its own (E51), judged
+/// with the same rule over all of them, not only the `limit` best, so a passing row below a
+/// failing one can take its place; `None` when the floor does not apply (no content words). A
+/// caller that abstains returns only these ([`FederatedSearchOptions::abstain_below_floor`]).
 fn relevance_floor(
     concepts: &[Concept],
     weights: &[ConceptWeight],
     candidates: &BTreeMap<CandidateKey, Candidate>,
     options: &FederatedSearchOptions,
     limit: usize,
-) -> RelevanceFloor {
+) -> (RelevanceFloor, Option<BTreeSet<CandidateKey>>) {
     let is_cue = |concept: &Concept| {
         super::query::is_source_cue(&concept.display) || is_meeting_cue(concept)
     };
@@ -908,7 +929,7 @@ fn relevance_floor(
         .filter(|&index| !is_cue(&concepts[index]))
         .collect::<Vec<_>>();
     if content.is_empty() {
-        return RelevanceFloor::not_applicable();
+        return (RelevanceFloor::not_applicable(), None);
     }
     let weighted = weights.len() == concepts.len();
     let present_idf = content
@@ -968,12 +989,15 @@ fn relevance_floor(
         })
         .collect::<Vec<_>>();
     if considered.is_empty() {
-        return RelevanceFloor {
-            passed: false,
-            reason: RelevanceFloorReason::NoCandidates,
-            coverage: None,
-            threshold: RELEVANCE_FLOOR_COVERAGE,
-        };
+        return (
+            RelevanceFloor {
+                passed: false,
+                reason: RelevanceFloorReason::NoCandidates,
+                coverage: None,
+                threshold: RELEVANCE_FLOOR_COVERAGE,
+            },
+            Some(BTreeSet::new()),
+        );
     }
     considered.sort_by(|left, right| right.score.total_cmp(&left.score));
 
@@ -986,13 +1010,10 @@ fn relevance_floor(
             .map(weight_of)
             .sum::<f64>()
     };
-    let mut best_coverage = 0.0_f64;
-    let mut passed = false;
-    for candidate in considered.iter().take(limit.max(1)) {
+    // One candidate's verdict: does it clear the floor, and the best coverage it reached.
+    let judge = |candidate: &Candidate| -> (bool, f64) {
         if candidate.ranks.semantic() {
-            best_coverage = 1.0;
-            passed = true;
-            break;
+            return (true, 1.0);
         }
         // A unit matches when its concept does, or when the candidate holds that gram (a
         // compound the row splits differently: 招聘会议 against 招聘…的会议).
@@ -1012,10 +1033,12 @@ fn relevance_floor(
             .collect::<Vec<_>>();
         // A mixed-script question needs some of its CJK content in the row, not only its name.
         if mixed && !cjk_units.iter().any(|&unit| unit_hits[unit]) {
-            continue;
+            return (false, 0.0);
         }
         let cues = matched_cue_weight(candidate);
-        for scope in &scopes {
+        let mut best = 0.0_f64;
+        let mut clears = false;
+        for (scope_index, scope) in scopes.iter().enumerate() {
             let total = scope.iter().map(|&unit| weight_of(units[unit].concept)).sum::<f64>();
             if total <= 0.0 {
                 continue;
@@ -1027,27 +1050,48 @@ fn relevance_floor(
                 .sum::<f64>();
             let unmatched = scope.iter().filter(|&&unit| !unit_hits[unit]).count();
             let coverage = ((matched + cues) / total).clamp(0.0, 1.0);
-            best_coverage = best_coverage.max(coverage);
+            best = best.max(coverage);
+            // The tie (exactly half, one unit missing) is allowed on the whole question only.
+            // The CJK part on its own is judged without the name the question is about, so half
+            // of it ("休暇" of 休暇 + 中止) is a row about the same topic for some other project:
+            // it must cover more than half.
+            let tie_allowed = scope_index == 0;
             if coverage > RELEVANCE_FLOOR_COVERAGE + 1e-9
-                || (coverage + 1e-9 >= RELEVANCE_FLOOR_COVERAGE && unmatched <= 1)
+                || (tie_allowed && coverage + 1e-9 >= RELEVANCE_FLOOR_COVERAGE && unmatched <= 1)
             {
-                passed = true;
+                clears = true;
             }
         }
-        if passed {
-            break;
+        (clears, best)
+    };
+    let mut best_coverage = 0.0_f64;
+    let mut passed = false;
+    let mut clearing = BTreeSet::new();
+    for (position, candidate) in considered.iter().enumerate() {
+        let (clears, coverage) = judge(candidate);
+        if clears {
+            clearing.insert(candidate.key.clone());
+        }
+        // The verdict (and the coverage it reports) reads only the `limit` best, and stops at
+        // the first that passes, as it always has.
+        if position < limit.max(1) && !passed {
+            best_coverage = best_coverage.max(coverage);
+            passed = clears;
         }
     }
-    RelevanceFloor {
-        passed,
-        reason: if passed {
-            RelevanceFloorReason::Passed
-        } else {
-            RelevanceFloorReason::BelowFloor
+    (
+        RelevanceFloor {
+            passed,
+            reason: if passed {
+                RelevanceFloorReason::Passed
+            } else {
+                RelevanceFloorReason::BelowFloor
+            },
+            coverage: Some(best_coverage),
+            threshold: RELEVANCE_FLOOR_COVERAGE,
         },
-        coverage: Some(best_coverage),
-        threshold: RELEVANCE_FLOOR_COVERAGE,
-    }
+        Some(clearing),
+    )
 }
 
 /// One unit of a question's content as [`relevance_floor`] counts it.

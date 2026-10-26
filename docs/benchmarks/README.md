@@ -124,7 +124,12 @@ coverage). What a failing verdict does is the caller's choice, **opt-in per requ
 - **opted in — the bench** (`crates/memory-bench`, `--path federated`): `hits` and
   `raw_event_ranks` come back empty, so a question nothing in memory answers hands a reader no
   rows. This is the right contract for a consumer that reads every returned row as evidence, and
-  it is what `abstention_false_evidence` measures.
+  it is what `abstention_false_evidence` measures. Since E51 (2026-10-26) the opt-in also applies
+  the floor **per row** when the verdict passes: only rows that clear the floor on their own are
+  returned (a cluster of one session's rows stays when any member clears it). Before, the verdict
+  passed when any of the `limit` best did, and then every candidate came back, so a row holding
+  only the project name rode along with an unrelated row that passed (see "What moved (E51)"
+  below).
 - **not opted in — the daemon's paths** (`Db::search_request`, which `memory.search` on MCP /
   REST / CLI, the AI keyword phase and the search box call; and `assemble_context`, the Notch's
   suggestion and context assembly): the best candidates are still returned, and the verdict
@@ -153,7 +158,10 @@ The rule, per candidate among the `limit` best by score:
   against an English row is a cross-lingual question, the vector lane's job, as in every other
   language;
 - pass when coverage > 0.5, or coverage = 0.5 with a single unit missing (one of two words found
-  is a plausible answer; two of four is a question more specific than the row);
+  is a plausible answer; two of four is a question more specific than the row). The tie is read on
+  the whole question only: the CJK part of a mixed question, judged on its own, must cover more
+  than half (E51). Without the name the question is about, half of its CJK part (休暇 of
+  「Robin の会議は休暇で中止?」) is the same topic for some other project;
 - a row a vector lane found passes outright (it shares meaning, not words); a question with no
   content words (dates and cues only) is not judged.
 
@@ -250,33 +258,63 @@ cargo run -p memory-bench --release --features embed-local -- multilingual \
 
 ### Numbers (2026-10-25, this container)
 
-Two measurements: **E43** as shipped, and **after** the CJK floor fix (CJK content counted in gram
-units, a mixed-script question not carried by its Latin words alone; see the rule above).
+Three measurements: **E43** as shipped, **after** the CJK floor fix (CJK content counted in gram
+units, a mixed-script question not carried by its Latin words alone; see the rule above), and
+**E51** (2026-10-26: an abstaining search returns only rows that clear the floor on their own, and
+the CJK part of a mixed question needs more than half). The tables are E51; the two "what moved"
+tables below give the earlier values.
 
-By query language, after:
+By query language, E51:
 
 | language | answerable | R@5 lexical | MRR lexical | R@5 `test` | MRR `test` | false-answerable (both) |
 |---|---:|---:|---:|---:|---:|---:|
 | en | 8 | 0.375 | 0.375 | 1.000 | 1.000 | 0.000 |
-| ja | 15 | 0.867 | 0.789 | 1.000 | 0.967 | 0.000 |
-| es | 7 | 0.429 | 0.429 | 1.000 | 0.821 | 0.000 |
-| de | 7 | 0.571 | 0.571 | 0.857 | 0.667 | 0.000 |
-| fr | 7 | 0.429 | 0.429 | 0.857 | 0.594 | 0.000 |
+| ja | 15 | 0.733 | 0.733 | 1.000 | 1.000 | 0.000 |
+| es | 7 | 0.429 | 0.429 | 1.000 | 1.000 | 0.000 |
+| de | 7 | 0.571 | 0.571 | 0.857 | 0.857 | 0.000 |
+| fr | 7 | 0.429 | 0.429 | 1.000 | 1.000 | 0.000 |
 | zh | 14 | 0.571 | 0.571 | 0.929 | 0.929 | 0.000 |
-| overall | 58 | 0.586 | 0.566 | 0.948 | 0.863 | 0.000 |
+| overall | 58 | 0.552 | 0.552 | 0.966 | 0.966 | 0.000 |
 
-By kind, after:
+By kind, E51:
 
 | kind | R@5 lexical | MRR lexical | R@5 `test` | MRR `test` |
 |---|---:|---:|---:|---:|
 | lexical | 1.000 | 1.000 | 1.000 | 1.000 |
-| paraphrase | 0.286 | 0.286 | 1.000 | 0.929 |
-| cross_lingual | 0.111 | 0.046 | 0.889 | 0.643 |
+| paraphrase | 0.286 | 0.286 | 1.000 | 1.000 |
+| cross_lingual | 0.000 | 0.000 | 0.944 | 0.944 |
 | cjk_short | 1.000 | 1.000 | 1.000 | 1.000 |
 | cjk_sentence | 0.000 | 0.000 | 0.667 | 0.667 |
 | abstention (false-answerable) | 0.000 | | 0.000 | |
 
-What moved, before → after (every other cell is identical):
+#### What moved (E51), before → after
+
+Every cell not listed is identical, including every false-answerable (0.000 in every language and
+both columns) and the abstention kind. The lexical cells fall and the `test` cells rise; the
+trade-off was taken on purpose (product rule: low-confidence state is never rendered as fact).
+
+| cell | before | E51 | why |
+|---|---:|---:|---|
+| ja R@5 / MRR lexical | 0.867 / 0.789 | 0.733 / 0.733 | "Robin の会議は休暇で中止?" and "Tern の出張の締切はいつ?" are no longer "found": their answer row holds only the project name, and it was returned because another row (Lark's 休暇, Falcon's 出張) passed the floor on half of the question's CJK part. Neither row is evidence for the question; the result is now empty |
+| cross_lingual R@5 / MRR lexical | 0.111 / 0.046 | 0.000 / 0.000 | the same two questions. Lexically, cross-lingual questions share only the name with their fact, which the floor refuses in every language; they are the vector lane's job |
+| overall R@5 / MRR lexical | 0.586 / 0.566 | 0.552 / 0.552 | the two above |
+| ja MRR `test` | 0.967 | 1.000 | answers the vector lane found are no longer ranked behind lexical rows that did not clear the floor themselves |
+| es MRR `test` | 0.821 | 1.000 | same |
+| de MRR `test` | 0.667 | 0.857 | same |
+| fr R@5 / MRR `test` | 0.857 / 0.594 | 1.000 / 1.000 | same; "Y a-t-il une erreur dans la facture de Swift ?" was 8th, now 1st |
+| overall R@5 / MRR `test` | 0.948 / 0.863 | 0.966 / 0.966 | the four above |
+| paraphrase MRR `test` | 0.929 | 1.000 | same |
+| cross_lingual R@5 / MRR `test` | 0.889 / 0.643 | 0.944 / 0.944 | same (Swift); the German Petrel question is still past the test embedder's cutoff |
+
+Unchanged by E51 (re-measured 2026-10-26): the golden search eval (R@5 0.985, MRR 0.948,
+false-answerable 0.000 keyword-only; R@5 0.981, MRR 0.948, false-answerable 0.000 with the test
+embedder — the daemon's path does not opt in, and the verdict is the same rule over the same
+`limit` best, except the CJK-part tie, which no golden case reaches), and the harness quality
+suites at 20k events, seeds 42–44, release, in memory: temporal recall@1 1.000, abstention
+false-evidence 0.000, multi-session coverage@5 1.000 (query p95 8.39 ms [7.14, 9.64] on a
+container running other builds; 6.13 ms on the previous three-seed run, latency is advisory here).
+
+#### What moved (CJK floor fix), E43 → after
 
 | cell | E43 | after | why |
 |---|---:|---:|---|
@@ -286,7 +324,7 @@ What moved, before → after (every other cell is identical):
 | ja R@5 / MRR lexical | 0.933 / 0.856 | 0.867 / 0.789 | "Kestrel の契約更新の費用は?" (English fact) was found through the name alone |
 | zh R@5 / MRR lexical | 0.857 / 0.857 | 0.571 / 0.571 | the three zh cross-lingual questions and "Kite 团队的候选人什么时候开会" (name + 团队, 2 of 12 units) |
 | overall R@5 / MRR lexical | 0.672 / 0.652 | 0.586 / 0.566 | the five above |
-| cross_lingual R@5 / MRR lexical | 0.333 / 0.269 | 0.111 / 0.046 | four name-only finds; the two left (Robin, Tern) are returned because another row passes the floor on the question's CJK part alone (休暇 in the Lark row, 出張 in the Falcon row: one of two CJK words), and the name-matched answer comes back with it |
+| cross_lingual R@5 / MRR lexical | 0.333 / 0.269 | 0.111 / 0.046 | four name-only finds; the two left (Robin, Tern) are returned because another row passes the floor on the question's CJK part alone (休暇 in the Lark row, 出張 in the Falcon row: one of two CJK words), and the name-matched answer comes back with it (closed by E51, above) |
 | paraphrase R@5 / MRR lexical | 0.429 / 0.429 | 0.286 / 0.286 | the Kite question above |
 
 The lexical recall given up is not separable from the false answers: "Kestrel の契約更新の費用は?"
@@ -308,10 +346,11 @@ What the numbers say:
 - **Cross-lingual questions are a vector-lane job.** Lexically only the project name is shared,
   and the relevance floor rightly refuses a row that covers one word of four. Until the
   2026-10-25 floor fix the Japanese and Chinese ones were found anyway (0.333), because their
-  particles and Han runs left the name as half of the question's concepts; the 0.111 left is two
-  Japanese questions returned beside another row that passes on their CJK part. With the vector lane on, 16 of 18 are found; the two misses
-  are a German question whose many hashed function words push it just past the test embedder's
-  cutoff, and a French one ranked 8th.
+  particles and Han runs left the name as half of the question's concepts; the 0.111 that was left
+  was two Japanese questions returned beside another row that passed on their CJK part, and E51
+  took it to 0.000. With the vector lane on, 17 of 18 are found; the miss is a German question
+  whose many hashed function words push it just past the test embedder's cutoff (the French one
+  that was ranked 8th behind non-clearing lexical rows is 1st since E51).
 - **The vector lane adds no false evidence** (`the_vector_lane_adds_answers_and_no_false_evidence`
   pins this): false-answerable is identical with it on and off.
 - **Japanese and Chinese abstention (fixed 2026-10-25; was false-answerable 1.000 in both, with or

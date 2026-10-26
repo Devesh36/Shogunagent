@@ -1225,6 +1225,88 @@ fn relevance_floor_counts_a_cjk_compound_the_row_splits_differently_by_its_grams
     }
 }
 
+fn abstaining(conn: &rusqlite::Connection, question: &str) -> FederatedSearchResult {
+    search_federated(
+        conn,
+        question,
+        None,
+        10_000,
+        &FederatedSearchOptions {
+            abstain_below_floor: true,
+            ..FederatedSearchOptions::default()
+        },
+        10,
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_abstaining_search_returns_only_rows_that_clear_the_floor_on_their_own() {
+    // E51: the verdict passes because one row covers the question; a row that shares only the
+    // project name must not ride along with it.
+    let conn = crate::open_in_memory().unwrap();
+    let (answer, _) = capture(&conn, 1_000, "Mail", "the heron compliance audit finished on Friday");
+    let (name_only, _) = capture(&conn, 1_010, "Slack — kestrel", "kestrel lunch order is in");
+    let question = "kestrel compliance audit";
+
+    let abstaining = abstaining(&conn, question);
+    assert!(abstaining.relevance.passed, "{:?}", abstaining.relevance);
+    let ids: Vec<i64> = abstaining.raw_event_ranks.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, vec![answer], "only the row that covers the question");
+    assert!(abstaining
+        .hits
+        .iter()
+        .all(|hit| hit.source_id != FederatedSourceId::Event(name_only)));
+
+    // Without the opt-in the candidates stay, name-only row included, and the same verdict.
+    let suggesting = search_federated(
+        &conn,
+        question,
+        None,
+        10_000,
+        &FederatedSearchOptions::default(),
+        10,
+    )
+    .unwrap();
+    assert_eq!(suggesting.relevance, abstaining.relevance);
+    let ids: Vec<i64> = suggesting.raw_event_ranks.iter().map(|(id, _)| *id).collect();
+    assert!(ids.contains(&answer) && ids.contains(&name_only), "{ids:?}");
+}
+
+#[test]
+fn an_abstaining_search_keeps_every_row_that_clears_the_floor() {
+    // Distractor for the rule above: two rows that each cover the question both stay.
+    let conn = crate::open_in_memory().unwrap();
+    let (first, _) = capture(&conn, 1_000, "Mail", "kestrel compliance audit starts Monday");
+    let (second, _) = capture(&conn, 1_010, "Slack", "the kestrel audit for compliance moved to May");
+    capture(&conn, 1_020, "Slack", "kestrel lunch order is in");
+    let result = abstaining(&conn, "kestrel compliance audit");
+    let ids: std::collections::BTreeSet<i64> = result.raw_event_ranks.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, std::collections::BTreeSet::from([first, second]));
+}
+
+#[test]
+fn the_cjk_part_of_a_mixed_question_needs_more_than_half_without_its_name() {
+    // 「Robin の会議は休暇で中止?」 against a row about another project's holiday: the row holds
+    // 休暇 (one of the two CJK words; 会議 is a source cue) but not Robin. Half of the CJK part
+    // alone, judged without the name the question is about, is a different item on the same
+    // topic: neither the verdict nor the row passes.
+    let conn = crate::open_in_memory().unwrap();
+    capture(&conn, 1_000, "Notes", "Lark の採用は休暇の後も続く。");
+    capture(&conn, 1_010, "Notes", "今日のランチは駅前のカレー屋に行った。");
+    let result = abstaining(&conn, "Robin の会議は休暇で中止?");
+    assert!(!result.relevance.passed, "{:?}", result.relevance);
+    assert!(result.raw_event_ranks.is_empty());
+
+    // The same row with the name: the whole question is judged, and half with one unit
+    // missing still passes there.
+    let (answer, _) = capture(&conn, 1_020, "Notes", "Robin の定例は休暇のため来週に延期。");
+    let result = abstaining(&conn, "Robin の会議は休暇で中止?");
+    assert!(result.relevance.passed, "{:?}", result.relevance);
+    let ids: Vec<i64> = result.raw_event_ranks.iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, vec![answer]);
+}
+
 #[test]
 fn relevance_floor_reports_no_candidates_when_nothing_matches_at_all() {
     let conn = crate::open_in_memory().unwrap();
