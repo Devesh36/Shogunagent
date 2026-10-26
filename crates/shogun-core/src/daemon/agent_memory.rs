@@ -310,12 +310,13 @@ fn band_label(confidence: f64) -> Option<&'static str> {
 }
 
 /// The stored proving quote of a state row and the event it comes from: a Batch-reviewed quote
-/// first, else the first one retained.
+/// first, newest source first within that class. Re-listed state must cite its current
+/// evidence, even when an older quote was linked more recently during a replay.
 fn proving_quote(conn: &Connection, table: StateTable, id: i64) -> Result<Option<(String, i64)>, rusqlite::Error> {
     conn.query_row(
-        "SELECT quote, event_id FROM state_provenance
-         WHERE state_table = ?1 AND state_id = ?2 AND quote IS NOT NULL
-         ORDER BY batch_reviewed DESC, id LIMIT 1",
+        "SELECT p.quote, p.event_id FROM state_provenance p JOIN event_log e ON e.id = p.event_id
+         WHERE p.state_table = ?1 AND p.state_id = ?2 AND p.quote IS NOT NULL
+         ORDER BY p.batch_reviewed DESC, e.ts DESC, p.id DESC LIMIT 1",
         params![table.as_str(), id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )
@@ -348,6 +349,7 @@ fn recall_items(conn: &Connection, query: &str, scope: ReadScope) -> Result<Vec<
     };
     for row in state::list_commitments_scoped(conn, scope)?
         .iter()
+        .filter(|row| row.status != "done" && row.status != "cancelled")
         .filter(|row| matches(&row.description, &words))
         .take(RECALL_ITEMS_PER_KIND)
     {
@@ -355,6 +357,7 @@ fn recall_items(conn: &Connection, query: &str, scope: ReadScope) -> Result<Vec<
     }
     for row in state::list_open_loops_scoped(conn, scope)?
         .iter()
+        .filter(|row| row.status != "closed")
         .filter(|row| matches(&row.description, &words))
         .take(RECALL_ITEMS_PER_KIND)
     {
