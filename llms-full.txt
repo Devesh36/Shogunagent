@@ -14,7 +14,9 @@ Generated from README.md, SKILL.md, apps/api/README-agent-api.md, docs/api/402.m
 
 [日本語版はこちら / Japanese version](./README.ja.md)
 
-This repository holds the strategy, research, and (soon) the code for ShogunAgent: the state-inference and permission engine inside [ShogunAI](https://github.com/Torutesu/ShogunAI-) offered as a service to AI agents instead of humans. The decisions below are current as of October 2026 and supersede earlier drafts in `reports/`.
+This repository holds the strategy, the research and the code for ShogunAgent: the state-inference and permission engine inside [ShogunAI](https://github.com/Torutesu/ShogunAI-) offered as a service to AI agents instead of humans. The decisions below are current as of October 2026 and supersede earlier drafts in `reports/`.
+
+**Status:** phases 1 to 5 of the roadmap are implemented in code and verified in this repository. Nothing has been deployed, published to npm or PyPI, or submitted to a directory yet; those wait for the owner decisions listed in §12.
 
 ---
 
@@ -60,16 +62,20 @@ Five acquisition paths, all landing in the same append-only `event_log` (dedup, 
 | Path | Content | Requires |
 |---|---|---|
 | Agent ingest (primary) | Conversation turns, tool results, task progress via `memory.ingest` and Anthropic memory-tool-compatible `/memories` writes | Nothing. Any agent. |
-| Connector pull | Gmail, Calendar, Slack, GitHub, Linear, Notion over OAuth | `shogun-integrations` |
+| Connector pull | Gmail, Calendar, Slack, GitHub, Linear, Notion. A human completes the sign-in; tokens live only in the principal's own store, and the core refreshes and revokes them | `shogun-integrations`, hosted connect flow |
+| Provider webhooks | GitHub, Linear and Slack deliveries become events directly. Notion, Calendar and Gmail send change notices; the core then fetches the text with the principal's own token (no attachments, no images) | A registered hook per provider |
 | Router run log | tool × task × outcome for every run through the router | Owning the router |
 | Device capture (premium) | Accessibility-API text, Visual recall OCR, meeting transcripts | The ShogunAI Mac app |
-| Import | ChatGPT / Claude / Cursor exports | `shogun-memory-import/v1` |
+| Import | ChatGPT / Claude / Cursor exports, export v1 and v2 packages | `shogun-memory-import/v1` |
+| Browser extension | Visible page text, URL and title only; never screenshots | Specified, not built. Its write-only `ingest` key exists |
 
 Inference is the ShogunAI pipeline unchanged: hourly Dream Cycle (sessionize, prefilter, schema-enforced extraction) → state tables with quote and confidence → consolidator → entity pages and period summaries.
 
-Delivery takes three shapes, because that is what agents call in 2026: a budgeted context pack (`get_context_pack`: High as fact, Medium as "possibly", Low excluded), a virtual filesystem (`/memories/people/<name>.md`, `/memories/open_loops.md`, readable by Anthropic's memory tool with zero integration), and MCP tools (`state.*`, `recall`, `search`) plus an A2A Agent Card.
+Delivery takes three shapes, because that is what agents call in 2026: a budgeted context pack (`get_context_pack`: High as fact, Medium as "possibly", Low excluded), a virtual filesystem (`/memories/people/<name>.md`, `/memories/open_loops.md`, readable by Anthropic's memory tool with zero integration), and MCP tools (`state.*`, `recall`, `search`) plus an A2A Agent Card. Agent-to-agent handoff carries a typed state-of-work object (`handoff.create` / `handoff.accept`) that the core assembles; the receiver stores it in its own scratch namespace.
 
-ShogunAgent is model-agnostic. Our own LLM use is extraction and consolidation only, in cheap batch lanes.
+Every capability is the same on MCP, REST and the CLI, with the same permission level, the same result and the same response envelope (`usage`, `latency_ms`, `next_action`).
+
+ShogunAgent is model-agnostic. Our own LLM use is extraction and consolidation only, in cheap batch lanes. Search is keyword-first (FTS5 trigram plus a two-character index for Japanese and Chinese); local embeddings are optional, with nomic-embed-text as the default and multilingual-e5-small as an opt-in model. No embedding ever goes to a cloud API.
 
 ## 4. Relationship to the model layer
 
@@ -97,7 +103,7 @@ ShogunAgent is model-agnostic. Our own LLM use is extraction and consolidation o
 3. **Trust.** Zero retention, provenance on every row, six eval harnesses, OWASP ASI06 mitigations in the write path. Enterprise trust is earned through audits and time and cannot be bought.
 4. **Device-level truth.** Accessibility and Visual recall capture that neither labs nor memory vendors have. Grows as platforms are added.
 5. **Standards.** Bring the export format and the permission-tier taxonomy to the W3C memory interop CG and MCP annotations; be the reference implementation.
-6. **Engineering lead.** ~330k lines of Rust, calibration rules, 91 migrations. A lead, not a wall.
+6. **Engineering lead.** ~370k lines of Rust, calibration rules, 105 additive migrations, six eval harnesses plus an open-loop benchmark and a multilingual retrieval suite. A lead, not a wall.
 
 **Not a moat:** router code (MIT, 780 forks), the shape of a memory API, benchmark scores, model access.
 
@@ -117,23 +123,29 @@ Owner decision. The research warnings (commodity connector code, $0.0015 median 
 
 No fixed subscription. Prepaid credits, `402` when exhausted, per-key and per-agent hard caps from day one.
 
-| Metered item | Unit price (all estimates) | Notes |
+These are the rates the gateway implements today (`apps/api/src/pricing.ts`, `/.well-known/pricing.json`). They are still launch estimates, to be revised from design partners' real usage.
+
+| Metered item | Unit price | Notes |
 |---|---|---|
-| Tool run, third-party provider | provider price + 5% | Failures and empty results $0 |
-| Tool run, first-party connector | $0.002 / call | Writes pass L2/L3 at the same price |
-| Ingest | $0.50 / 1K events | Includes extraction LLM cost |
+| Tool run, third-party provider | provider price + 5% | One take, charged once by the wallet. Failures and empty results $0. Monid-listed tools carry Monid's price plus this one take, not two |
+| Tool run, first-party connector | $0.002 / call | No take. Writes pass L2/L3 at the same price |
+| Ingest | $0.50 / 1K events | Includes extraction LLM cost. Webhook deliveries settle at the events actually stored |
 | Model-invoking op | $0.10 / 1K | Consolidation, AI search, entity pages |
-| State reads | $0 | `state.*`, `get_context_pack`, `recall`, `search` |
-| Remote L2/L3 approvals | $0 | |
+| State reads | $0 | `state.*`, `get_context_pack`, `recall`, `search`, `handoff.create`, `connections.list` |
+| Remote L2/L3 approvals, queuing an action, asking for a payment mandate | $0 | |
+| Payments under a mandate | the payment rail's fee | $0 today: the rail is a stub that moves no money |
 | Hosted storage | $0.10 / GB-month | Delete and export always free |
+| Free allowance | $5 per self-registered agent | |
 | Local (OSS) | $0 | |
 | Enterprise | same rates, 10–25% off with annual commit | BYOC / ZDR / SSO / audit included; no seat fees |
+
+The gateway bills from what the core reports it actually did: a refused call, an error or an idempotent replay costs nothing.
 
 Margin targets: ingest at 3–5× cost; runs near break-even at a 5% take. Revise from design partners' real usage.
 
 ### Do not build
 
-A general router competing on price alone; our own payment rails or an x402 wallet (Stripe plus the 402 convention; decide x402 later); a graph DB (typed relation rows in SQLite suffice); a Postgres port (reuse drops from 60–70% to 25%); in-house embedding research; a chat-personalization memory API; LoCoMo score-chasing; Windows/mobile capture before the ingest API; consumer apps or a browser extension; exposing all 158 tools (about 100 desktop-only tools stay in ShogunAI).
+A general router competing on price alone; our own payment rails (payments run through a pluggable rail, a stub today); accepting x402 in production (decided: it is implemented behind `X402_ENABLED`, off, see `docs/decisions/0002-x402.md`); a graph DB (typed relation rows in SQLite suffice); a Postgres port (reuse drops from 60–70% to 25%); in-house embedding research; a chat-personalization memory API; LoCoMo score-chasing; Windows/mobile capture before the ingest API; consumer apps; exposing the desktop-only tools on the server (a server build lists the core, files, handoff, payments, governance, import, state, skills and wiki groups; the Mac-only groups stay in ShogunAI).
 
 ## 8. Go-to-market: developers and individuals first, OSS as the engine
 
@@ -155,13 +167,15 @@ A general router competing on price alone; our own payment rails or an x402 wall
 
 ## 9. Roadmap (sequence only, no durations)
 
-Development runs AI-first. Phases are defined by order and exit criteria; no day or month counts.
+Development runs AI-first. Phases are defined by order and exit criteria; no day or month counts. The code for every phase below is in this repository and passes its checks. The exit criteria are market measurements and can only be met after launch.
 
-| Phase | Deliverables | Exit criteria (estimates) |
-|---|---|---|
-| **1. Core and router skeleton** | `shogunagent-core` standalone on Linux (per-tenant SQLite); Streamable HTTP MCP with the 21 frozen core tools; API-key auth; `/memories` projection; export format v1; OSS release. Router: discover / inspect / run, Monid-compatible connectors, hosted passthrough, memory/state category, per-key caps, L1/L2/L3 on every run. Prepaid credits and 402. SKILL.md, Claude Code plugin, MCP Registry and Glama listings. Same-harness results published. ShogunAI Mac Memory API rebranded. | Sustained `tools/call` traffic from external agents; design partners signed; one published benchmark; router-to-state conversion measurable |
-| **2. Approvals, SDKs, billing, catalog** | Remote L2/L3 approvals (web, Slack, webhooks); A2A Agent Card; TS/Python SDKs with `withShogunAgent()`; agent-scratch namespaces with ACL and audit; Stripe usage billing and wallet; personalized `discover`; self-serve provider listing; Anthropic and OpenAI directories; local embeddings | Growing paid wallet users; ingest gross margin ≥ 3× cost; LLM cost ≤ 15% of revenue; improving router-to-state conversion |
-| **3. Enterprise, standards, payments** | Enterprise commit contracts (BYOC, SSO/SCIM, audit export, ZDR); W3C memory-interop CG and export format v2; public open-loop benchmark v1; provider payouts and open catalog; x402 decision; fundraising | Enterprise contracts; NRR > 110%; top-3 on same-harness multi-session and temporal categories; rising first-party connector share |
+| Phase | Deliverables | Code | Exit criteria (estimates) |
+|---|---|---|---|
+| **1. Core and router skeleton** | `shogunagent-core` standalone on Linux (one SQLCipher file per principal); Streamable HTTP MCP with the 21 frozen core tools; API-key auth; `/memories` projection; export format v1; OSS release. Router: discover / inspect / run, Monid-compatible connectors, hosted passthrough, memory/state category, per-key caps, L1/L2/L3 on every run. Prepaid credits and 402. SKILL.md, Claude Code plugin, MCP Registry entry. Same-harness results published. | Done | Sustained `tools/call` traffic from external agents; design partners signed; one published benchmark; router-to-state conversion measurable |
+| **2. Approvals, SDKs, billing, catalog** | Remote L2/L3 approvals (web, Slack, webhooks); A2A Agent Card; TS/Python SDKs with `withShogunAgent()`; agent-scratch namespaces with ACL and audit; Stripe usage billing and wallet; OAuth 2.1 for agents; personalized `discover`; self-serve provider listing; directory submission packs; local embeddings | Done | Growing paid wallet users; ingest gross margin ≥ 3× cost; LLM cost ≤ 15% of revenue; improving router-to-state conversion |
+| **3. Enterprise, standards, payments** | Approved actions execute exactly once; a persistent approval ledger; hash-chained audit export; tenants, SSO (OIDC, SAML), SCIM, regions; customer-managed keys (AWS, GCP, Vault); Helm and Compose; export format v2 with interop converters; open-loop benchmark v1; provider payouts and the open catalog; x402 decided | Done | Enterprise contracts; NRR > 110%; top-3 on same-harness multi-session and temporal categories; rising first-party connector share |
+| **4. Launch readiness** | Router runs charged once through the wallet, with a durable settlement outbox; hosted `/mcp` relayed to each principal's sidecar and billed from the core's own report; handoff assembled in the core on three faces; MCP conformance suite; SDK tests inside real agent frameworks; body-free metrics and traces; load tests; threat model, fuzzing, secret scanning; manual-only publish and deploy workflows; production runbook | Done | Hosted service live; conformance green against the deployed URL; first directory listings accepted |
+| **5. Expansion** | Multilingual embeddings and retrieval suite; provider webhooks and read-sync; hosted connector sign-in, refresh, status, disconnect and revocation (Gmail, Calendar, Slack, Linear, GitHub, Notion); first-party Gmail and Notion reads; agent payment mandates; export v2 community-group draft and JSON-LD context; open-loop rules for passive, Japanese and cross-thread phrasing | Done | Non-English recall on par with English; state growing from sources beyond the Mac; agent payments settled within L3 and caps |
 
 ## 10. What carries over from ShogunAI
 
@@ -171,7 +185,7 @@ Reuse: `shogun-memory` (state tables, `state_provenance`, loops, entity pages, f
 
 Does not carry over: the macOS capture layer, Keychain-bound secrets, the Tauri desktop, the single-tenant assumption.
 
-Shortest path: multiplex the `shogun_api` binary across per-tenant SQLCipher files with `apps/api` in front for auth and metering.
+This is how it was built: `shogun-api --multi` serves one SQLCipher file per principal, and `apps/api` sits in front for auth, metering and the 402. The desktop-only code sits behind the `desktop` cargo feature, off by default. What moved and why is recorded in `docs/MIGRATION.md`.
 
 ## 11. Agent-native commerce: designed from day one to be chosen by agents
 
@@ -204,9 +218,13 @@ The buyer is increasingly an agent, not a person. An agent discovers a service, 
 | `POST /v1/agents` | Agent self-registration: returns a scoped key and the free allowance, rate-limited and abuse-gated, no email | Onboarding without a form |
 | Referral in the key | `ref` attribute credited to the referring agent's or developer's wallet | Agents become the channel |
 
+All of these are served by `apps/api` and generated from code (invariant 12). Two are partial: the `ref` attribute is recorded at registration but not yet credited, and `server.json` validates against the MCP Registry schema but has not been submitted.
+
 ### Payment design
 
-Prepaid wallet settled through Stripe. The `402` response follows the x402 payment-required shape so wallet-carrying agents already know how to read it, even before we accept on-chain settlement. Per-key and per-agent hard caps (daily and monthly) are mandatory and default to conservative values. Receipts are machine-readable per call. Failed and empty results cost nothing. Disputes are an API, not an email.
+Prepaid wallet settled through Stripe. The `402` response follows the x402 payment-required shape so wallet-carrying agents already know how to read it. Accepting x402 settlement is implemented behind a flag and stays off in production (ADR 0002). Per-key and per-agent hard caps (daily and monthly) are mandatory and default to conservative values. Receipts are machine-readable per call. Failed and empty results cost nothing. Disputes are an API, not an email.
+
+Agents can also pay on the user's behalf under a **payment mandate**: a human grants a bounded permission (payee or payee class, per-payment and total caps, currency, expiry, purpose). Granting or widening one is an L3 human approval; spending within it is pre-approved, recorded before the rail is called and never paid twice; anything outside it falls back to a one-off L3 approval. Revoking or narrowing takes effect at once from any face.
 
 ### Selection eval: the metric that matters
 
@@ -216,32 +234,82 @@ A harness that runs from CI: given a task description, which tool does Claude, G
 
 The router ranks third-party tools and our own connectors by the same published score (task fit, price, health, latency), with first-party items labeled and a written no-self-preferencing policy. The state layer is not listed as a competing tool; it is the substrate every run writes into. Agents choose tools in the router; they choose the router because the results persist as their user's state.
 
+## 12. Where the implementation stands
+
+Verified on the latest commit of `main`:
+
+| Check | Result |
+|---|---|
+| Rust workspace tests | 5,113 passed, 0 failed |
+| Core with server features | 2,283 passed, 0 failed |
+| MCP server tests (wire freeze included) | 939 passed, 0 failed |
+| Feature matrix, upgrade through every migration (V1–V105), seven invariant guards | all pass |
+| Gateway (`apps/api`) | 828 Node tests, 24 Workers tests |
+| Router (`apps/router`) | 130 tests |
+| SDKs | TypeScript 87 unit and 16 real-framework tests; Python 88 |
+| MCP conformance suite against a local server | 33 pass, 0 fail, 1 skipped |
+| Selection-eval gate | pass, no surface dropped |
+
+Benchmarks, read with their caveats (`docs/benchmarks/`):
+
+- **Retrieval (same-harness, English):** recall@5 0.985, MRR 0.948, false answers 0.000 with keyword search alone.
+- **Multilingual retrieval suite** (English, Japanese, Spanish, German, French, Chinese): questions without an answer return nothing in every language. Keyword-only recall drops where the only evidence is a project name; with the test embedder, recall@5 is 0.966.
+- **Open-loop tracking:** 1.000 on the generator's own templates, which the rules were written against, so treat that as a ceiling. On phrasings written separately, the headline score is 0.665, up from 0.489, with precision 1.000 and no loop closed by mistake.
+
+What remains is outside code:
+
+1. One company name, registered address, company number, public API hostname, and security, privacy and support contacts. The files currently disagree.
+2. Legal review of the privacy policy, terms, data processing agreement, SLA and zero-retention terms.
+3. How the gateway reaches the per-principal server (recommended: a Node gateway in the same pod).
+4. Whether a send executed after approval carries its own fee.
+5. The ChatGPT listing scope (recommended: free read tools only, billing linked to our site).
+6. OAuth apps at Google (with Gmail's restricted-scope verification), Slack, Linear, GitHub and Notion; network egress from the server to them; one staging run per provider.
+7. The GitHub `release`, `staging` and `production` environments, and npm and PyPI trusted publishing.
+8. Pinning and calibrating the multilingual embedding model on a machine that has it.
+9. The go-ahead for any publish, deploy or directory submission.
+
 ## Repository layout
 
 ```
 README.md                  This document (English)
 README.ja.md               This document (Japanese)
 CLAUDE.md                  Rules for working in this repository
-crates/                    Rust workspace migrated from ShogunAI (engine, MCP/REST/CLI, evals)
-apps/api/                  Gateway and relay (Hono on Cloudflare Workers + Postgres)
-packages/config/           Shared config
-scripts/                   Invariant guards and the feature-matrix runner
-docs/implementation-plan.md  Epics and tasks per phase, with acceptance criteria
+SKILL.md                   Agent-facing skill: when to use it, setup, cost, permission tiers
+SECURITY.md                How to report a vulnerability
+crates/                    Rust workspace: engine, MCP/REST/CLI, evals and benchmarks (memory, loop, pii, dedup, extract, fusion)
+apps/api/                  Gateway and relay (Hono on Cloudflare Workers + Postgres): auth, metering, 402, wallet, approvals, enterprise, connectors, ingest hooks
+apps/router/               Router: discover / inspect / run, first-party connectors, Monid passthrough, settlement outbox
+apps/docs/                 Public Memory API docs
+packages/sdk-ts, sdk-py    SDKs with withShogunAgent()
+packages/cli               npx shogunagent
+packages/conformance       MCP conformance suite
+packages/interop           Export v2 converters with loss reports
+packages/selection-eval    Selection eval harness and gate
+deploy/                    Helm chart, Compose stack, BYOC runbook
+bench/load/                Load-test scripts
+fuzz/                      cargo-fuzz targets
+integrations/monid/        Monid listing preparation
+scripts/                   Invariant guards and generators
+docs/implementation-plan.md  Epics and tasks per phase, with status
 docs/MIGRATION.md          What was migrated from ShogunAI, what was not, and why
+docs/api/                  Agent-facing API documents
+docs/deploy/production.md  Production runbook
+docs/security/             Threat model
+docs/standards/            Export v2 community-group draft (not submitted)
+docs/benchmarks/           Benchmark results and how to reproduce them
 docs/migrations/           Rollback notes per schema migration
-docs/mcp/                  Memory API architecture notes
-docs/shogunai-origin/      Reference copies of ShogunAI design docs
 reports/                   Full strategy report (Markdown and bilingual HTML)
-research_notes/            Seven research notes with inline sources
+research_notes/            Research notes with inline sources
 ```
 
 ## Open questions
 
-- Do developers without the Mac app get enough state from the ingest API alone?
+- Do developers without the Mac app get enough state from the ingest API, webhooks and connectors alone?
 - Do router agents convert to the state layer at a rate that justifies the router?
 - Which export format wins the W3C memory-interop process, and can ours be it?
+- How far do open-loop rules carry on real users' phrasing before a model review is needed?
 
-All three are answered by design partners' real usage, not by further research.
+All four are answered by design partners' real usage, not by further research.
 
 ---
 

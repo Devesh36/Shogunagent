@@ -7,7 +7,9 @@
 
 [English version / 英語版](./README.md)
 
-このリポジトリは ShogunAgent の方針・調査・（これから）コードを置く場所です。ShogunAgent は [ShogunAI](https://github.com/Torutesu/ShogunAI-) の中にある状態推定と権限のエンジンを、人間ではなく AI エージェント向けにサービスとして提供するものです。以下の決定は 2026 年 10 月時点のもので、`reports/` 内の初期ドラフトより優先します。
+このリポジトリは ShogunAgent の方針・調査・コードを置く場所です。ShogunAgent は [ShogunAI](https://github.com/Torutesu/ShogunAI-) の中にある状態推定と権限のエンジンを、人間ではなく AI エージェント向けにサービスとして提供するものです。以下の決定は 2026 年 10 月時点のもので、`reports/` 内の初期ドラフトより優先します。
+
+**現状**：ロードマップのフェーズ 1〜5 はコードとして実装済みで、このリポジトリで検証が通っています。デプロイ、npm / PyPI への公開、ディレクトリへの提出はまだ行っていません。いずれも §12 に挙げたオーナーの判断を待っています。
 
 ---
 
@@ -53,16 +55,20 @@
 | 系統 | 中身 | 必要なもの |
 |---|---|---|
 | エージェントからの ingest（主経路） | 会話ターン、ツール結果、タスク進行。`memory.ingest` と Anthropic memory tool 互換の `/memories` 書き込み | 無し。全エージェント |
-| コネクタ pull | Gmail、Calendar、Slack、GitHub、Linear、Notion を OAuth で | `shogun-integrations` |
+| コネクタ pull | Gmail、Calendar、Slack、GitHub、Linear、Notion。サインインは人間が完了させる。トークンは principal 自身のストアにだけ置き、更新と取り消しはコアが行う | `shogun-integrations`、ホスト型の接続フロー |
+| プロバイダの webhook | GitHub・Linear・Slack の配信はそのままイベントになる。Notion・Calendar・Gmail は変更通知だけを送り、コアが principal 自身のトークンで本文を取りに行く（添付と画像は取らない） | プロバイダごとに登録したフック |
 | ルーター実行ログ | ルーターを通る全 run の tool × task × outcome | ルーターを持つこと |
 | 端末取得（premium） | Accessibility API のテキスト、Visual recall の OCR、会議の文字起こし | ShogunAI Mac アプリ |
-| インポート | ChatGPT / Claude / Cursor のエクスポート | `shogun-memory-import/v1` |
+| インポート | ChatGPT / Claude / Cursor のエクスポート、export v1 / v2 のパッケージ | `shogun-memory-import/v1` |
+| ブラウザ拡張 | 表示中のページのテキスト、URL、タイトルだけ。スクリーンショットは送らない | 仕様のみで未実装。用いる書き込み専用の `ingest` キーは実装済み |
 
 推定は ShogunAI のパイプラインそのまま：毎時の Dream Cycle（セッション化、prefilter、スキーマ強制の抽出）→ quote と confidence 付きの state tables → consolidator → entity pages と期間要約。
 
-供給は 3 形状。2026 年のエージェントが実際に呼ぶ形だからです：予算付き context pack（`get_context_pack`。High は事実、Medium は「possibly」、Low は除外）、仮想ファイルシステム（`/memories/people/<name>.md`、`/memories/open_loops.md`。Anthropic の memory tool が統合ゼロで読む）、MCP ツール（`state.*`、`recall`、`search`）と A2A Agent Card。
+供給は 3 形状。2026 年のエージェントが実際に呼ぶ形だからです：予算付き context pack（`get_context_pack`。High は事実、Medium は「possibly」、Low は除外）、仮想ファイルシステム（`/memories/people/<name>.md`、`/memories/open_loops.md`。Anthropic の memory tool が統合ゼロで読む）、MCP ツール（`state.*`、`recall`、`search`）と A2A Agent Card。エージェント間の引き継ぎでは、コアが組み立てた型付きの「仕事の状態」オブジェクト（`handoff.create` / `handoff.accept`）を渡し、受け手は自分の scratch 名前空間に保存する。
 
-ShogunAgent は model-agnostic です。自社の LLM 利用は抽出と統合だけで、安い Batch レーンで行います。
+全ての機能は MCP・REST・CLI のどれでも同じで、権限レベル・結果・応答の封筒（`usage`、`latency_ms`、`next_action`）が一致する。
+
+ShogunAgent は model-agnostic です。自社の LLM 利用は抽出と統合だけで、安い Batch レーンで行います。検索はキーワードが先（FTS5 trigram と、日本語・中国語向けの 2 文字索引）。ローカル埋め込みは任意で、既定は nomic-embed-text、多言語の multilingual-e5-small は選択式です。埋め込みをクラウド API に送ることはありません。
 
 ## 4. モデルレイヤー各社との関係
 
@@ -90,7 +96,7 @@ ShogunAgent は model-agnostic です。自社の LLM 利用は抽出と統合�
 3. **信頼**。ゼロ保持、全行の provenance、6 種の評価ハーネス、書き込み経路での OWASP ASI06 緩和。企業の信頼は監査と時間で稼ぐもので、買えない。
 4. **端末レベルの真実**。ラボもメモリ各社も持たない Accessibility と Visual recall の取得層。プラットフォームを足すほど強くなる。
 5. **標準**。エクスポート形式と権限階層の分類を W3C memory interop CG と MCP アノテーションに持ち込み、参照実装になる。
-6. **工学の先行**。約 33 万行の Rust、校正ルール、91 本のマイグレーション。壁ではなくリード。
+6. **工学の先行**。約 37 万行の Rust、校正ルール、加算のみの 105 本のマイグレーション、評価ハーネス 6 種に open-loop ベンチと多言語検索スイート。壁ではなくリード。
 
 **MOAT ではないもの**：ルーターのコード（MIT、780 フォーク）、メモリ API の形、ベンチマークのスコア、モデルへのアクセス。
 
@@ -110,23 +116,29 @@ ShogunAgent は model-agnostic です。自社の LLM 利用は抽出と統合�
 
 固定サブスク無し。プリペイド・クレジット、残高 0 で `402`、キー別・エージェント別のハード上限を初日から。
 
-| 計量項目 | 単価（すべて推定） | 備考 |
+下の単価はゲートウェイが現在実装している値です（`apps/api/src/pricing.ts`、`/.well-known/pricing.json`）。ローンチ時点の推定のままで、design partner の実測で改定します。
+
+| 計量項目 | 単価 | 備考 |
 |---|---|---|
-| ツール実行（他社プロバイダ） | プロバイダ価格 + 5% | 失敗・0 件は $0 |
-| ツール実行（自社コネクタ） | $0.002 / call | 書き込みは L2/L3 を経て同額 |
-| 取り込み（ingest） | $0.50 / 1K イベント | 抽出 LLM 原価を含む |
+| ツール実行（他社プロバイダ） | プロバイダ価格 + 5% | テイクは 1 回、ウォレットが 1 度だけ課金。失敗・0 件は $0。Monid 掲載ツールは Monid の価格にこのテイクを 1 回足すだけで、二重にはしない |
+| ツール実行（自社コネクタ） | $0.002 / call | テイク無し。書き込みは L2/L3 を経て同額 |
+| 取り込み（ingest） | $0.50 / 1K イベント | 抽出 LLM 原価を含む。webhook の配信は実際に保存したイベント数で精算 |
 | モデル起動 op | $0.10 / 1K | consolidation、AI 検索、entity page |
-| 状態の読み取り | $0 | `state.*`、`get_context_pack`、`recall`、`search` |
-| 遠隔 L2/L3 承認 | $0 | |
+| 状態の読み取り | $0 | `state.*`、`get_context_pack`、`recall`、`search`、`handoff.create`、`connections.list` |
+| 遠隔 L2/L3 承認、行動のキュー投入、支払い委任の申請 | $0 | |
+| 委任の範囲内での支払い | 決済レールの手数料 | 現在は $0。レールはお金を動かさないスタブ |
 | ホスト保存 | $0.10 / GB-月 | 削除・エクスポートは常時無料 |
+| 無料枠 | 自己登録エージェントごとに $5 | |
 | Local（OSS） | $0 | |
 | Enterprise | 同じ従量、年間コミットで 10〜25% 割引 | BYOC / ZDR / SSO / 監査を含む。座席課金はしない |
+
+ゲートウェイは、コアが「実際に何をしたか」を報告した量で課金します。拒否された呼び出し、エラー、冪等な再送は無料です。
 
 粗利目標：ingest は原価の 3〜5 倍、run は 5% テイクで損益ゼロ近傍。design partner の実測で改定する。
 
 ### 建てないもの
 
-価格だけで競う汎用ルーター。独自決済基盤と x402 ウォレット（Stripe + 402 規約。x402 は後段で判断）。グラフ DB（SQLite の型付き関係行で足りる）。Postgres 移植（再利用率が 60〜70% から 25% に落ちる）。独自埋め込み研究。チャット個人化メモリ API。LoCoMo のスコア追い。取り込み API より先の Windows / モバイル取得層。消費者向けアプリやブラウザ拡張。158 ツール全公開（デスクトップ固有の約 100 本は ShogunAI に残す）。
+価格だけで競う汎用ルーター。独自決済基盤（支払いは差し替え可能なレール経由。現在はスタブ）。本番での x402 受け入れ（判断済み：`X402_ENABLED` の裏に実装し既定 off。`docs/decisions/0002-x402.md`）。グラフ DB（SQLite の型付き関係行で足りる）。Postgres 移植（再利用率が 60〜70% から 25% に落ちる）。独自埋め込み研究。チャット個人化メモリ API。LoCoMo のスコア追い。取り込み API より先の Windows / モバイル取得層。消費者向けアプリ。デスクトップ固有ツールのサーバー公開（サーバービルドが並べるのは core、files、handoff、payments、governance、import、state、skills、wiki の各グループ。Mac 固有のグループは ShogunAI に残す）。
 
 ## 8. GTM：開発者と個人から、OSS を装置に
 
@@ -148,13 +160,15 @@ ShogunAgent は model-agnostic です。自社の LLM 利用は抽出と統合�
 
 ## 9. ロードマップ（順序のみ。期間は置かない）
 
-AI 前提で開発する。フェーズは順序と出口条件だけで定義し、日数や月数は書かない。
+AI 前提で開発する。フェーズは順序と出口条件だけで定義し、日数や月数は書かない。下の全フェーズのコードはこのリポジトリにあり、検証が通っている。出口条件は市場での計測なので、ローンチ後にしか満たせない。
 
-| フェーズ | 到達点 | 出口条件（推定） |
-|---|---|---|
-| **1. コアとルーター骨格** | `shogunagent-core` を Linux で単体起動（テナント別 SQLite）。Streamable HTTP MCP core 21 本。API key 認証。`/memories` 射影。エクスポート形式 v1。OSS 公開。ルーター：discover / inspect / run、Monid 互換コネクタ、hosted パススルー、記憶・状態カテゴリ、キー別上限、全 run に L1/L2/L3。プリペイド・クレジットと 402。SKILL.md、Claude Code プラグイン、MCP Registry と Glama 掲載。同一ハーネス結果公開。ShogunAI Mac の Memory API をブランド統合 | 外部エージェントからの `tools/call` が継続的に流れる。design partner 契約。ベンチマーク公開 1 本。ルーター → 状態層の転換率が計測できている |
-| **2. 承認・SDK・課金・カタログ** | 遠隔 L2/L3 承認（Web、Slack、webhook）。A2A Agent Card。TS/Python SDK と `withShogunAgent()`。agent-scratch 名前空間と ACL・監査。Stripe 従量課金とウォレット。個別化 `discover`。プロバイダのセルフサーブ掲載。Anthropic と OpenAI のディレクトリ。ローカル埋め込み | 有料ウォレット利用者が増え続ける。ingest 粗利が原価の 3 倍以上。LLM 原価 ≤ 売上の 15%。転換率が改善 |
-| **3. Enterprise・標準・決済** | Enterprise コミット契約（BYOC、SSO/SCIM、監査エクスポート、ZDR）。W3C memory interop CG とエクスポート形式 v2。open-loop ベンチ v1 の公開。プロバイダ支払いとカタログ一般公開。x402 の判断。資金調達 | Enterprise 契約。NRR > 110%。同一ハーネスで multi-session / temporal 上位 3。自前コネクタ比率の上昇 |
+| フェーズ | 到達点 | コード | 出口条件（推定） |
+|---|---|---|---|
+| **1. コアとルーター骨格** | `shogunagent-core` を Linux で単体起動（principal ごとに SQLCipher ファイル 1 つ）。Streamable HTTP MCP core 21 本の凍結。API key 認証。`/memories` 射影。エクスポート形式 v1。OSS 公開。ルーター：discover / inspect / run、Monid 互換コネクタ、hosted パススルー、記憶・状態カテゴリ、キー別上限、全 run に L1/L2/L3。プリペイド・クレジットと 402。SKILL.md、Claude Code プラグイン、MCP Registry 用エントリ。同一ハーネス結果公開 | 実装済み | 外部エージェントからの `tools/call` が継続的に流れる。design partner 契約。ベンチマーク公開 1 本。ルーター → 状態層の転換率が計測できている |
+| **2. 承認・SDK・課金・カタログ** | 遠隔 L2/L3 承認（Web、Slack、webhook）。A2A Agent Card。TS/Python SDK と `withShogunAgent()`。agent-scratch 名前空間と ACL・監査。Stripe 従量課金とウォレット。エージェント向け OAuth 2.1。個別化 `discover`。プロバイダのセルフサーブ掲載。ディレクトリ提出物一式。ローカル埋め込み | 実装済み | 有料ウォレット利用者が増え続ける。ingest 粗利が原価の 3 倍以上。LLM 原価 ≤ 売上の 15%。転換率が改善 |
+| **3. Enterprise・標準・決済** | 承認済み行動を 1 回だけ実行。永続する承認台帳。ハッシュ連鎖の監査エクスポート。テナント、SSO（OIDC、SAML）、SCIM、リージョン。顧客管理の暗号鍵（AWS、GCP、Vault）。Helm と Compose。エクスポート形式 v2 と相互変換。open-loop ベンチ v1。プロバイダ支払いと公開カタログ。x402 の判断 | 実装済み | Enterprise 契約。NRR > 110%。同一ハーネスで multi-session / temporal 上位 3。自前コネクタ比率の上昇 |
+| **4. ローンチ準備** | ルーター実行をウォレットで 1 回だけ課金し、精算は永続アウトボックス経由。hosted `/mcp` を principal ごとのサイドカーへ中継し、コアの報告量で課金。handoff をコアで組み立て三面に。MCP 適合スイート。実フレームワーク内の SDK テスト。本文を持たないメトリクスとトレース。負荷試験。脅威モデル、ファジング、シークレット走査。手動のみの公開・デプロイ workflow。本番手順書 | 実装済み | ホスト型サービスの稼働。デプロイ先 URL で適合スイートが通る。最初のディレクトリ掲載が通る |
+| **5. 拡張** | 多言語埋め込みと検索スイート。プロバイダの webhook と本文取得。ホスト型コネクタのサインイン・更新・状態・切断・取り消し（Gmail、Calendar、Slack、Linear、GitHub、Notion）。自社の Gmail・Notion 読み取りコネクタ。エージェントの支払い委任。export v2 の CG 向け草案と JSON-LD context。受動態・日本語・別スレッドの open-loop 規則 | 実装済み | 非英語の recall が英語と同水準。Mac 以外の取得元から状態が育つ。エージェントの支払いが L3 と上限の中で完結する |
 
 ## 10. ShogunAI から持ち越すもの
 
@@ -164,7 +178,7 @@ AI 前提で開発する。フェーズは順序と出口条件だけで定義�
 
 持ち越さない：macOS の取得層、Keychain 依存の秘密、Tauri デスクトップ、単一テナント前提。
 
-最短経路：`shogun_api` バイナリをテナント別の SQLCipher ファイルで多重化し、前段に `apps/api` を置いて認証と計量を行う。
+実際にこの形で作った：`shogun-api --multi` が principal ごとの SQLCipher ファイルを扱い、前段の `apps/api` が認証・計量・402 を受け持つ。デスクトップ固有のコードは cargo feature `desktop`（既定 off）の裏にある。何を移したか、なぜかは `docs/MIGRATION.md` に記録した。
 
 ## 11. エージェント・コマース：Day 1 から「エージェントに選ばれる」設計
 
@@ -197,9 +211,13 @@ AI 前提で開発する。フェーズは順序と出口条件だけで定義�
 | `POST /v1/agents` | エージェントの自己登録：スコープ付きキーと無料枠を返す。レート制限と不正対策あり、メール不要 | フォーム無しの導入 |
 | キー内の紹介属性 | `ref` を紹介したエージェントまたは開発者のウォレットに還元 | エージェントがチャネルになる |
 
+これらは全て `apps/api` が配信し、コードから生成している（不変条件 12）。部分的なものが 2 つある：`ref` は登録時に記録するがまだ還元していない。`server.json` は MCP Registry のスキーマ検証を通るがまだ提出していない。
+
 ### 決済の設計
 
-Stripe で精算するプリペイド・ウォレット。`402` レスポンスは x402 の payment-required 形式に従い、オンチェーン決済を受け付ける前からウォレットを持つエージェントが読めるようにする。キー別・エージェント別のハード上限（日次・月次）は必須で、既定は保守的な値。レシートは呼び出しごとに機械可読。失敗と 0 件は無料。異議申し立ては API であり、メールではない。
+Stripe で精算するプリペイド・ウォレット。`402` レスポンスは x402 の payment-required 形式に従い、ウォレットを持つエージェントがそのまま読めるようにする。x402 での精算の受け入れはフラグの裏に実装済みで、本番では off のまま（ADR 0002）。キー別・エージェント別のハード上限（日次・月次）は必須で、既定は保守的な値。レシートは呼び出しごとに機械可読。失敗と 0 件は無料。異議申し立ては API であり、メールではない。
+
+エージェントは**支払い委任**の範囲でユーザーの代わりに支払える。人間が範囲を決めて許可する（支払先または支払先の種類、1 回と合計の上限、通貨、期限、目的）。委任の付与・拡大は L3 の人間承認。範囲内の支払いは事前承認済みで、レールを呼ぶ前に記録され、二重に払われない。範囲外は 1 回ごとの L3 承認に戻る。取り消しと縮小はどの面からでも即時に効く。
 
 ### 選択 eval：本当に重要な指標
 
@@ -209,29 +227,79 @@ CI から回すハーネス。タスク記述を与えたとき、Claude・GPT�
 
 ルーターは他社ツールと自社コネクタを同じ公開スコア（タスク適合、価格、健全性、レイテンシ）で順位付けし、first-party はラベルで区別し、自己優遇しないポリシーを文書化する。状態層は競合ツールとして掲載しない。全ての run が書き込む基盤である。エージェントはルーターの中でツールを選び、結果がユーザーの状態として残るからルーターを選ぶ。
 
+## 12. 実装の現状
+
+`main` の最新コミットで検証済み：
+
+| チェック | 結果 |
+|---|---|
+| Rust ワークスペースのテスト | 5,113 件成功、失敗 0 |
+| サーバー機能付きコア | 2,283 件成功、失敗 0 |
+| MCP サーバー（wire freeze を含む） | 939 件成功、失敗 0 |
+| feature matrix、全マイグレーション（V1〜V105）のアップグレード、不変条件ガード 7 種 | すべて成功 |
+| ゲートウェイ（`apps/api`） | Node 828 件、Workers 24 件 |
+| ルーター（`apps/router`） | 130 件 |
+| SDK | TypeScript ユニット 87 件・実フレームワーク 16 件、Python 88 件 |
+| ローカルサーバーに対する MCP 適合スイート | 成功 33、失敗 0、スキップ 1 |
+| selection-eval のゲート | 成功。落ちた面は無い |
+
+ベンチマーク（注意書きとともに読むこと。`docs/benchmarks/`）：
+
+- **検索（同一ハーネス、英語）**：キーワード検索だけで recall@5 0.985、MRR 0.948、誤答 0.000。
+- **多言語検索スイート**（英語、日本語、スペイン語、ドイツ語、フランス語、中国語）：答えの無い質問は全言語で何も返さない。根拠がプロジェクト名だけのときはキーワード検索の再現率が下がる。テスト用埋め込みでは recall@5 0.966。
+- **open-loop 追跡**：ジェネレータ自身のテンプレートでは 1.000 だが、規則はそのテンプレートを見て書いたので上限として扱う。別に書いた言い回しでは総合スコア 0.665（0.489 から改善）、精度 1.000、誤って閉じたループは 0。
+
+残りはコードの外：
+
+1. 社名・登記住所・法人番号・公開 API のホスト名・セキュリティ／プライバシー／サポートの連絡先を 1 つに決める。現在はファイルごとに食い違っている。
+2. プライバシーポリシー、利用規約、DPA、SLA、ゼロ保持条件の法務レビュー。
+3. ゲートウェイから principal ごとのサーバーへの経路（推奨：同じ pod に Node 版ゲートウェイ）。
+4. 承認後に実行する送信に別途手数料をかけるか。
+5. ChatGPT に掲載する範囲（推奨：無料の読み取りツールだけ、課金は自社サイトへのリンク）。
+6. Google（Gmail の制限付きスコープの審査を含む）・Slack・Linear・GitHub・Notion の OAuth アプリ、サーバーからの通信許可、プロバイダごとのステージング確認。
+7. GitHub の `release`・`staging`・`production` 環境、npm と PyPI の trusted publishing。
+8. 多言語埋め込みモデルのハッシュ固定と、モデルのあるマシンでの閾値調整。
+9. 公開・デプロイ・ディレクトリ提出の実行の承認。
+
 ## リポジトリ構成
 
 ```
 README.md                  本文書（英語）
 README.ja.md               本文書（日本語）
 CLAUDE.md                  このリポジトリで作業する際のルール
-crates/                    ShogunAI から移行した Rust ワークスペース（エンジン、MCP/REST/CLI、評価）
-apps/api/                  ゲートウェイと中継（Cloudflare Workers + Postgres 上の Hono）
-packages/config/           共有設定
-scripts/                   不変条件ガードと feature matrix 実行スクリプト
-docs/implementation-plan.md  フェーズごとのエピックとタスク、受け入れ条件
+SKILL.md                   エージェント向けスキル：使いどころ、導入、費用、権限階層
+SECURITY.md                脆弱性の報告方法
+crates/                    Rust ワークスペース：エンジン、MCP/REST/CLI、評価とベンチ（memory、loop、pii、dedup、extract、fusion）
+apps/api/                  ゲートウェイと中継（Cloudflare Workers + Postgres 上の Hono）：認証、計量、402、ウォレット、承認、enterprise、コネクタ、取り込みフック
+apps/router/               ルーター：discover / inspect / run、自社コネクタ、Monid パススルー、精算アウトボックス
+apps/docs/                 公開の Memory API ドキュメント
+packages/sdk-ts, sdk-py    withShogunAgent() を持つ SDK
+packages/cli               npx shogunagent
+packages/conformance       MCP 適合スイート
+packages/interop           損失報告付きの export v2 変換
+packages/selection-eval    選択 eval のハーネスとゲート
+deploy/                    Helm chart、Compose、BYOC の手順
+bench/load/                負荷試験スクリプト
+fuzz/                      cargo-fuzz のターゲット
+integrations/monid/        Monid 掲載の準備
+scripts/                   不変条件ガードと生成スクリプト
+docs/implementation-plan.md  フェーズごとのエピックとタスク、状況
 docs/MIGRATION.md          ShogunAI から何を移行し、何を移行せず、なぜか
+docs/api/                  エージェント向け API 文書
+docs/deploy/production.md  本番手順書
+docs/security/             脅威モデル
+docs/standards/            export v2 の CG 向け草案（未提出）
+docs/benchmarks/           ベンチマーク結果と再現手順
 docs/migrations/           マイグレーションごとのロールバック手順
-docs/mcp/                  Memory API のアーキテクチャ・ノート
-docs/shogunai-origin/      ShogunAI 設計文書の参照コピー
 reports/                   方針レポート全文（Markdown と日英 HTML）
-research_notes/            出典付きの調査ノート 7 本
+research_notes/            出典付きの調査ノート
 ```
 
 ## 未解決の問い
 
-- Mac アプリを持たない開発者は、取り込み API だけで十分な状態を得られるか
+- Mac アプリを持たない開発者は、取り込み API・webhook・コネクタだけで十分な状態を得られるか
 - ルーター経由のエージェントは、ルーターを正当化する率で状態層に転換するか
 - W3C の相互運用プロセスでどのエクスポート形式が勝ち、我々のものがそれになれるか
+- 実ユーザーの言い回しに対して、open-loop の規則はモデルのレビュー無しでどこまで通用するか
 
-3 つとも、追加の調査ではなく design partner の実測で答えが出る。
+4 つとも、追加の調査ではなく design partner の実測で答えが出る。
