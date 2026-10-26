@@ -195,12 +195,14 @@ nothing queued costs one store read and no network call.
   dropped after the third try. An object that is gone (404): dropped.
 - **Billing**: what the read-sync stores is metered as ingest like any other ingest into the
   principal's store; the notice itself was free.
-- **Notion credentials**: the core has no hosted Notion sign-in (its Notion sign-in is the Mac
-  app's loopback registration with Notion's MCP server, whose tokens do not open the REST API; a
-  Notion public integration needs a Basic-auth token exchange the core does not speak). A Notion
-  notice is queued and fetched only for a principal whose store already holds a `notion-tokenset`
-  grant for the REST API; every other principal's Notion notices count `not_connected`. Adding the
-  Notion OAuth exchange to the core is the follow-up that makes them useful.
+- **Notion credentials** (E51): a human connects Notion through the hosted connect flow
+  (`POST /v1/connectors/notion/connect`, `docs/api/connector-tokens.md`): a Notion public
+  integration's authorization code, exchanged in the sidecar with the integration's client id and
+  secret as HTTP Basic auth (`SHOGUN_CONNECT_NOTION_CLIENT_{ID,SECRET}`). The grant lands in the
+  principal's `notion-tokenset`, the slot the read-sync reads. Only pages the human shared with the
+  integration at sign-in are readable; a notice for any other page answers 404 and is dropped. A
+  principal that has not connected Notion has its notices counted `not_connected`. (The Mac app's
+  own Notion sign-in is a different grant, with Notion's MCP server, and does not open the REST API.)
 - **Order of operations in the tick** (`shogun_core::tenancy::connector_sync::drain_tick`): queue
   taken (at most 16 notices per principal per tick) → token → fetch → ingest → retries written back.
   The tick prints one line of counts: `connector read-sync: principals=… drained=… notices=…
@@ -292,5 +294,5 @@ Body (the `memory.ingest` contract, `docs/api/core-tools.md`):
 |---|---|
 | GitHub, Linear, Slack, Notion, Google Calendar, Gmail hooks (verification, registration, relay, billing, failure budget) | implemented (gateway) |
 | `memory.ingest_webhook` normalizers (GitHub, Linear, Slack text; Notion, Calendar, Gmail change notices) | implemented (core, three faces) |
-| Change notice → connector fetch in the hosted core (queue in the principal's store, drained by `shogun-api --dream-tick`) | implemented for Gmail and Google Calendar (§2.8); Notion is fetched only for a principal that already holds a REST grant, because the core has no hosted Notion sign-in |
+| Change notice → connector fetch in the hosted core (queue in the principal's store, drained by `shogun-api --dream-tick`) | implemented for Gmail, Google Calendar and Notion (§2.8; Notion once the principal connected it through the hosted flow, E51) |
 | Browser extension | specified (§3); not built; needs write-only key issuance |
