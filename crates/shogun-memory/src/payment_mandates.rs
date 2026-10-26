@@ -518,6 +518,81 @@ pub fn settle_spend(
     )? == 1)
 }
 
+/// The classes a per-payment spend closes with when its approval never ran: a human rejected it,
+/// or its approval window elapsed. Stored as status `failed` with this `reason_class` (the V105
+/// status set is frozen; `failed` already counts nothing against a cap) and reported as the class
+/// itself ([`SpendRow::reported_status`]).
+pub const UNAPPROVED_CLASSES: [&str; 2] = ["rejected", "expired"];
+
+/// The actor recorded on a spend whose approval window elapsed with no decision.
+pub const APPROVAL_TIMEOUT_ACTOR: &str = "system:approval-timeout";
+
+impl SpendRow {
+    /// The status a caller sees: `rejected` / `expired` for a per-payment spend whose approval was
+    /// rejected or timed out, else the stored status.
+    pub fn reported_status(&self) -> &str {
+        match (self.status.as_str(), self.reason_class.as_deref()) {
+            ("failed", Some(class)) if self.authorization == "approval" && UNAPPROVED_CLASSES.contains(&class) => class,
+            (status, _) => status,
+        }
+    }
+}
+
+/// Close a per-payment spend still `awaiting_approval` because its approval will never run:
+/// `outcome` is `rejected` (`by` = the human who rejected) or `expired` (`by` =
+/// [`APPROVAL_TIMEOUT_ACTOR`]). Records who closed it, the approval it waited on and when.
+/// Idempotent: `Ok(false)` when the row is not waiting (already closed, claimed, settled, or a
+/// mandate spend) or waits on another approval.
+pub fn close_unapproved_spend(
+    conn: &Connection,
+    spend_ref: &str,
+    approval_id: u64,
+    outcome: &str,
+    by: &str,
+    now_ms: i64,
+) -> Result<bool, MandateError> {
+    if !UNAPPROVED_CLASSES.contains(&outcome) {
+        return Err(MandateError::InvalidField("outcome"));
+    }
+    label("decided_by", by)?;
+    let approval = to_i64("approval_id", approval_id)?;
+    Ok(conn.execute(
+        "UPDATE payment_spends
+            SET status = 'failed', reason_class = ?3, decided_by = ?4, approval_id = ?2, settled_at = ?5
+          WHERE spend_ref = ?1 AND status = 'awaiting_approval' AND authorization = 'approval'
+            AND (approval_id IS NULL OR approval_id = ?2)",
+        params![spend_ref, approval, outcome, by, now_ms],
+    )? == 1)
+}
+
+/// Bring waiting per-payment spends in line with their approvals: a spend whose approval the
+/// ledger (V103) records as rejected closes `rejected` under the rejecting human; one older than
+/// `timeout_ms` with no approve decision closes `expired` under [`APPROVAL_TIMEOUT_ACTOR`] (the
+/// approval queue times a request out after the same window, counted from the same instant the
+/// spend was recorded). Returns how many rows closed.
+pub fn reconcile_unapproved_spends(conn: &Connection, now_ms: i64, timeout_ms: i64) -> Result<usize, MandateError> {
+    let rejected = conn.execute(
+        "UPDATE payment_spends
+            SET status = 'failed', reason_class = 'rejected', settled_at = ?1,
+                decided_by = (SELECT d.decided_by FROM approval_decisions d
+                               WHERE d.approval_id = payment_spends.approval_id AND d.decision = 'reject')
+          WHERE status = 'awaiting_approval' AND authorization = 'approval' AND approval_id IS NOT NULL
+            AND EXISTS (SELECT 1 FROM approval_decisions d
+                         WHERE d.approval_id = payment_spends.approval_id AND d.decision = 'reject')",
+        params![now_ms],
+    )?;
+    let expired = conn.execute(
+        "UPDATE payment_spends
+            SET status = 'failed', reason_class = 'expired', decided_by = ?3, settled_at = ?1
+          WHERE status = 'awaiting_approval' AND authorization = 'approval'
+            AND ?1 - created_at > ?2
+            AND NOT EXISTS (SELECT 1 FROM approval_decisions d
+                             WHERE d.approval_id = payment_spends.approval_id AND d.decision = 'approve')",
+        params![now_ms, timeout_ms, APPROVAL_TIMEOUT_ACTOR],
+    )?;
+    Ok(rejected + expired)
+}
+
 /// Spent total and count against `mandate_id` (the statuses that count).
 pub fn spent_against(conn: &Connection, mandate_id: &str) -> Result<(u64, u64), MandateError> {
     let (sum, count): (i64, i64) = conn.query_row(
@@ -625,6 +700,63 @@ mod tests {
         assert!(!revoke(&conn, "pmd_000000000001", "agent:builder", 8).expect("revoke"));
         assert_eq!(revoke(&conn, "pmd_nope00000000", "agent:builder", 8), Err(MandateError::NotFound));
         assert_eq!(narrow(&conn, "pmd_000000000001", &terms(), 9), Err(MandateError::Revoked));
+    }
+
+    #[test]
+    fn a_rejected_or_expired_per_payment_spend_closes_once_with_who_and_why() {
+        let mut conn = store();
+        let waiting = |key: &'static str, r: &'static str, now: i64| {
+            let mut s = spend(key, r, 900);
+            s.mandate_id = None;
+            s.authorization = "approval";
+            s.approval_id = None;
+            s.decided_by = None;
+            s.now_ms = now;
+            s
+        };
+        // Rejected explicitly by the decide route: closed under the human, idempotent.
+        assert_eq!(reserve_spend(&mut conn, &waiting("k1", "psp_000000000001", 10), |_| Ok(())).expect("r"), Reserved::New);
+        assert!(set_spend_approval(&conn, "psp_000000000001", 7).expect("set"));
+        assert_eq!(close_unapproved_spend(&conn, "psp_000000000001", 7, "approved", "human:owner", 20), Err(MandateError::InvalidField("outcome")));
+        assert!(!close_unapproved_spend(&conn, "psp_000000000001", 8, "rejected", "human:owner", 20).expect("other approval"));
+        assert!(close_unapproved_spend(&conn, "psp_000000000001", 7, "rejected", "human:owner", 20).expect("close"));
+        assert!(!close_unapproved_spend(&conn, "psp_000000000001", 7, "rejected", "human:owner", 21).expect("again"));
+        assert!(!close_unapproved_spend(&conn, "psp_000000000001", 7, "expired", APPROVAL_TIMEOUT_ACTOR, 21).expect("again"));
+        let row = spend_by_ref(&conn, "psp_000000000001").expect("get").expect("row");
+        assert_eq!((row.status.as_str(), row.reported_status(), row.decided_by.as_deref(), row.approval_id, row.settled_at),
+            ("failed", "rejected", Some("human:owner"), Some(7), Some(20)));
+        // A rejected approval can never be claimed for payment.
+        approve(&conn, 7);
+        assert_eq!(claim_approved_spend(&conn, "psp_000000000001", 7).expect("claim"), None);
+
+        // Reconciled from the ledger: a reject decision closes it under that human.
+        assert_eq!(reserve_spend(&mut conn, &waiting("k2", "psp_000000000002", 10), |_| Ok(())).expect("r"), Reserved::New);
+        assert!(set_spend_approval(&conn, "psp_000000000002", 9).expect("set"));
+        conn.execute(
+            "INSERT INTO approval_decisions (approval_id, decision, decided_by, decided_at, via, level) VALUES (9, 'reject', 'human:alice', 1, 'token', 'L3')",
+            [],
+        )
+        .expect("reject");
+        // Time-based expiry: past the window, not approved.
+        assert_eq!(reserve_spend(&mut conn, &waiting("k3", "psp_000000000003", 10), |_| Ok(())).expect("r"), Reserved::New);
+        assert!(set_spend_approval(&conn, "psp_000000000003", 10).expect("set"));
+        // Approved but not yet claimed: left alone even past the window.
+        assert_eq!(reserve_spend(&mut conn, &waiting("k4", "psp_000000000004", 10), |_| Ok(())).expect("r"), Reserved::New);
+        assert!(set_spend_approval(&conn, "psp_000000000004", 11).expect("set"));
+        approve(&conn, 11);
+        // Inside the window nothing expires; the rejection closes at once.
+        assert_eq!(reconcile_unapproved_spends(&conn, 110, 100).expect("reconcile"), 1);
+        assert_eq!(spend_by_ref(&conn, "psp_000000000003").expect("get").expect("row").status, "awaiting_approval");
+        assert_eq!(reconcile_unapproved_spends(&conn, 111, 100).expect("reconcile"), 1);
+        assert_eq!(reconcile_unapproved_spends(&conn, 500, 100).expect("reconcile"), 0, "idempotent");
+        let two = spend_by_ref(&conn, "psp_000000000002").expect("get").expect("row");
+        assert_eq!((two.reported_status(), two.decided_by.as_deref()), ("rejected", Some("human:alice")));
+        let three = spend_by_ref(&conn, "psp_000000000003").expect("get").expect("row");
+        assert_eq!((three.reported_status(), three.decided_by.as_deref(), three.settled_at), ("expired", Some(APPROVAL_TIMEOUT_ACTOR), Some(111)));
+        assert_eq!(spend_by_ref(&conn, "psp_000000000004").expect("get").expect("row").status, "awaiting_approval");
+        // A mandate spend that failed at the rail keeps its own status.
+        let failed = SpendRow { authorization: "mandate".into(), status: "failed".into(), reason_class: Some("rejected".into()), ..two };
+        assert_eq!(failed.reported_status(), "failed");
     }
 
     #[test]

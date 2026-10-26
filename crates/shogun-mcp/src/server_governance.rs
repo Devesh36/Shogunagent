@@ -342,7 +342,16 @@ fn decide(state: &AppState, req: &Incoming<'_>, id: u64) -> (u16, String) {
     }
     // The queue releases the confirmed action to this one decision (a racing decision on the same
     // id finds nothing pending); a rejection, an expiry or an unknown id releases nothing.
-    let (applied, confirmed) = match state.on_queue(|queue| remote_approvals::apply_with_send(queue, id, body.decision, now)) {
+    // E51: the payment a per-payment approval carries, read before the decision removes it from
+    // the queue, so a rejection or an expiry closes its spend row (below).
+    let (applied, confirmed, payment) = match state.on_queue(|queue| {
+        let payment = match queue.action(shogun_agents::approval::ApprovalId(id)) {
+            Some(shogun_agents::permission::SendAction::Pay { order }) => Some(order.spend_ref.clone()),
+            _ => None,
+        };
+        let (applied, confirmed) = remote_approvals::apply_with_send(queue, id, body.decision, now);
+        (applied, confirmed, payment)
+    }) {
         Ok(answer) => answer,
         Err(refusal) => return refusal,
     };
@@ -380,6 +389,23 @@ fn decide(state: &AppState, req: &Incoming<'_>, id: u64) -> (u16, String) {
     }
     if let Some(store) = &store {
         state.audit(store.as_ref(), (&body.decided_by, principal.as_deref()), ("approvals.decide", &level, outcome), req.request_id);
+    }
+    // E51: a per-payment approval that will never run closes its spend row in the principal's
+    // store (who and why recorded there), so `payments.*` agrees with `actions.status`. Idempotent;
+    // a store that cannot record it now is reconciled on the next payments read from the ledger
+    // and the approval window.
+    if let (Some(spend_ref), Some(store)) = (&payment, &store) {
+        let closed = match applied {
+            Applied::Rejected => Some(("rejected", body.decided_by.as_str())),
+            Applied::Expired => Some(("expired", shogun_memory::payment_mandates::APPROVAL_TIMEOUT_ACTOR)),
+            Applied::Approved | Applied::NotPending => None,
+        };
+        if let Some((outcome, by)) = closed {
+            let op = crate::payments_api::PaymentsOp::Close { spend_ref, approval_id: id, outcome, by };
+            if matches!(store.payments(op), Ok(crate::payments_api::PaymentsReply::Done(true))) {
+                state.audit(store.as_ref(), (by, principal.as_deref()), ("payments.spend", &level, outcome), req.request_id);
+            }
+        }
     }
     // Carry the approved action out, once (E15 follow-up).
     let executed = match (&state.executor, confirmed, &store) {
