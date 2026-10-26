@@ -29,8 +29,9 @@ Conventions:
 | GET | `/v1/agents/challenge` | none | A proof-of-work challenge for registration |
 | POST | `/v1/agents` | PoW header, per-IP limit | Self-registration → key (`read,write,run`) + fresh principal + $5.00 wallet |
 | GET | `/v1/agents/me` | `read` | The key's principal, scopes, expiry, caps |
-| POST | `/v1/keys/{id}/revoke` | any (own key; `admin` for others) | Revoke a key |
-| PATCH | `/v1/keys/{id}` | any (lower); `admin` (raise) | Set a key's hard caps |
+| POST | `/v1/keys` | `write` (the key itself) | Issue a write-only `ingest` key for this principal (the browser extension's): `memory.ingest` over `/mcp` only; shown once, stored hashed ([ingest sources §3.3](../../docs/api/ingest-sources.md)) |
+| POST | `/v1/keys/{id}/revoke` | any (own key; `admin` for others; an `ingest` key only itself) | Revoke a key |
+| PATCH | `/v1/keys/{id}` | any (lower); `admin` (raise); an `ingest` key only itself | Set a key's hard caps |
 | GET | `/v1/wallet` | `read` | Balance, reserved, spendable, caps, this day's / month's spend |
 | POST | `/v1/wallet/topup` | `write` | Create a Stripe Checkout session (card rail) |
 | POST | `/v1/stripe/webhook` | Stripe signature | Credit a completed Checkout (by event id), close an expired one, debit a `charge.refunded` (by charge high-water mark) |
@@ -38,6 +39,8 @@ Conventions:
 | GET | `/v1/receipts?since=&limit=` | `read` | Per-call receipts, oldest first |
 | POST | `/v1/receipts/{id}/dispute` | `write` | Open a dispute on a receipt (one per receipt) |
 | POST | `/v1/handoff` | `read` | An A2A state-of-work handoff for a task, assembled by the core (`handoff.create`) and relayed untouched (free; `docs/api/handoff.md`) |
+| GET, POST | `/v1/payments/mandates`, `/v1/payments/mandates/list` | `read` | `payments.mandates.list`, relayed to the core untouched (free; [payments](../../docs/api/payments.md)) |
+| POST | `/v1/payments/mandates/request`, `/v1/payments/mandates/revoke`, `/v1/payments/spend` | `run` | `payments.*` relayed to the core untouched: a new mandate and a payment outside one answer `202` with an approval URL for a human (free at the call) |
 | GET | `/v1/statements?month=&format=` | `read` | The month's statement, JSON or CSV; immutable once the month closes ([billing](../../docs/api/billing.md)) |
 | GET | `/v1/commit` | `read` | The active annual commit: discount, drawn, remaining, overage |
 | POST | `/v1/agents/me/licence` | `write` (key only) | Link a ShogunAI licence; Pro earns $20 a month |

@@ -187,6 +187,13 @@ describe("tenant admin routes", () => {
     expect((await rig.app.request("/v1/agents/me", { headers: { authorization: `Bearer ${key}` } })).status).toBe(200);
     expect(rig.logLines.join("\n")).not.toContain(key);
     expect((await issue({ scopes: ["admin"] })).status).toBe(400);
+    // E51: ["ingest"] alone is the write-only browser-extension key; mixed with others it is refused.
+    const ingest = await issue({ scopes: ["ingest"] });
+    expect(ingest.status).toBe(201);
+    const ingestKey = (await ingest.json()) as { key: string; scopes: string[] };
+    expect(ingestKey.scopes).toEqual(["ingest"]);
+    expect((await rig.app.request("/v1/agents/me", { headers: { authorization: `Bearer ${ingestKey.key}` } })).status).toBe(403);
+    expect((await issue({ scopes: ["ingest", "read"] })).status).toBe(400);
     expect((await issue({}, `prn_${randomUUID()}`)).status).toBe(404);
     // A SCIM-deactivated member gets no key.
     const user: ScimUser = { userId: member, tenantId, userName: "m@acme.example", emails: [], active: false, createdAt: 0, updatedAt: 0 };

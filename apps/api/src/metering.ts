@@ -28,7 +28,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { randomUUID } from "node:crypto";
 
-import { admitPrincipal, admitRefusalResponse, agentError, type AdmitRefusal, agentMeterSubject, hasScopes, resolveAgentKey, type AgentKeyLookup, type AgentPrincipal, type AgentScope, type AgentVars } from "./agent-keys.js";
+import { INGEST_KEY_PROTOCOL_METHODS, INGEST_KEY_TOOLS, admitPrincipal, admitRefusalResponse, agentError, type AdmitRefusal, agentMeterSubject, hasScopes, isIngestOnly, resolveAgentKey, type AgentKeyLookup, type AgentPrincipal, type AgentScope, type AgentVars } from "./agent-keys.js";
 import type { AgentStore, ReserveOutcome } from "./agent-store.js";
 import { paymentRequiredResponse } from "./billing/402.js";
 import { decodePaymentHeader, paymentResponseHeader, x402Requirement, type FacilitatorClient, type SettleResult, type X402Config, type X402Store } from "./billing/x402.js";
@@ -49,6 +49,23 @@ export const SCOPE_BY_UNIT: Readonly<Record<MeterUnit, readonly AgentScope[]>> =
   storage: ["write"],
   protocol: [],
 });
+
+/**
+ * Why `scopes` may not make `call`, or `undefined` when it may. The unit's scope (`SCOPE_BY_UNIT`)
+ * decides for every key but a write-only `ingest` key (E51, the browser extension's), which is
+ * held to `memory.ingest` by `Mcp-Name` and to the MCP handshake and tool list, on `/mcp` only
+ * (`rest`: a REST route pinned to a tool is never one it may call). Headers only, never the body:
+ * the core refuses a body whose tool differs from `Mcp-Name`.
+ */
+export function scopeRefusal(scopes: readonly AgentScope[], call: Pick<ClassifiedCall, "unit" | "method" | "name">, rest = false): "insufficient_scope" | "ingest_only" | undefined {
+  if (isIngestOnly(scopes)) {
+    if (rest) return "ingest_only";
+    if (call.unit === "ingest" && call.method === "tools/call" && call.name !== undefined && INGEST_KEY_TOOLS.has(call.name)) return undefined;
+    if (call.unit === "protocol" && INGEST_KEY_PROTOCOL_METHODS.has(call.method)) return undefined;
+    return "ingest_only";
+  }
+  return hasScopes(scopes, SCOPE_BY_UNIT[call.unit]) ? undefined : "insufficient_scope";
+}
 
 export const HEADER_METHOD = "mcp-method";
 export const HEADER_NAME = "mcp-name";
@@ -359,7 +376,8 @@ export function metered(deps: MeteringDeps, fixed?: { method: string; name: stri
     }
     c.set("agentPrincipal", principal);
     const scopes = SCOPE_BY_UNIT[call.unit];
-    if (!hasScopes(principal.scopes, scopes)) return agentError(c, 403, "insufficient_scope", `This call needs the ${scopes.join(", ")} scope.`);
+    const refusedScope = scopeRefusal(principal.scopes, call, fixed !== undefined);
+    if (refusedScope) return agentError(c, 403, "insufficient_scope", refusedScope === "ingest_only" ? "This is a write-only ingest key: it may call memory.ingest over /mcp and nothing else. Use a key with the read, write or run scope." : `This call needs the ${scopes.join(", ")} scope.`);
     const quote = await quoteCall(deps, call, principal);
     if ("error" in quote) {
       c.set("relayLogEvent", "run_price_unavailable");

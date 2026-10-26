@@ -49,10 +49,16 @@ The same four tools on every face, at the same level and with the same answer (i
 |---|---|
 | MCP | `tools/call` with the arguments below (toolset `payments`, listed by default) |
 | REST (sidecar) | `GET /v1/payments/mandates`, `POST /v1/payments/mandates/list`, `POST /v1/payments/mandates/request`, `POST /v1/payments/mandates/revoke`, `POST /v1/payments/spend`, the arguments as the body |
+| REST (hosted gateway) | the same five routes at `https://api.shogunagent.dev`, with an agent key |
 | CLI | `shogun payments mandates list [<json>]`, `shogun payments mandates request <json>`, `shogun payments mandates revoke <json>`, `shogun payments spend <json>` |
+| SDKs | TypeScript `client.payments.{mandates.list, mandates.request, mandates.revoke, spend}`; Python `client.payments.{list_mandates, request_mandate, revoke_mandate, spend}` (MCP underneath; they never approve) |
 
-The hosted gateway reaches them through `/mcp` (relayed to the principal's sidecar, bodies never
-read or stored); it has no separate REST route for them.
+The hosted gateway reaches them through `/mcp` and through its own REST routes of the same paths
+(E51, `PAYMENT_ROUTES` in `apps/api/src/agent-app.ts`): each route is pinned to its tool, so the
+scope (`read` for the list, `run` for the rest) and the price come from the path, never from a
+header the caller sends; the request is handed to the principal's sidecar at the same path through
+the `/mcp` relay, and neither body is read, logged or stored. A queued L3 answers `202` with the
+approval URL exactly as the sidecar does.
 
 ### `payments.mandates.request`
 
@@ -95,7 +101,11 @@ Inside a mandate:
 
 Outside every mandate it is the pending envelope (`202`, `approval_id`, `url`,
 `next_action: "approve_at_url"`) plus `spend_ref`, `authorization: "approval"` and `reason`. Poll
-`actions.status`; once a human approves, the payment runs and the spend row settles. A retry
+`actions.status`; once a human approves, the payment runs and the spend row settles. If the human
+**rejects** it, or the approval window (10 minutes) elapses first, nothing is paid and the spend
+reads `status: "rejected"` / `"expired"` with `decided_by` (the rejecting human, or
+`system:approval-timeout`) and the `approval_id`; a retry with the same key answers that with
+`next_action: "ask_human"` (E51). A retry
 with the same key answers the recorded spend (`replayed: true`) and never pays twice. A payment
 that reached the rail and failed answers `502 payment_failed` with the spend's `reason_class`.
 
@@ -110,7 +120,14 @@ In the principal's own store (one SQLCipher file per principal, invariant 6), mi
   approval id, or `approval` with the per-payment decision and who made it), payee, currency,
   amount, status (`awaiting_approval` → `executing`, or `authorized`, then `settled` / `failed`;
   `not_queued` when the approval could not be queued), a fixed failure class and the rail's
-  reference. A mandate's spent total counts `authorized`, `executing` and `settled` rows, re-read
+  reference. A per-payment approval that a human rejects or that times out closes its row
+  (`awaiting_approval` → stored `failed` with `reason_class` `rejected` / `expired`, reported as
+  that status; the V105 status set is frozen and `failed` counts nothing against a cap), recording
+  who (`decided_by`), which approval and when. The decide route closes it at the decision; every
+  `payments.mandates.list` and `payments.spend` first reconciles waiting rows against the
+  approval ledger (a recorded `reject`) and the approval window, so a row the decide route could
+  not close (a store fault, an approval that simply expired) still agrees with `actions.status`.
+  Closing is idempotent, and a closed row can never be claimed for payment. A mandate's spent total counts `authorized`, `executing` and `settled` rows, re-read
   inside the reservation's transaction, so two concurrent payments cannot both pass the cap.
 - The traceability log: every payment that may have reached the rail has a row written before the
   rail is called (`purpose` `payments.pay`, `destination` `payment_rail`, the body digested and

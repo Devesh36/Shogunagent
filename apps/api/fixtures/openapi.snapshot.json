@@ -290,7 +290,11 @@
     },
     {
       "name": "keys",
-      "description": "Key caps and revocation."
+      "description": "Key caps and revocation, and write-only ingest keys for the browser extension."
+    },
+    {
+      "name": "payments",
+      "description": "Agent payment mandates and payments (docs/api/payments.md), relayed to the principal's core. L3 by type: nothing is granted or paid before a human approves."
     },
     {
       "name": "wallet",
@@ -834,6 +838,158 @@
         ]
       }
     },
+    "/v1/keys": {
+      "post": {
+        "tags": [
+          "keys"
+        ],
+        "summary": "Issue a write-only ingest key for this principal (the browser extension's): it may call memory.ingest over /mcp and nothing else. Shown once.",
+        "description": "Scopes must be [\"ingest\"] (the default). The key is stored hashed; it expires after expires_in_days (default 90, at most 365) and manages only itself (revoke, caps). memory.ingest_webhook, reads, other writes, runs and every REST route refuse it with 403 insufficient_scope. With an Idempotency-Key a retry answers the same key reference (200, key null), never a second key or the secret again. docs/api/ingest-sources.md §3.",
+        "operationId": "post_v1_keys",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "ingest"
+                      ]
+                    },
+                    "minItems": 1,
+                    "maxItems": 1
+                  },
+                  "expires_in_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365,
+                    "default": 90
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Same Idempotency-Key: the key issued before; its secret is not shown again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "null"
+                    },
+                    "key_id": {
+                      "type": "string"
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "created": {
+                      "type": "boolean",
+                      "const": false
+                    },
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "pattern": "^sa_live_"
+                    },
+                    "key_id": {
+                      "type": "string"
+                    },
+                    "prefix": {
+                      "type": "string"
+                    },
+                    "principal_id": {
+                      "type": "string"
+                    },
+                    "scopes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "const": "ingest"
+                      }
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "created": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_scopes | invalid_expiry | invalid_idempotency_key | invalid_json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope | oauth_not_allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "idempotency_key_reused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "write"
+            ]
+          }
+        ]
+      }
+    },
     "/v1/wallet": {
       "get": {
         "tags": [
@@ -1242,6 +1398,680 @@
           {
             "oauth": [
               "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/payments/mandates": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "payments.mandates.list: the payment mandates a human granted this principal's agents, with spent and remaining. Free.",
+        "description": "Relayed to the principal's core at the same path (the body is never read or stored by the gateway); the answer is the core's, the same as MCP and the CLI give (docs/api/payments.md).",
+        "operationId": "get_v1_payments_mandates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The core's answer: tool, status and the mandate / spend; a pending answer carries approval_id, url and next_action approve_at_url."
+                }
+              }
+            },
+            "headers": {
+              "X-Receipt-Id": {
+                "$ref": "#/components/headers/X-Receipt-Id"
+              },
+              "X-Usage-Unit": {
+                "$ref": "#/components/headers/X-Usage-Unit"
+              },
+              "X-Usage-Cost-Micro-Usd": {
+                "$ref": "#/components/headers/X-Usage-Cost-Micro-Usd"
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "wrong_shard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable | payments_unavailable | payment_rail_unavailable | principal_not_provisioned, with Retry-After where it applies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/payments/mandates/list": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "payments.mandates.list with arguments (mandate_id for one mandate and its recent spends). Free.",
+        "description": "Relayed to the principal's core at the same path (the body is never read or stored by the gateway); the answer is the core's, the same as MCP and the CLI give (docs/api/payments.md).",
+        "operationId": "post_v1_payments_mandates_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mandate_id": {
+                    "type": "string"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The core's answer: tool, status and the mandate / spend; a pending answer carries approval_id, url and next_action approve_at_url."
+                }
+              }
+            },
+            "headers": {
+              "X-Receipt-Id": {
+                "$ref": "#/components/headers/X-Receipt-Id"
+              },
+              "X-Usage-Unit": {
+                "$ref": "#/components/headers/X-Usage-Unit"
+              },
+              "X-Usage-Cost-Micro-Usd": {
+                "$ref": "#/components/headers/X-Usage-Cost-Micro-Usd"
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_mandate_id | invalid_limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "mandate_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "wrong_shard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable | payments_unavailable | payment_rail_unavailable | principal_not_provisioned, with Retry-After where it applies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "read"
+            ]
+          },
+          {
+            "oauth": [
+              "read"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/payments/mandates/request": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "payments.mandates.request: ask a human for a payment mandate (L3, approval URL); terms that only narrow an existing mandate apply at once. Free at the call.",
+        "description": "Relayed to the principal's core at the same path (the body is never read or stored by the gateway); the answer is the core's, the same as MCP and the CLI give (docs/api/payments.md). Nothing is granted until a human approves at the URL; the SDKs never approve.",
+        "operationId": "post_v1_payments_mandates_request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "currency",
+                  "max_per_payment_minor",
+                  "total_cap_minor",
+                  "purpose",
+                  "idempotency_key"
+                ],
+                "properties": {
+                  "mandate_id": {
+                    "type": "string"
+                  },
+                  "payee": {
+                    "type": "string"
+                  },
+                  "payee_class": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string",
+                    "pattern": "^[A-Z]{3}$"
+                  },
+                  "max_per_payment_minor": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "total_cap_minor": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "expires_in_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 366
+                  },
+                  "expires_at_ms": {
+                    "type": "integer"
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "maxLength": 280
+                  },
+                  "single_use": {
+                    "type": "boolean"
+                  },
+                  "idempotency_key": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The core's answer: tool, status and the mandate / spend; a pending answer carries approval_id, url and next_action approve_at_url."
+                }
+              }
+            },
+            "headers": {
+              "X-Receipt-Id": {
+                "$ref": "#/components/headers/X-Receipt-Id"
+              },
+              "X-Usage-Unit": {
+                "$ref": "#/components/headers/X-Usage-Unit"
+              },
+              "X-Usage-Cost-Micro-Usd": {
+                "$ref": "#/components/headers/X-Usage-Cost-Micro-Usd"
+              }
+            }
+          },
+          "202": {
+            "description": "L3: queued for a human. Hand url to the human and poll actions.status; nothing is granted or paid before a human approves.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pending": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "approval_id": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "next_action": {
+                      "type": "string",
+                      "enum": [
+                        "approve_at_url"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_payee | invalid_currency | invalid_expiry | invalid_idempotency_key | …",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope | mandate_not_yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "mandate_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "mandate_revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "wrong_shard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable | payments_unavailable | payment_rail_unavailable | principal_not_provisioned, with Retry-After where it applies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "run"
+            ]
+          },
+          {
+            "oauth": [
+              "run"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/payments/mandates/revoke": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "payments.mandates.revoke: revoke a mandate at once (L1); twice is harmless. Free at the call.",
+        "description": "Relayed to the principal's core at the same path (the body is never read or stored by the gateway); the answer is the core's, the same as MCP and the CLI give (docs/api/payments.md).",
+        "operationId": "post_v1_payments_mandates_revoke",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "mandate_id"
+                ],
+                "properties": {
+                  "mandate_id": {
+                    "type": "string"
+                  },
+                  "idempotency_key": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The core's answer: tool, status and the mandate / spend; a pending answer carries approval_id, url and next_action approve_at_url."
+                }
+              }
+            },
+            "headers": {
+              "X-Receipt-Id": {
+                "$ref": "#/components/headers/X-Receipt-Id"
+              },
+              "X-Usage-Unit": {
+                "$ref": "#/components/headers/X-Usage-Unit"
+              },
+              "X-Usage-Cost-Micro-Usd": {
+                "$ref": "#/components/headers/X-Usage-Cost-Micro-Usd"
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_mandate_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "mandate_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "wrong_shard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable | payments_unavailable | payment_rail_unavailable | principal_not_provisioned, with Retry-After where it applies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "run"
+            ]
+          },
+          {
+            "oauth": [
+              "run"
+            ]
+          }
+        ]
+      }
+    },
+    "/v1/payments/spend": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "payments.spend: pay inside a mandate granted to the caller, or queue a per-payment L3 approval. Priced at the rail's fee (0 with the stub rail).",
+        "description": "Relayed to the principal's core at the same path (the body is never read or stored by the gateway); the answer is the core's, the same as MCP and the CLI give (docs/api/payments.md). A retry with the same idempotency_key answers the recorded spend (replayed) and never pays twice; a spend whose approval a human rejected or that expired reads status rejected / expired.",
+        "operationId": "post_v1_payments_spend",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "payee",
+                  "currency",
+                  "amount_minor",
+                  "idempotency_key"
+                ],
+                "properties": {
+                  "payee": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string",
+                    "pattern": "^[A-Z]{3}$"
+                  },
+                  "amount_minor": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "memo": {
+                    "type": "string",
+                    "maxLength": 280
+                  },
+                  "mandate_id": {
+                    "type": "string"
+                  },
+                  "idempotency_key": {
+                    "type": "string",
+                    "maxLength": 128
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The core's answer: tool, status and the mandate / spend; a pending answer carries approval_id, url and next_action approve_at_url."
+                }
+              }
+            },
+            "headers": {
+              "X-Receipt-Id": {
+                "$ref": "#/components/headers/X-Receipt-Id"
+              },
+              "X-Usage-Unit": {
+                "$ref": "#/components/headers/X-Usage-Unit"
+              },
+              "X-Usage-Cost-Micro-Usd": {
+                "$ref": "#/components/headers/X-Usage-Cost-Micro-Usd"
+              }
+            }
+          },
+          "202": {
+            "description": "L3: queued for a human. Hand url to the human and poll actions.status; nothing is granted or paid before a human approves.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pending": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "approval_id": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "next_action": {
+                      "type": "string",
+                      "enum": [
+                        "approve_at_url"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_payee | invalid_currency | invalid_amount | invalid_memo | invalid_idempotency_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "mandate_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "wrong_shard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "payment_failed — check spend.status before paying again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "upstream_unavailable | payments_unavailable | payment_rail_unavailable | principal_not_provisioned, with Retry-After where it applies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKey": [
+              "run"
+            ]
+          },
+          {
+            "oauth": [
+              "run"
             ]
           }
         ]
@@ -3616,7 +4446,7 @@
         "tags": [
           "enterprise"
         ],
-        "summary": "Issue an agent key (read / write / run; never admin) for a member principal. Shown once; with an Idempotency-Key a retry answers the same key reference (200, key null), never a second key or the secret again.",
+        "summary": "Issue an agent key (read / write / run, or ingest alone for a write-only browser-extension key; never admin) for a member principal. Shown once; with an Idempotency-Key a retry answers the same key reference (200, key null), never a second key or the secret again.",
         "operationId": "post_v1_tenant_members_id_keys",
         "parameters": [
           {
@@ -3644,7 +4474,8 @@
                       "enum": [
                         "read",
                         "write",
-                        "run"
+                        "run",
+                        "ingest"
                       ]
                     }
                   }
@@ -7116,7 +7947,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "sa_live_<key>",
-        "description": "An agent key from POST /v1/agents. Scopes: read, write, run, admin (admin implies all)."
+        "description": "An agent key from POST /v1/agents. Scopes: read, write, run, admin (admin implies all), and ingest: a write-only key from POST /v1/keys that may call memory.ingest over /mcp and nothing else (write implies it)."
       },
       "oauth": {
         "type": "oauth2",

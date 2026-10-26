@@ -208,8 +208,9 @@ nothing queued costs one store read and no network call.
 
 ## 3. Browser extension (specification)
 
-Not implemented. A browser extension is a capture source like the Mac app's screen capture, with
-the same restraint. This section is the contract an implementation must meet.
+The extension is not implemented; its key is (§3.3). A browser extension is a capture source like
+the Mac app's screen capture, with the same restraint. This section is the contract an
+implementation must meet.
 
 ### 3.1 What it may send
 
@@ -245,14 +246,38 @@ text from other tabs.
 
 ### 3.3 Auth
 
-The extension holds a **principal-scoped ingest key**: an agent key of the principal whose scopes
-are exactly `["write"]` (no `read`, no `run`, never `admin`), issued for this install and named
-after it, with its own day cap. It can append to memory and nothing else: it cannot read memory
-back, run tools or queue a send. It is stored in the extension's storage only (never synced), and
-revoking it (`POST /v1/keys/{id}/revoke`) stops the install. Issuing a write-only key to an
-install is a key-management step the gateway does not serve yet (today keys come from
-self-registration with `read`, `write`, `run`, or from a tenant admin); until it does, the
-extension is not shipped.
+The extension holds a **write-only ingest key**: an agent key of the principal whose scopes are
+exactly `["ingest"]`. The person issues one per install with the key they already hold (any key
+with `write`), or a tenant admin issues one for a member (`POST /v1/tenant/members/{id}/keys` with
+`{"scopes":["ingest"]}`):
+
+```bash
+curl -s -X POST $BASE/v1/keys -H "Authorization: Bearer $SHOGUN_KEY" \
+  -H 'Idempotency-Key: browser-install-7f3a' -H 'Content-Type: application/json' \
+  -d '{"scopes":["ingest"],"expires_in_days":90}'
+# → 201 {"key":"sa_live_…","key_id":"ak_…","scopes":["ingest"],"expires_at":"…","created":true}
+```
+
+- The secret is in that answer once; the gateway stores only its salted PBKDF2 hash, like every
+  key (invariant 7). A retry with the same `Idempotency-Key` answers `200` with `key: null` and the
+  same `key_id`, never a second key or the secret again. The key expires after `expires_in_days`
+  (default 90, at most 365). An OAuth access token cannot issue one, and an ingest key cannot
+  issue another.
+- **What it can do**, enforced at the gateway from headers alone (`scopeRefusal` in
+  `apps/api/src/metering.ts`; the body is never read): on `/mcp`, `tools/call` with
+  `Mcp-Name: memory.ingest`, plus the MCP handshake (`initialize`, `notifications/initialized`,
+  `ping`) and `tools/list`. The core refuses a body whose tool differs from `Mcp-Name`, so the
+  header is the call. Everything else answers `403 insufficient_scope` before anything is reserved
+  or relayed: `memory.ingest_webhook` (the ingest hooks' tool, not included), `memory.append_note`,
+  `handoff.accept`, every read (`memory.recall`, `state.*`, …), `resources/*`, `prompts/*`, the SSE
+  `GET`, runs and actions, and every REST route that needs a scope (`/v1/agents/me`, the wallet,
+  receipts, quotes, `/v1/handoff`, `/v1/payments/...`, the ingest-hook routes, `POST /v1/keys`).
+- It manages only itself: it may change its own caps (`PATCH /v1/keys/{its id}`, within the
+  defaults) and revoke itself; any other key of the principal answers `404 key_not_found`. The
+  principal's other keys revoke or re-cap it as usual.
+- It is stored in the extension's storage only (never synced), and revoking it
+  (`POST /v1/keys/{id}/revoke`) stops the install. Its ingests are metered from the principal's
+  wallet like any key's, bounded by its own day cap.
 
 ### 3.4 Where it sends
 
@@ -293,4 +318,4 @@ Body (the `memory.ingest` contract, `docs/api/core-tools.md`):
 | GitHub, Linear, Slack, Notion, Google Calendar, Gmail hooks (verification, registration, relay, billing, failure budget) | implemented (gateway) |
 | `memory.ingest_webhook` normalizers (GitHub, Linear, Slack text; Notion, Calendar, Gmail change notices) | implemented (core, three faces) |
 | Change notice → connector fetch in the hosted core (queue in the principal's store, drained by `shogun-api --dream-tick`) | implemented for Gmail and Google Calendar (§2.8); Notion is fetched only for a principal that already holds a REST grant, because the core has no hosted Notion sign-in |
-| Browser extension | specified (§3); not built; needs write-only key issuance |
+| Browser extension | specified (§3); not built. The write-only `ingest` key it needs is implemented (`POST /v1/keys`, §3.3; `apps/api/test/ingest-keys.test.ts`) |

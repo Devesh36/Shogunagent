@@ -206,7 +206,9 @@ describe("/openapi.json (E10-T6 scaffolding)", () => {
     const doc = openapiDocument(FIXTURE_TOOL_TABLE, ctx) as { openapi: string; paths: Record<string, Record<string, unknown>>; info: Record<string, unknown> };
     expect(doc.openapi).toBe("3.1.0");
     for (const p of ["/.well-known/pricing.json", "/.well-known/mcp/server-card.json", "/.well-known/agent-card.json", "/.well-known/status.json", "/health", "/openapi.json", "/llms.txt",
-      "/v1/agents/challenge", "/v1/agents", "/v1/agents/me", "/v1/keys/{id}/revoke", "/v1/keys/{id}", "/v1/wallet", "/v1/wallet/topup", "/v1/stripe/webhook", "/v1/quote", "/v1/receipts", "/v1/receipts/{id}/dispute", "/mcp",
+      "/v1/agents/challenge", "/v1/agents", "/v1/agents/me", "/v1/keys/{id}/revoke", "/v1/keys/{id}",
+      // E51: write-only ingest keys and the payments REST relay
+      "/v1/keys", "/v1/payments/mandates", "/v1/payments/mandates/list", "/v1/payments/mandates/request", "/v1/payments/mandates/revoke", "/v1/payments/spend", "/v1/wallet", "/v1/wallet/topup", "/v1/stripe/webhook", "/v1/quote", "/v1/receipts", "/v1/receipts/{id}/dispute", "/mcp",
       "/v1/router/discover", "/v1/router/inspect", "/v1/router/run",
       // E19, E3-T2, E23
       "/v1/statements", "/v1/commit", "/v1/agents/me/licence", "/v1/admin/commits", "/v1/admin/adjustments", "/v1/admin/disputes/{id}/resolve",

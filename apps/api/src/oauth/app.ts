@@ -191,6 +191,7 @@ const SCOPE_TEXT: Record<AgentScope, string> = {
   write: "Write to your memory: ingest events and notes (metered from your wallet).",
   run: "Run tools through the router on your behalf (metered; L3 actions still wait for your approval).",
   admin: "",
+  ingest: "",
 };
 
 function page(title: string, body: string, formAction: string[] = []): { html: string; csp: string } {

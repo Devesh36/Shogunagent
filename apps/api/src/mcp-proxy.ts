@@ -49,9 +49,13 @@ import type { AdmitRefusal, AgentPrincipal } from "./agent-keys.js";
 
 /** The sidecar's transport path. */
 export const SIDECAR_MCP_PATH = "/mcp";
-/** The sidecar paths the relay serves: the MCP transport, and the REST handoff route whose object
- * the core assembles (E35). The request's own path picks one; anything else goes to `/mcp`. */
-export const SIDECAR_PATHS: readonly string[] = Object.freeze([SIDECAR_MCP_PATH, "/v1/handoff"]);
+/** The sidecar paths the relay serves: the MCP transport, the REST handoff route whose object the
+ * core assembles (E35), and the REST face of `payments.*` (E51, docs/api/payments.md). The
+ * request's own path picks one; anything else goes to `/mcp`. */
+export const SIDECAR_PATHS: readonly string[] = Object.freeze([
+  SIDECAR_MCP_PATH, "/v1/handoff",
+  "/v1/payments/mandates", "/v1/payments/mandates/list", "/v1/payments/mandates/request", "/v1/payments/mandates/revoke", "/v1/payments/spend",
+]);
 
 /** The sidecar path for `request`: its own path when the relay serves it, else `/mcp`. */
 export function sidecarPathOf(request: Request): string {
