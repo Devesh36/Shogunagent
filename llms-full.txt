@@ -16,7 +16,7 @@ Generated from README.md, SKILL.md, apps/api/README-agent-api.md, docs/api/402.m
 
 This repository holds the strategy, the research and the code for ShogunAgent: the state-inference and permission engine inside [ShogunAI](https://github.com/Torutesu/ShogunAI-) offered as a service to AI agents instead of humans. The decisions below are current as of October 2026 and supersede earlier drafts in `reports/`.
 
-**Status:** phases 1 to 5 of the roadmap are implemented in code and verified in this repository. Nothing has been deployed, published to npm or PyPI, or submitted to a directory yet; those wait for the owner decisions listed in §12.
+**Status:** phases 1 to 5 of the roadmap are implemented in code and verified in this repository. "Implemented" means built and tested, not released: nothing has been deployed, published to npm or PyPI, or submitted to a registry or directory yet. Those wait for the owner decisions listed in §12.
 
 ---
 
@@ -62,8 +62,8 @@ Five acquisition paths, all landing in the same append-only `event_log` (dedup, 
 | Path | Content | Requires |
 |---|---|---|
 | Agent ingest (primary) | Conversation turns, tool results, task progress via `memory.ingest` and Anthropic memory-tool-compatible `/memories` writes | Nothing. Any agent. |
-| Connector pull | Gmail, Calendar, Slack, GitHub, Linear, Notion. A human completes the sign-in; tokens live only in the principal's own store, and the core refreshes and revokes them | `shogun-integrations`, hosted connect flow |
-| Provider webhooks | GitHub, Linear and Slack deliveries become events directly. Notion, Calendar and Gmail send change notices; the core then fetches the text with the principal's own token (no attachments, no images) | A registered hook per provider |
+| Connector pull | Gmail, Calendar, Slack, GitHub, Linear, Notion. A human completes the sign-in; tokens live only in the principal's own store. The core refreshes them, and revokes them at the vendor where the vendor allows it (not Notion; GitHub only with the app secret) | `shogun-integrations`, hosted connect flow |
+| Provider webhooks | GitHub, Linear and Slack deliveries become events directly. Notion, Calendar and Gmail send change notices; the core then fetches the text with the principal's own token (Notion pages only; no attachments, no images) | A registered hook per provider |
 | Router run log | tool × task × outcome for every run through the router | Owning the router |
 | Device capture (premium) | Accessibility-API text, Visual recall OCR, meeting transcripts | The ShogunAI Mac app |
 | Import | ChatGPT / Claude / Cursor exports, export v1 and v2 packages | `shogun-memory-import/v1` |
@@ -103,7 +103,7 @@ ShogunAgent is model-agnostic. Our own LLM use is extraction and consolidation o
 3. **Trust.** Zero retention, provenance on every row, six eval harnesses, OWASP ASI06 mitigations in the write path. Enterprise trust is earned through audits and time and cannot be bought.
 4. **Device-level truth.** Accessibility and Visual recall capture that neither labs nor memory vendors have. Grows as platforms are added.
 5. **Standards.** Bring the export format and the permission-tier taxonomy to the W3C memory interop CG and MCP annotations; be the reference implementation.
-6. **Engineering lead.** ~370k lines of Rust, calibration rules, 105 additive migrations, six eval harnesses plus an open-loop benchmark and a multilingual retrieval suite. A lead, not a wall.
+6. **Engineering lead.** ~370k lines of Rust, calibration rules, 105 additive migrations, six eval harnesses (one of them the open-loop benchmark), a selection eval and a multilingual retrieval suite. A lead, not a wall.
 
 **Not a moat:** router code (MIT, 780 forks), the shape of a memory API, benchmark scores, model access.
 
@@ -128,7 +128,7 @@ These are the rates the gateway implements today (`apps/api/src/pricing.ts`, `/.
 | Metered item | Unit price | Notes |
 |---|---|---|
 | Tool run, third-party provider | provider price + 5% | One take, charged once by the wallet. Failures and empty results $0. Monid-listed tools carry Monid's price plus this one take, not two |
-| Tool run, first-party connector | $0.002 / call | No take. Writes pass L2/L3 at the same price |
+| Tool run, first-party connector | $0.002 / call | No take. Writes pass L2/L3 at the same price. The first-party state reads cost $0 |
 | Ingest | $0.50 / 1K events | Includes extraction LLM cost. Webhook deliveries settle at the events actually stored |
 | Model-invoking op | $0.10 / 1K | Consolidation, AI search, entity pages |
 | State reads | $0 | `state.*`, `get_context_pack`, `recall`, `search`, `handoff.create`, `connections.list` |
@@ -145,7 +145,7 @@ Margin targets: ingest at 3–5× cost; runs near break-even at a 5% take. Revis
 
 ### Do not build
 
-A general router competing on price alone; our own payment rails (payments run through a pluggable rail, a stub today); accepting x402 in production (decided: it is implemented behind `X402_ENABLED`, off, see `docs/decisions/0002-x402.md`); a graph DB (typed relation rows in SQLite suffice); a Postgres port (reuse drops from 60–70% to 25%); in-house embedding research; a chat-personalization memory API; LoCoMo score-chasing; Windows/mobile capture before the ingest API; consumer apps; exposing the desktop-only tools on the server (a server build lists the core, files, handoff, payments, governance, import, state, skills and wiki groups; the Mac-only groups stay in ShogunAI).
+A general router competing on price alone; our own payment rails (payments run through a pluggable rail, a stub today); accepting x402 in production (decided: it is implemented behind `X402_ENABLED`, off, see `docs/decisions/0002-x402.md`); a graph DB (typed relation rows in SQLite suffice); a Postgres port (reuse drops from 60–70% to 25%); in-house embedding research; a chat-personalization memory API; LoCoMo score-chasing; Windows/mobile capture before the ingest API; consumer apps; exposing the desktop-only tools on the server (a server build lists the core, files, handoff, payments, governance, import, state, skills and wiki groups; the Mac-only groups are listed only in the `desktop` build).
 
 ## 8. Go-to-market: developers and individuals first, OSS as the engine
 
@@ -167,15 +167,15 @@ A general router competing on price alone; our own payment rails (payments run t
 
 ## 9. Roadmap (sequence only, no durations)
 
-Development runs AI-first. Phases are defined by order and exit criteria; no day or month counts. The code for every phase below is in this repository and passes its checks. The exit criteria are market measurements and can only be met after launch.
+Development runs AI-first. Phases are defined by order and exit criteria; no day or month counts. The code for every phase below is in this repository and passes its checks. "Done" in the Code column means built and tested, not released. The exit criteria are market measurements and can only be met after launch.
 
 | Phase | Deliverables | Code | Exit criteria (estimates) |
 |---|---|---|---|
-| **1. Core and router skeleton** | `shogunagent-core` standalone on Linux (one SQLCipher file per principal); Streamable HTTP MCP with the 21 frozen core tools; API-key auth; `/memories` projection; export format v1; OSS release. Router: discover / inspect / run, Monid-compatible connectors, hosted passthrough, memory/state category, per-key caps, L1/L2/L3 on every run. Prepaid credits and 402. SKILL.md, Claude Code plugin, MCP Registry entry. Same-harness results published. | Done | Sustained `tools/call` traffic from external agents; design partners signed; one published benchmark; router-to-state conversion measurable |
+| **1. Core and router skeleton** | `shogunagent-core` standalone on Linux (one SQLCipher file per principal); Streamable HTTP MCP with the 21 frozen core tools; API-key auth; `/memories` projection; export format v1; OSS release. Router: discover / inspect / run, Monid-compatible connectors, hosted passthrough, memory/state category, per-key caps, L1/L2/L3 on every run. Prepaid credits and 402. SKILL.md, Claude Code plugin, MCP Registry entry (validated, not submitted). OSS-ready under Apache-2.0. Same-harness results in `docs/benchmarks/`. | Done | Sustained `tools/call` traffic from external agents; design partners signed; one published benchmark; router-to-state conversion measurable |
 | **2. Approvals, SDKs, billing, catalog** | Remote L2/L3 approvals (web, Slack, webhooks); A2A Agent Card; TS/Python SDKs with `withShogunAgent()`; agent-scratch namespaces with ACL and audit; Stripe usage billing and wallet; OAuth 2.1 for agents; personalized `discover`; self-serve provider listing; directory submission packs; local embeddings | Done | Growing paid wallet users; ingest gross margin ≥ 3× cost; LLM cost ≤ 15% of revenue; improving router-to-state conversion |
 | **3. Enterprise, standards, payments** | Approved actions execute exactly once; a persistent approval ledger; hash-chained audit export; tenants, SSO (OIDC, SAML), SCIM, regions; customer-managed keys (AWS, GCP, Vault); Helm and Compose; export format v2 with interop converters; open-loop benchmark v1; provider payouts and the open catalog; x402 decided | Done | Enterprise contracts; NRR > 110%; top-3 on same-harness multi-session and temporal categories; rising first-party connector share |
 | **4. Launch readiness** | Router runs charged once through the wallet, with a durable settlement outbox; hosted `/mcp` relayed to each principal's sidecar and billed from the core's own report; handoff assembled in the core on three faces; MCP conformance suite; SDK tests inside real agent frameworks; body-free metrics and traces; load tests; threat model, fuzzing, secret scanning; manual-only publish and deploy workflows; production runbook | Done | Hosted service live; conformance green against the deployed URL; first directory listings accepted |
-| **5. Expansion** | Multilingual embeddings and retrieval suite; provider webhooks and read-sync; hosted connector sign-in, refresh, status, disconnect and revocation (Gmail, Calendar, Slack, Linear, GitHub, Notion); first-party Gmail and Notion reads; agent payment mandates; export v2 community-group draft and JSON-LD context; open-loop rules for passive, Japanese and cross-thread phrasing | Done | Non-English recall on par with English; state growing from sources beyond the Mac; agent payments settled within L3 and caps |
+| **5. Expansion** | Multilingual embeddings and retrieval suite; provider webhooks and read-sync; hosted connector sign-in, refresh, status and disconnect (Gmail, Calendar, Slack, Linear, GitHub, Notion), with vendor revocation where the vendor allows it; first-party Gmail and Notion reads; agent payment mandates; export v2 community-group draft and JSON-LD context; open-loop rules for passive, Japanese and cross-thread phrasing | Done | Non-English recall on par with English; state growing from sources beyond the Mac; agent payments settled within L3 and caps |
 
 ## 10. What carries over from ShogunAI
 
@@ -218,7 +218,7 @@ The buyer is increasingly an agent, not a person. An agent discovers a service, 
 | `POST /v1/agents` | Agent self-registration: returns a scoped key and the free allowance, rate-limited and abuse-gated, no email | Onboarding without a form |
 | Referral in the key | `ref` attribute credited to the referring agent's or developer's wallet | Agents become the channel |
 
-All of these are served by `apps/api` and generated from code (invariant 12). Two are partial: the `ref` attribute is recorded at registration but not yet credited, and `server.json` validates against the MCP Registry schema but has not been submitted.
+All of these are generated from code (invariant 12). The well-known documents, pricing, quote and registration are served by `apps/api`; `server.json`, `SKILL.md` and `benchmarks.json` are files in this repository. Two are partial: the `ref` attribute is recorded at registration but not yet credited, and `server.json` validates against the MCP Registry schema but has not been submitted.
 
 ### Payment design
 
@@ -252,8 +252,8 @@ Verified on the latest commit of `main`:
 
 Benchmarks, read with their caveats (`docs/benchmarks/`):
 
-- **Retrieval (same-harness, English):** recall@5 0.985, MRR 0.948, false answers 0.000 with keyword search alone.
-- **Multilingual retrieval suite** (English, Japanese, Spanish, German, French, Chinese): questions without an answer return nothing in every language. Keyword-only recall drops where the only evidence is a project name; with the test embedder, recall@5 is 0.966.
+- **Golden search eval** (132 cases, mostly Japanese, keyword search): recall@5 0.985, MRR 0.948, false answers 0.000.
+- **Multilingual retrieval suite** (English, Japanese, Spanish, German, French, Chinese): questions without an answer return nothing in every language. With keyword search, the default, recall@5 is 0.552: paraphrased and cross-language questions need embeddings. With the deterministic test embedder (not a real model) it is 0.966. The real multilingual model is not pinned or calibrated yet.
 - **Open-loop tracking:** 1.000 on the generator's own templates, which the rules were written against, so treat that as a ceiling. On phrasings written separately, the headline score is 0.665, up from 0.489, with precision 1.000 and no loop closed by mistake.
 
 What remains is outside code:
