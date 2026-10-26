@@ -352,6 +352,77 @@ fn parse_ja(text: &str) -> Option<Spec> {
     None
 }
 
+/// Japanese particles that make an English date before them a deadline ("Fridayまでに",
+/// "September 21に", "Monday迄"), the way "by" / "on" / "until" do before it in English.
+const JA_DEADLINE_AFTER: [&str; 4] = ["までに", "まで", "迄", "に"];
+
+/// An English date written inside a Japanese sentence (E51): "the Q3 budgetはFridayまでに…",
+/// "締切はSeptember 21に変更". Japanese puts the particle after the date, so [`parse_en`]'s
+/// leading "by" / "on" never appears. Only a date followed directly by a deadline particle counts
+/// (a bare "Friday" in the sentence is no more a deadline than it is in English), and the text must
+/// hold Japanese at all. `lower` is the lower-cased text.
+fn parse_en_in_ja(lower: &str) -> Option<Spec> {
+    if !lower.chars().any(|c| matches!(c as u32, 0x3040..=0x30FF | 0x4E00..=0x9FFF)) {
+        return None;
+    }
+    // ASCII word runs with their byte ranges.
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let mut start = None;
+    for (i, c) in lower.char_indices() {
+        let word = c.is_ascii_alphanumeric() || c == '/' || c == '-';
+        match (word, start) {
+            (true, None) => start = Some(i),
+            (false, Some(s)) => {
+                runs.push((s, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        runs.push((s, lower.len()));
+    }
+    let word = |i: usize| runs.get(i).map(|&(a, b)| &lower[a..b]);
+    // Only spaces between the words of one date ("september 21", "next friday").
+    let adjacent = |i: usize| match (runs.get(i), runs.get(i + 1)) {
+        (Some(&(_, end)), Some(&(next, _))) => lower[end..next].chars().all(|c| c == ' '),
+        _ => false,
+    };
+    let deadline_after = |i: usize| {
+        runs.get(i).is_some_and(|&(_, end)| JA_DEADLINE_AFTER.iter().any(|p| lower[end..].starts_with(p)))
+    };
+    for i in 0..runs.len() {
+        let Some(first) = word(i) else { continue };
+        let next = i > 0 && word(i - 1) == Some("next") && adjacent(i - 1);
+        if let Some(wd) = en_weekday(first) {
+            if deadline_after(i) {
+                return Some(if next { Spec::NextWeekday(wd) } else { Spec::Weekday(wd) });
+            }
+            continue;
+        }
+        if let Some(spec) = numeric_date(first) {
+            if deadline_after(i) {
+                return Some(spec);
+            }
+            continue;
+        }
+        if adjacent(i) {
+            let second = word(i + 1).unwrap_or_default();
+            // "september 21に", "21 septemberまで"
+            let month_day = match (en_month(first), day_number(second), day_number(first), en_month(second)) {
+                (Some(m), Some(d), _, _) | (_, _, Some(d), Some(m)) => Some(Spec::MonthDay(m, d)),
+                _ => None,
+            };
+            if let Some(spec) = month_day {
+                if deadline_after(i + 1) {
+                    return Some(spec);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn anchor(spec: Spec, today: i64) -> Option<i64> {
     let date = civil_from_days(today);
     let days = match spec {
@@ -398,9 +469,16 @@ fn anchor(spec: Spec, today: i64) -> Option<i64> {
 /// a fixed UTC offset. `None` when the sentence names no single day.
 pub fn due_at_with_offset(text: &str, said_at_ms: i64, offset_secs: i32) -> Option<i64> {
     let lower = text.to_lowercase();
-    let spec = parse_en(&lower).or_else(|| parse_ja(text))?;
+    let spec = parse_en(&lower).or_else(|| parse_ja(text)).or_else(|| parse_en_in_ja(&lower))?;
     let today = local_days(said_at_ms, offset_secs);
     anchor(spec, today).map(|days| end_of_day_ms(days, offset_secs))
+}
+
+/// Whether `text` names one day the parser reads, whenever it was said (a guard for phrases that
+/// are promises only with a deadline, `extract`).
+pub fn names_a_day(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    parse_en(&lower).or_else(|| parse_ja(text)).or_else(|| parse_en_in_ja(&lower)).is_some()
 }
 
 /// [`due_at_with_offset`] in the host's local time.
@@ -504,6 +582,28 @@ mod tests {
         assert_eq!(due("3日後に連絡します"), d(9, 26));
         assert_eq!(due("月末までに払います"), d(9, 30));
         assert_eq!(due("来週送ります"), None, "来週 alone is not a day");
+    }
+
+    #[test]
+    fn english_dates_inside_japanese_sentences() {
+        assert_eq!(due("the Q3 budgetはFridayまでにOren Valeさんへお送りします"), d(9, 25));
+        assert_eq!(due("締切はSeptember 30に変更になりました"), d(9, 30));
+        assert_eq!(due("Oct 5までに提出します"), d(10, 5));
+        assert_eq!(due("5 Octoberまでに提出します"), d(10, 5));
+        assert_eq!(due("next Mondayまでに共有します"), d(9, 28), "as \"by next Monday\" reads");
+        assert_eq!(due("10/2迄に送ります"), d(10, 2));
+    }
+
+    #[test]
+    fn an_english_date_in_japanese_without_a_deadline_particle_stays_undated() {
+        for text in [
+            "Fridayの定例で話しましょう",   // the Friday meeting, not a deadline
+            "September の予算について",     // no day
+            "Fridayは休みです",
+            "I'll bring it to the Friday meeting", // English, unchanged
+        ] {
+            assert_eq!(due(text), None, "{text}");
+        }
     }
 
     #[test]

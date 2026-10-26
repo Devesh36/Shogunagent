@@ -179,15 +179,30 @@ static EN: CueSet = CueSet {
     waiting: &["waiting on", "waiting for", "waiting to hear", "blocked on", "pending from",
                "still waiting",
                "no word yet from", "no word from", "haven't heard back", "hasn't arrived",
-               "haven't received", "still no sign of", "yet to hear from", "yet to receive"],
+               "haven't received", "still no sign of", "yet to hear from", "yet to receive",
+               // E51, the passive ("the contract is still awaited from legal", "no reply has been
+               // received from Oren").
+               "still awaited", "is awaited from", "are awaited from", "has not been received",
+               "hasn't been received", "have not been received", "haven't been received",
+               "has not arrived", "no reply has been received", "no response has been received",
+               "no answer has been received"],
     review: &["please review", "ptal", "take a look", "can you review", "needs review",
               "review needed", "could you review",
               "asked you to review", "requested your review of", "for your review", "your eyes on",
-              "wants your review", "would like your review"],
+              "wants your review", "would like your review",
+              // E51, the passive ("your review is requested on the spec", "your approval is needed").
+              "review is requested", "review has been requested", "review is needed from you",
+              "your review is needed", "your review is required", "approval is requested",
+              "your approval is needed", "your approval is required", "your sign-off is needed",
+              "your sign-off is required"],
     decision: &["need to decide", "decision needed", "let's decide", "we need to choose",
                 "to be decided", "still deciding", "tbd",
                 "decision pending", "pending decision", "open question", "until we settle",
-                "until we decide", "yet to decide", "haven't decided"],
+                "until we decide", "yet to decide", "haven't decided",
+                // E51, the passive ("it has not been decided yet", "no decision has been made").
+                "has not been decided", "hasn't been decided", "have not been decided",
+                "has yet to be decided", "is yet to be decided", "no decision has been made",
+                "a decision is needed", "a decision is required", "decision is still needed"],
     followup: &["follow up", "circle back", "check back", "loop back", "get back to them",
                 "ping again"],
     // Only ever read on a question ("…?"): "does the plan look right to you?" asks for a reply.
@@ -221,6 +236,108 @@ const EN_THEIRS_PARAPHRASE: &[(&str, &str)] = &[
     ("you will get", " from me"),
 ];
 
+/// A promise in the passive voice, with the speaker as the agent (E51): "the deck will be sent to
+/// Oren by me on Friday", "the migration is being handled by me", "it will be done from my side
+/// by Monday". The segment must hold one of [`EN_PASSIVE_FUTURE`] and one of [`EN_ME_AGENT`]; a
+/// passive with any other agent ("will be sent by Priya") or none is not the speaker's promise.
+const EN_PASSIVE_FUTURE: &[&str] = &[
+    "will be ", "'ll be ", "shall be ", "is going to be ", "are going to be ", "is being ", "are being ",
+];
+const EN_ME_AGENT: &[&str] = &[" by me", " from me", " from my side", " from my end", " on my end", " by myself"];
+
+/// Someone's promise to the user in the passive (E51): "the contract will be sent to you by
+/// Friday", "you will be sent the slides on Monday". Read only with a deadline the date parser
+/// accepts: without one these are a system's notices ("a confirmation will be sent to you").
+const EN_THEIRS_PASSIVE: &[&str] = &[
+    "will be sent to you", "will be shared with you", "will be forwarded to you", "will be delivered to you",
+    "will be emailed to you", "will be passed to you", "will be handed to you", "will be given to you",
+    "will be sent over to you", "will be with you", "you will be sent", "you'll be sent", "you will be given",
+    "you'll be given",
+];
+
+/// True when an English segment is the speaker's promise in the passive voice. A condition
+/// anywhere in it ("… will be sent by me if legal signs") makes it a hypothetical.
+fn passive_mine(lower: &str) -> bool {
+    contains_any(lower, EN_PASSIVE_FUTURE)
+        && contains_any(lower, EN_ME_AGENT)
+        && !contains_any(lower, &[" if ", " unless ", " once "])
+}
+
+/// True when an English segment is someone's passive promise to the user, with a deadline.
+fn passive_theirs(lower: &str) -> bool {
+    contains_any(lower, EN_THEIRS_PASSIVE) && crate::due::names_a_day(lower)
+}
+
+/// Japanese promise forms the [`JA`] set leaves out (E51), each read with the guards it needs:
+///
+/// - [`JA_MINE_EXTRA`]: more polite first-person action verbs ("お送りいたします", "お渡しします",
+///   "お知らせします"), under the same `not_mine` vetoes as [`JA`];
+/// - [`JA_MINE_PLANNED`]: a transfer the speaker has scheduled ("送付予定です", "提出予定です"),
+///   which is the speaker's unless the sentence names another subject ("〜さんが", "〜さんから");
+/// - [`JA_MINE_ACCEPT`]: taking a task on ("任せてください", "引き受けます"), which marketing copy
+///   reuses ("安心してお任せください"), so it needs a deadline the date parser reads.
+const JA_MINE_EXTRA: &[&str] = &[
+    "お送りいたします", "お送り致します", "お渡しします", "お渡しいたします", "お渡し致します", "お知らせします",
+    "お知らせいたします", "お知らせ致します", "お返事します", "返事します", "仕上げます", "送っておきます",
+];
+const JA_MINE_PLANNED: &[&str] = &[
+    "送付予定です", "送付する予定です", "提出予定です", "提出する予定です", "共有予定です", "共有する予定です",
+    "送る予定です", "お送りする予定です", "お渡しする予定です", "対応予定です", "対応する予定です",
+];
+const JA_MINE_ACCEPT: &[&str] = &["任せてください", "任せて下さい", "お任せください", "引き受けます", "担当します"];
+/// Another person is the subject: a planned transfer is theirs, not the speaker's.
+const JA_OTHER_SUBJECT: &[&str] = &["さんが", "さんから", "様が", "様から", "くんが", "ちゃんが"];
+/// Someone's promise to the user, reported (E51): "送ってくださるとのこと", "Orenさんから届く予定".
+const JA_THEIRS_EXTRA: &[&str] = &[
+    "くださるとのこと", "くださる予定", "いただける予定", "もらえることになりました", "もらえる予定",
+    "から届く予定", "から送られてくる予定", "から共有される予定",
+];
+/// A Japanese promise-shaped sentence that is not a promise: a condition ("予算が通ったら送ります",
+/// "もし…"), a maybe ("かもしれません"), or a plan already dropped ("送るつもりでしたが…").
+const JA_HEDGES: &[&str] = &[
+    "もし", "たら", "れば", "なら", "かもしれ", "かも", "つもりでしたが", "予定でしたが", "はずでしたが",
+    "つもりだったが", "予定だったが",
+];
+
+/// The speaker's Japanese promise in one of the E51 forms.
+fn ja_mine_extra(lower: &str, seg: &Segment<'_>) -> bool {
+    if seg.is_question || contains_any(lower, JA_HEDGES) {
+        return false;
+    }
+    // 任せてください holds ください, which `not_mine` vetoes; its guard is the deadline instead.
+    if contains_any(lower, JA_MINE_ACCEPT) && crate::due::names_a_day(lower) {
+        return true;
+    }
+    !contains_any(lower, JA.not_mine)
+        && (contains_any(lower, JA_MINE_EXTRA)
+            || (contains_any(lower, JA_MINE_PLANNED) && !contains_any(lower, JA_OTHER_SUBJECT)))
+}
+
+/// Someone's Japanese promise to the user in one of the E51 forms.
+fn ja_theirs_extra(lower: &str, seg: &Segment<'_>) -> bool {
+    !seg.is_question
+        && !contains_any(lower, JA_HEDGES)
+        && (contains_any(lower, JA_THEIRS_EXTRA)
+            || (contains_any(lower, JA_MINE_PLANNED) && contains_any(lower, JA_OTHER_SUBJECT)))
+}
+
+/// Japanese open-loop forms the [`JA`] set leaves out (E51): a thing not received ("まだ届いていません",
+/// "返事がありません"), a check requested ("チェックをお願いします"), a decision not made
+/// ("まだ決まっていません").
+const JA_WAITING_EXTRA: &[&str] = &[
+    "届いていません", "届いていない", "返事がありません", "返事がない", "返信がありません", "返信がない",
+    "連絡がありません", "連絡がない", "回答がありません", "回答がない", "もらっていません",
+    "受け取っていません", "未着", "音沙汰",
+];
+const JA_REVIEW_EXTRA: &[&str] = &[
+    "チェックお願い", "チェックをお願い", "チェックしてください", "チェックして下さい", "確認していただけ",
+    "目を通していただけ", "レビューしていただけ",
+];
+const JA_DECISION_EXTRA: &[&str] = &[
+    "決まっていません", "決まっていない", "未決", "決めかねて", "判断が必要", "決定が必要",
+    "結論が出ていません", "結論が出ていない",
+];
+
 /// A promise-shaped sentence that is not a promise (E49, the loop-bench distractor families):
 /// - a hypothetical: it opens with a condition or hedge ("If the budget comes through, I will
 ///   send …", "Maybe I could …", "In theory we would …"), or says "no promises";
@@ -249,6 +366,13 @@ fn sentence_body(lower: &str) -> &str {
 fn hedged(lower: &str) -> bool {
     let body = sentence_body(lower);
     EN_HEDGE_OPENERS.iter().any(|h| body.starts_with(h)) || contains_any(lower, EN_HEDGES)
+}
+
+/// True when a sentence is hedged or retracts an offer it states itself ("Scratch my offer on the
+/// schedule", "I was going to send …, but that is off now"): `loop_updates` does not let such a
+/// sentence on another thread cancel a row (E51), since the offer it withdraws is its own.
+pub(crate) fn hedged_or_retracted(text: &str) -> bool {
+    hedged(&text.to_lowercase())
 }
 
 /// True when any `(cue, also)` pair holds in `lower`.
@@ -498,7 +622,9 @@ pub fn extract(text: &str) -> Vec<Candidate> {
 
         // Commitments take precedence (an explicit promise is the strongest signal). A hedged or
         // withdrawn sentence is no promise at all, but it may still ask or wait for something.
-        let promise = !hedged(&lower);
+        // A Japanese segment is also hedged by a condition or a dropped plan (E51, [`JA_HEDGES`]).
+        let japanese = seg.text.chars().any(is_cjk);
+        let promise = !hedged(&lower) && !(japanese && contains_any(&lower, JA_HEDGES));
         if promise && mine_hit(&lower, &seg) {
             out.push(Candidate::Commitment {
                 direction: CommitmentDirection::Mine,
@@ -536,13 +662,34 @@ pub fn extract(text: &str) -> Vec<Candidate> {
             });
             continue;
         }
+        // E51: the passive voice, and the Japanese forms the JA set leaves out. Weaker evidence
+        // than an explicit "I'll" / 送ります, so they sit at the bottom of the band.
+        if promise && !seg.is_question && (passive_mine(&lower) || (japanese && ja_mine_extra(&lower, &seg))) {
+            out.push(Candidate::Commitment {
+                direction: CommitmentDirection::Mine,
+                description: clip(seg.text),
+                confidence: 0.3,
+                evidence: None,
+            });
+            continue;
+        }
+        if promise && !seg.is_question && (passive_theirs(&lower) || (japanese && ja_theirs_extra(&lower, &seg))) {
+            out.push(Candidate::Commitment {
+                direction: CommitmentDirection::Theirs,
+                description: clip(seg.text),
+                confidence: 0.25,
+                evidence: None,
+            });
+            continue;
+        }
 
         // Open loops: waiting → review → decision → follow-up → question-reply. First match wins.
-        let kind = if cue_hit(&lower, seg.text, |c| c.waiting) {
+        let ja_extra = |cues: &[&str]| japanese && contains_any(&lower, cues);
+        let kind = if cue_hit(&lower, seg.text, |c| c.waiting) || ja_extra(JA_WAITING_EXTRA) {
             Some((OpenLoopKind::WaitingOnThem, 0.35))
-        } else if cue_hit(&lower, seg.text, |c| c.review) {
+        } else if cue_hit(&lower, seg.text, |c| c.review) || ja_extra(JA_REVIEW_EXTRA) {
             Some((OpenLoopKind::ReviewPending, 0.35))
-        } else if cue_hit(&lower, seg.text, |c| c.decision) {
+        } else if cue_hit(&lower, seg.text, |c| c.decision) || ja_extra(JA_DECISION_EXTRA) {
             Some((OpenLoopKind::DecisionPending, 0.3))
         } else if cue_hit(&lower, seg.text, |c| c.followup) {
             Some((OpenLoopKind::FollowUp, 0.3))
@@ -2551,12 +2698,89 @@ mod paraphrase_tests {
         open_loop("If you have a minute, could you review the deck?", OpenLoopKind::ReviewPending);
     }
 
+    /// E51: the speaker's promise in the passive voice, with the speaker as the agent.
+    #[test]
+    fn a_passive_promise_by_me_is_my_commitment() {
+        mine("The rollout plan will be sent to Oren Vale by me on Friday.");
+        mine("The migration is being handled by me this week.");
+        mine("The slides will be shared from my side by Monday.");
+        mine("user: the vendor contract will be reviewed on my end before Thursday.");
+    }
+
+    #[test]
+    fn a_passive_promise_to_the_user_with_a_deadline_is_theirs() {
+        theirs("Dana Okafor: the contract will be sent to you by Friday.");
+        theirs("Kenji: you will be sent the signed copy on Monday.");
+        theirs("The latency report will be with you by Thursday.");
+    }
+
+    #[test]
+    fn passive_notices_other_agents_and_conditions_are_not_promises() {
+        nothing("A confirmation will be sent to you.");
+        nothing("The new policy will be shared with you.");
+        nothing("The deck will be sent by Priya to Kenji on Friday.");
+        nothing("The memo will be reviewed by me if legal signs off.");
+        nothing("The budget was sent by me last week.");
+    }
+
+    #[test]
+    fn passive_waits_reviews_and_decisions_are_open_loops() {
+        open_loop("The signed contract is still awaited from Kenji Arai.", OpenLoopKind::WaitingOnThem);
+        open_loop("No reply has been received from legal about the renewal quote.", OpenLoopKind::WaitingOnThem);
+        open_loop("Your review is requested on the design spec.", OpenLoopKind::ReviewPending);
+        open_loop("Your approval is needed for the Q3 budget.", OpenLoopKind::ReviewPending);
+        open_loop("Whether Heron ships in October has not been decided.", OpenLoopKind::DecisionPending);
+        open_loop("No decision has been made on the vendor for Juniper.", OpenLoopKind::DecisionPending);
+    }
+
+    #[test]
+    fn passive_past_and_settled_sentences_are_not_open_loops() {
+        nothing("The contract was received from Kenji Arai yesterday.");
+        nothing("It was decided on Monday that Heron ships in October.");
+    }
+
+    /// E51: Japanese sentences around English names and dates.
+    #[test]
+    fn japanese_promises_around_english_names_are_commitments() {
+        let budget = "the Q3 budgetはFridayまでにOren Valeさんへお送りいたします";
+        mine(budget);
+        let monday = crate::due::days_from_civil(crate::due::CivilDate { year: 2026, month: 9, day: 7 }) * 86_400_000;
+        let due = crate::due::due_at_with_offset(budget, monday, 0).map(|ms| crate::due::civil_from_days(ms.div_euclid(86_400_000)));
+        assert_eq!(due, Some(crate::due::CivilDate { year: 2026, month: 9, day: 11 }), "the English date is the deadline");
+        mine("board memoは来週月曜に提出予定です");
+        mine("pricing deckはFridayまでに任せてください");
+        mine("release notesはSeptember 21までにお知らせします");
+        theirs("Kenjiさんがvendor contractを送付予定です");
+        theirs("Danaさんがlatency reportをMondayまでに送ってくださるとのことです");
+    }
+
+    #[test]
+    fn japanese_hedges_closings_and_reports_are_not_commitments() {
+        nothing("安心してお任せください");
+        nothing("予算が通ったらQ3 budgetを送ります");
+        nothing("もし時間があればpricing deckを修正します");
+        nothing("board memoを送るつもりでしたが、なしになりました");
+        nothing("先月Orenさんにbudgetを送りました");
+        nothing("onboarding guideは修正するかもしれません");
+    }
+
+    #[test]
+    fn japanese_waits_checks_and_open_decisions_are_open_loops() {
+        open_loop("Kenjiさんからvendor contractがまだ届いていません", OpenLoopKind::WaitingOnThem);
+        open_loop("legalから返事がありません", OpenLoopKind::WaitingOnThem);
+        open_loop("design specのチェックをお願いします", OpenLoopKind::ReviewPending);
+        open_loop("Heronのリリース日はまだ決まっていません", OpenLoopKind::DecisionPending);
+    }
+
     #[test]
     fn paraphrased_candidates_stay_under_the_local_ceiling() {
         for text in [
             "Leave the board memo with me; it'll be with Oren Vale by Friday.",
             "Oren: the notes are coming your way by Friday, promise.",
             "No word yet from Oren Vale on the vendor contract.",
+            "The rollout plan will be sent to Oren Vale by me on Friday.",
+            "the Q3 budgetはFridayまでにOren Valeさんへお送りいたします",
+            "Kenjiさんがvendor contractを送付予定です",
         ] {
             assert!(one(text).confidence() <= 0.35, "{text}");
             assert!(one(text).confidence() <= LOCAL_RULE_MAX_CONFIDENCE);

@@ -11,7 +11,7 @@
     "os": "linux",
     "profile": "release"
   },
-  "generated_at": "2026-10-25T22:04:16Z",
+  "generated_at": "2026-10-26T00:27:26Z",
   "headline": {
     "metric": "tracking_f1",
     "operating_point": "all",
@@ -31,11 +31,11 @@
     {
       "latency": {
         "events": 39,
-        "ingest_ms": 47.105127,
-        "ingest_ms_per_event": 1.2078237692307694,
-        "process_ms": 263.5715880000001,
-        "read_ms": 0.425339,
-        "total_ms": 717.2201769999999
+        "ingest_ms": 29.654519999999998,
+        "ingest_ms_per_event": 0.7603723076923077,
+        "process_ms": 212.81423700000005,
+        "read_ms": 0.369436,
+        "total_ms": 551.741471
       },
       "points": {
         "actionable": [
@@ -118,11 +118,11 @@
     {
       "latency": {
         "events": 39,
-        "ingest_ms": 51.758683,
-        "ingest_ms_per_event": 1.3271457179487178,
-        "process_ms": 284.523656,
-        "read_ms": 0.420539,
-        "total_ms": 345.7478
+        "ingest_ms": 33.786721,
+        "ingest_ms_per_event": 0.8663261794871795,
+        "process_ms": 216.721045,
+        "read_ms": 0.391514,
+        "total_ms": 256.10554
       },
       "points": {
         "actionable": [
@@ -205,11 +205,11 @@
     {
       "latency": {
         "events": 37,
-        "ingest_ms": 45.96431000000001,
-        "ingest_ms_per_event": 1.242278648648649,
-        "process_ms": 311.44198600000016,
-        "read_ms": 0.39040400000000003,
-        "total_ms": 361.87628
+        "ingest_ms": 27.964131000000002,
+        "ingest_ms_per_event": 0.7557873243243244,
+        "process_ms": 201.7835859999999,
+        "read_ms": 0.33289399999999997,
+        "total_ms": 234.320714
       },
       "points": {
         "actionable": [
@@ -292,11 +292,11 @@
     {
       "latency": {
         "events": 41,
-        "ingest_ms": 35.91792000000001,
-        "ingest_ms_per_event": 0.8760468292682929,
-        "process_ms": 233.97583099999994,
-        "read_ms": 0.39924699999999996,
-        "total_ms": 274.672624
+        "ingest_ms": 32.14012399999999,
+        "ingest_ms_per_event": 0.783905463414634,
+        "process_ms": 210.401276,
+        "read_ms": 0.347885,
+        "total_ms": 246.790044
       },
       "points": {
         "actionable": [
@@ -379,11 +379,11 @@
     {
       "latency": {
         "events": 38,
-        "ingest_ms": 39.091262,
-        "ingest_ms_per_event": 1.0287174210526315,
-        "process_ms": 292.9865500000001,
-        "read_ms": 0.409515,
-        "total_ms": 341.222953
+        "ingest_ms": 29.411248999999998,
+        "ingest_ms_per_event": 0.7739802368421053,
+        "process_ms": 215.67263000000003,
+        "read_ms": 0.40026900000000004,
+        "total_ms": 249.05349600000002
       },
       "points": {
         "actionable": [
@@ -466,11 +466,11 @@
     {
       "latency": {
         "events": 125,
-        "ingest_ms": 114.360027,
-        "ingest_ms_per_event": 0.914880216,
-        "process_ms": 881.8922349999997,
-        "read_ms": 0.5434049999999999,
-        "total_ms": 1000.9144940000001
+        "ingest_ms": 98.02053599999999,
+        "ingest_ms_per_event": 0.7841642879999999,
+        "process_ms": 734.7465500000003,
+        "read_ms": 0.514826,
+        "total_ms": 837.3097670000001
       },
       "points": {
         "actionable": [
@@ -553,11 +553,11 @@
     {
       "latency": {
         "events": 129,
-        "ingest_ms": 144.89384099999998,
-        "ingest_ms_per_event": 1.1232080697674418,
-        "process_ms": 1260.941368,
-        "read_ms": 0.610629,
-        "total_ms": 1410.737548
+        "ingest_ms": 98.35456300000003,
+        "ingest_ms_per_event": 0.7624384728682173,
+        "process_ms": 672.188243,
+        "read_ms": 0.530764,
+        "total_ms": 775.392574
       },
       "points": {
         "actionable": [
@@ -640,11 +640,11 @@
     {
       "latency": {
         "events": 130,
-        "ingest_ms": 120.58489899999998,
-        "ingest_ms_per_event": 0.927576146153846,
-        "process_ms": 1017.8135729999991,
-        "read_ms": 0.621996,
-        "total_ms": 1143.491925
+        "ingest_ms": 92.28835799999999,
+        "ingest_ms_per_event": 0.709910446153846,
+        "process_ms": 710.2611550000009,
+        "read_ms": 0.607609,
+        "total_ms": 806.876172
       },
       "points": {
         "actionable": [
@@ -727,11 +727,11 @@
     {
       "latency": {
         "events": 130,
-        "ingest_ms": 151.90216900000004,
-        "ingest_ms_per_event": 1.1684782230769235,
-        "process_ms": 1063.1833889999998,
-        "read_ms": 4.736669,
-        "total_ms": 1228.459961
+        "ingest_ms": 90.190277,
+        "ingest_ms_per_event": 0.6937713615384615,
+        "process_ms": 676.2423569999999,
+        "read_ms": 0.603601,
+        "total_ms": 771.119463
       },
       "points": {
         "actionable": [
@@ -814,11 +814,11 @@
     {
       "latency": {
         "events": 128,
-        "ingest_ms": 163.180243,
-        "ingest_ms_per_event": 1.2748456484375,
-        "process_ms": 1051.8547869999989,
-        "read_ms": 0.6144390000000001,
-        "total_ms": 1221.097318
+        "ingest_ms": 96.037109,
+        "ingest_ms_per_event": 0.7502899140625,
+        "process_ms": 692.1265139999992,
+        "read_ms": 0.543857,
+        "total_ms": 792.722652
       },
       "points": {
         "actionable": [
@@ -901,11 +901,11 @@
     {
       "latency": {
         "events": 299,
-        "ingest_ms": 330.937203,
-        "ingest_ms_per_event": 1.1068133879598663,
-        "process_ms": 2401.3110029999993,
-        "read_ms": 0.8338319999999999,
-        "total_ms": 2737.346068
+        "ingest_ms": 227.18436600000007,
+        "ingest_ms_per_event": 0.7598139331103682,
+        "process_ms": 1448.5758669999996,
+        "read_ms": 0.8941389999999999,
+        "total_ms": 1680.591612
       },
       "points": {
         "actionable": [
@@ -920,7 +920,7 @@
             "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
             "resolution_accuracy": 1.0,
-            "supersession_accuracy": 0.8333333333333334,
+            "supersession_accuracy": 1.0,
             "tracking_f1": 1.0
           },
           {
@@ -938,7 +938,7 @@
             "predicted_commitments": 12,
             "predicted_open_loops": 12,
             "predictions_with_valid_provenance": 24,
-            "superseded_latest_due": 5
+            "superseded_latest_due": 6
           }
         ],
         "all": [
@@ -953,7 +953,7 @@
             "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
             "resolution_accuracy": 1.0,
-            "supersession_accuracy": 0.8333333333333334,
+            "supersession_accuracy": 1.0,
             "tracking_f1": 1.0
           },
           {
@@ -971,7 +971,7 @@
             "predicted_commitments": 12,
             "predicted_open_loops": 12,
             "predictions_with_valid_provenance": 24,
-            "superseded_latest_due": 5
+            "superseded_latest_due": 6
           }
         ]
       },
@@ -988,11 +988,11 @@
     {
       "latency": {
         "events": 299,
-        "ingest_ms": 415.03359400000005,
-        "ingest_ms_per_event": 1.388072220735786,
-        "process_ms": 2156.0042510000003,
-        "read_ms": 0.869923,
-        "total_ms": 2578.1136340000003
+        "ingest_ms": 239.29672600000006,
+        "ingest_ms_per_event": 0.8003234983277594,
+        "process_ms": 1525.1720830000004,
+        "read_ms": 0.861487,
+        "total_ms": 1770.097892
       },
       "points": {
         "actionable": [
@@ -1006,12 +1006,12 @@
             "open_loop_precision": 1.0,
             "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.9166666666666666,
+            "resolution_accuracy": 1.0,
             "supersession_accuracy": 1.0,
             "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 11,
+            "closed_and_read_closed": 12,
             "distractors": 16,
             "distractors_hit": 0,
             "gold_closed": 12,
@@ -1039,12 +1039,12 @@
             "open_loop_precision": 1.0,
             "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.9166666666666666,
+            "resolution_accuracy": 1.0,
             "supersession_accuracy": 1.0,
             "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 11,
+            "closed_and_read_closed": 12,
             "distractors": 16,
             "distractors_hit": 0,
             "gold_closed": 12,
@@ -1075,11 +1075,11 @@
     {
       "latency": {
         "events": 301,
-        "ingest_ms": 367.32143300000007,
-        "ingest_ms_per_event": 1.2203369867109637,
-        "process_ms": 2299.0376630000005,
-        "read_ms": 0.788319,
-        "total_ms": 2679.899712
+        "ingest_ms": 240.7503429999999,
+        "ingest_ms_per_event": 0.7998350265780728,
+        "process_ms": 1498.0684940000008,
+        "read_ms": 0.885399,
+        "total_ms": 1744.928131
       },
       "points": {
         "actionable": [
@@ -1162,11 +1162,11 @@
     {
       "latency": {
         "events": 300,
-        "ingest_ms": 337.92200899999995,
-        "ingest_ms_per_event": 1.1264066966666666,
-        "process_ms": 1983.0825659999998,
-        "read_ms": 1.316837,
-        "total_ms": 2327.388106
+        "ingest_ms": 238.45422800000006,
+        "ingest_ms_per_event": 0.7948474266666669,
+        "process_ms": 1516.631549,
+        "read_ms": 0.819202,
+        "total_ms": 1760.5862889999999
       },
       "points": {
         "actionable": [
@@ -1181,7 +1181,7 @@
             "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
             "resolution_accuracy": 1.0,
-            "supersession_accuracy": 0.8333333333333334,
+            "supersession_accuracy": 1.0,
             "tracking_f1": 1.0
           },
           {
@@ -1199,7 +1199,7 @@
             "predicted_commitments": 12,
             "predicted_open_loops": 12,
             "predictions_with_valid_provenance": 24,
-            "superseded_latest_due": 5
+            "superseded_latest_due": 6
           }
         ],
         "all": [
@@ -1214,7 +1214,7 @@
             "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
             "resolution_accuracy": 1.0,
-            "supersession_accuracy": 0.8333333333333334,
+            "supersession_accuracy": 1.0,
             "tracking_f1": 1.0
           },
           {
@@ -1232,7 +1232,7 @@
             "predicted_commitments": 12,
             "predicted_open_loops": 12,
             "predictions_with_valid_provenance": 24,
-            "superseded_latest_due": 5
+            "superseded_latest_due": 6
           }
         ]
       },
@@ -1249,11 +1249,11 @@
     {
       "latency": {
         "events": 300,
-        "ingest_ms": 383.794153,
-        "ingest_ms_per_event": 1.2793138433333333,
-        "process_ms": 2393.0188670000002,
-        "read_ms": 1.122433,
-        "total_ms": 2789.035023
+        "ingest_ms": 235.621431,
+        "ingest_ms_per_event": 0.78540477,
+        "process_ms": 1561.8696859999989,
+        "read_ms": 1.087536,
+        "total_ms": 1802.743462
       },
       "points": {
         "actionable": [
@@ -1267,12 +1267,12 @@
             "open_loop_precision": 1.0,
             "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.8571428571428571,
-            "supersession_accuracy": 0.8333333333333334,
+            "resolution_accuracy": 1.0,
+            "supersession_accuracy": 1.0,
             "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 12,
+            "closed_and_read_closed": 14,
             "distractors": 16,
             "distractors_hit": 0,
             "gold_closed": 14,
@@ -1286,7 +1286,7 @@
             "predicted_commitments": 12,
             "predicted_open_loops": 12,
             "predictions_with_valid_provenance": 24,
-            "superseded_latest_due": 5
+            "superseded_latest_due": 6
           }
         ],
         "all": [
@@ -1300,12 +1300,12 @@
             "open_loop_precision": 1.0,
             "open_loop_recall": 1.0,
             "provenance_validity": 1.0,
-            "resolution_accuracy": 0.8571428571428571,
-            "supersession_accuracy": 0.8333333333333334,
+            "resolution_accuracy": 1.0,
+            "supersession_accuracy": 1.0,
             "tracking_f1": 1.0
           },
           {
-            "closed_and_read_closed": 12,
+            "closed_and_read_closed": 14,
             "distractors": 16,
             "distractors_hit": 0,
             "gold_closed": 14,
@@ -1319,7 +1319,7 @@
             "predicted_commitments": 12,
             "predicted_open_loops": 12,
             "predictions_with_valid_provenance": 24,
-            "superseded_latest_due": 5
+            "superseded_latest_due": 6
           }
         ]
       },
@@ -1351,34 +1351,34 @@
       "latency": {
         "ingest_ms_per_event": {
           "ci95": [
-            0.9108152107961642,
-            1.3619897436634598
+            0.7320388749812035,
+            0.8441097297230169
           ],
-          "mean": 1.136402477229812,
+          "mean": 0.7880743023521102,
           "n": 5
         },
         "process_ms": {
           "ci95": [
-            240.42309904289914,
-            314.1767453571009
+            204.0813880971438,
+            218.87572150285618
           ],
-          "mean": 277.2999222,
+          "mean": 211.47855479999998,
           "n": 5
         },
         "read_ms": {
           "ci95": [
-            0.3910042569506948,
-            0.4270133430493051
+            0.3331077806641052,
+            0.4036914193358948
           ],
-          "mean": 0.40900879999999995,
+          "mean": 0.3683996,
           "n": 5
         },
         "total_ms": {
           "ci95": [
-            189.69325275127667,
-            626.6026808487233
+            137.88880217965664,
+            477.3157038203434
           ],
-          "mean": 408.14796679999995,
+          "mean": 307.602253,
           "n": 5
         }
       },
@@ -1584,34 +1584,34 @@
       "latency": {
         "ingest_ms_per_event": {
           "ci95": [
-            1.0809490317010209,
-            1.3674282224616254
+            0.7670865610499433,
+            0.8090033008232036
           ],
-          "mean": 1.2241886270813231,
+          "mean": 0.7880449309365735,
           "n": 5
         },
         "process_ms": {
           "ci95": [
-            2026.3515707602417,
-            2466.6301692397587
+            1458.5767851954056,
+            1561.5502864045943
           ],
-          "mean": 2246.49087,
+          "mean": 1510.0635358,
           "n": 5
         },
         "read_ms": {
           "ci95": [
-            0.7060622485614196,
-            1.26647535143858
+            0.7808757934765242,
+            1.0382294065234756
           ],
-          "mean": 0.9862687999999998,
+          "mean": 0.9095525999999999,
           "n": 5
         },
         "total_ms": {
           "ci95": [
-            2395.7429580793423,
-            2848.9700591206583
+            1695.8370482755333,
+            1807.7419061244666
           ],
-          "mean": 2622.3565086000003,
+          "mean": 1751.7894772,
           "n": 5
         }
       },
@@ -1691,18 +1691,18 @@
           },
           "resolution_accuracy": {
             "ci95": [
-              0.8651160242839235,
-              1.0158363566684572
+              0.9460571428571429,
+              1.0253714285714286
             ],
-            "mean": 0.9404761904761904,
+            "mean": 0.9857142857142858,
             "n": 5
           },
           "supersession_accuracy": {
             "ci95": [
-              0.7866702745672317,
-              1.0133297254327684
+              1.0,
+              1.0
             ],
-            "mean": 0.9,
+            "mean": 1.0,
             "n": 5
           },
           "tracking_f1": {
@@ -1789,18 +1789,18 @@
           },
           "resolution_accuracy": {
             "ci95": [
-              0.8651160242839235,
-              1.0158363566684572
+              0.9460571428571429,
+              1.0253714285714286
             ],
-            "mean": 0.9404761904761904,
+            "mean": 0.9857142857142858,
             "n": 5
           },
           "supersession_accuracy": {
             "ci95": [
-              0.7866702745672317,
-              1.0133297254327684
+              1.0,
+              1.0
             ],
-            "mean": 0.9,
+            "mean": 1.0,
             "n": 5
           },
           "tracking_f1": {
@@ -1823,34 +1823,34 @@
       "latency": {
         "ingest_ms_per_event": {
           "ci95": [
-            0.8873373485193341,
-            1.2762579728549504
+            0.6936541844994399,
+            0.7865756085497699
           ],
-          "mean": 1.0817976606871422,
+          "mean": 0.7401148965246049,
           "n": 5
         },
         "process_ms": {
           "ci95": [
-            886.4648090158196,
-            1223.8093317841792
+            665.0333418141342,
+            729.192585785866
           ],
-          "mean": 1055.1370703999994,
+          "mean": 697.1129638000001,
           "n": 5
         },
         "read_ms": {
           "ci95": [
-            -0.8729080399399938,
-            3.7237632399399936
+            0.507010305537575,
+            0.6132524944624251
           ],
-          "mean": 1.4254276,
+          "mean": 0.5601314000000001,
           "n": 5
         },
         "total_ms": {
           "ci95": [
-            1016.2901678822697,
-            1385.5903305177308
+            763.3900821061086,
+            829.9781690938914
           ],
-          "mean": 1200.9402492000002,
+          "mean": 796.6841256,
           "n": 5
         }
       },

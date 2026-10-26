@@ -1,0 +1,708 @@
+{
+  "adapter": {
+    "description": "ShogunAgent engine in process: memory.ingest per event, hourly Dream Cycle tick on the on-device local rules (no model), state read through state.export format export-v2.",
+    "model": null,
+    "name": "shogunagent-local-rules",
+    "version": "1.0.0"
+  },
+  "benchmark": "open-loop-tracking",
+  "environment": {
+    "arch": "x86_64",
+    "os": "linux",
+    "profile": "release"
+  },
+  "generated_at": "2026-10-26T00:27:12Z",
+  "headline": {
+    "metric": "tracking_f1",
+    "operating_point": "all",
+    "tier": "hard"
+  },
+  "operating_points": [
+    {
+      "min_confidence": 0.0,
+      "name": "all"
+    },
+    {
+      "min_confidence": 0.5,
+      "name": "actionable"
+    }
+  ],
+  "runs": [
+    {
+      "latency": {
+        "events": 298,
+        "ingest_ms": 228.328614,
+        "ingest_ms_per_event": 0.7662034026845637,
+        "process_ms": 1822.9695979999988,
+        "read_ms": 0.533253,
+        "total_ms": 2385.8720829999997
+      },
+      "points": {
+        "actionable": [
+          {
+            "commitment_f1": 0.0,
+            "commitment_precision": null,
+            "commitment_recall": 0.0,
+            "false_closure_rate": null,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.0,
+            "open_loop_precision": null,
+            "open_loop_recall": 0.0,
+            "provenance_validity": null,
+            "resolution_accuracy": 0.0,
+            "supersession_accuracy": 0.0,
+            "tracking_f1": 0.0
+          },
+          {
+            "closed_and_read_closed": 0,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 11,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 0,
+            "matched_open": 0,
+            "matched_open_loops": 0,
+            "open_read_closed": 0,
+            "predicted_commitments": 0,
+            "predicted_open_loops": 0,
+            "predictions_with_valid_provenance": 0,
+            "superseded_latest_due": 0
+          }
+        ],
+        "all": [
+          {
+            "commitment_f1": 0.7368421052631579,
+            "commitment_precision": 1.0,
+            "commitment_recall": 0.5833333333333334,
+            "false_closure_rate": 0.0,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.7368421052631579,
+            "open_loop_precision": 1.0,
+            "open_loop_recall": 0.5833333333333334,
+            "provenance_validity": 1.0,
+            "resolution_accuracy": 0.2727272727272727,
+            "supersession_accuracy": 0.0,
+            "tracking_f1": 0.7368421052631579
+          },
+          {
+            "closed_and_read_closed": 3,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 11,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 7,
+            "matched_open": 8,
+            "matched_open_loops": 7,
+            "open_read_closed": 0,
+            "predicted_commitments": 7,
+            "predicted_open_loops": 7,
+            "predictions_with_valid_provenance": 14,
+            "superseded_latest_due": 0
+          }
+        ]
+      },
+      "predictions": 14,
+      "seed": 42,
+      "tier": "heldout",
+      "usage": {
+        "cost_micro_usd": 0.0,
+        "input_tokens": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      }
+    },
+    {
+      "latency": {
+        "events": 301,
+        "ingest_ms": 219.8651309999999,
+        "ingest_ms_per_event": 0.7304489401993353,
+        "process_ms": 1749.7065469999998,
+        "read_ms": 0.521922,
+        "total_ms": 1975.410072
+      },
+      "points": {
+        "actionable": [
+          {
+            "commitment_f1": 0.0,
+            "commitment_precision": null,
+            "commitment_recall": 0.0,
+            "false_closure_rate": null,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.0,
+            "open_loop_precision": null,
+            "open_loop_recall": 0.0,
+            "provenance_validity": null,
+            "resolution_accuracy": 0.0,
+            "supersession_accuracy": 0.0,
+            "tracking_f1": 0.0
+          },
+          {
+            "closed_and_read_closed": 0,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 14,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 0,
+            "matched_open": 0,
+            "matched_open_loops": 0,
+            "open_read_closed": 0,
+            "predicted_commitments": 0,
+            "predicted_open_loops": 0,
+            "predictions_with_valid_provenance": 0,
+            "superseded_latest_due": 0
+          }
+        ],
+        "all": [
+          {
+            "commitment_f1": 0.7368421052631579,
+            "commitment_precision": 1.0,
+            "commitment_recall": 0.5833333333333334,
+            "false_closure_rate": 0.0,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.6666666666666666,
+            "open_loop_precision": 1.0,
+            "open_loop_recall": 0.5,
+            "provenance_validity": 1.0,
+            "resolution_accuracy": 0.14285714285714285,
+            "supersession_accuracy": 0.6666666666666666,
+            "tracking_f1": 0.7027027027027027
+          },
+          {
+            "closed_and_read_closed": 2,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 14,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 7,
+            "matched_open": 5,
+            "matched_open_loops": 6,
+            "open_read_closed": 0,
+            "predicted_commitments": 7,
+            "predicted_open_loops": 6,
+            "predictions_with_valid_provenance": 13,
+            "superseded_latest_due": 4
+          }
+        ]
+      },
+      "predictions": 13,
+      "seed": 43,
+      "tier": "heldout",
+      "usage": {
+        "cost_micro_usd": 0.0,
+        "input_tokens": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      }
+    },
+    {
+      "latency": {
+        "events": 300,
+        "ingest_ms": 202.95338499999997,
+        "ingest_ms_per_event": 0.6765112833333332,
+        "process_ms": 1579.326812000001,
+        "read_ms": 0.482817,
+        "total_ms": 1787.0402450000001
+      },
+      "points": {
+        "actionable": [
+          {
+            "commitment_f1": 0.0,
+            "commitment_precision": null,
+            "commitment_recall": 0.0,
+            "false_closure_rate": null,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.0,
+            "open_loop_precision": null,
+            "open_loop_recall": 0.0,
+            "provenance_validity": null,
+            "resolution_accuracy": 0.0,
+            "supersession_accuracy": 0.0,
+            "tracking_f1": 0.0
+          },
+          {
+            "closed_and_read_closed": 0,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 14,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 0,
+            "matched_open": 0,
+            "matched_open_loops": 0,
+            "open_read_closed": 0,
+            "predicted_commitments": 0,
+            "predicted_open_loops": 0,
+            "predictions_with_valid_provenance": 0,
+            "superseded_latest_due": 0
+          }
+        ],
+        "all": [
+          {
+            "commitment_f1": 0.6666666666666666,
+            "commitment_precision": 1.0,
+            "commitment_recall": 0.5,
+            "false_closure_rate": 0.0,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.6666666666666666,
+            "open_loop_precision": 1.0,
+            "open_loop_recall": 0.5,
+            "provenance_validity": 1.0,
+            "resolution_accuracy": 0.14285714285714285,
+            "supersession_accuracy": 0.5,
+            "tracking_f1": 0.6666666666666666
+          },
+          {
+            "closed_and_read_closed": 2,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 14,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 6,
+            "matched_open": 5,
+            "matched_open_loops": 6,
+            "open_read_closed": 0,
+            "predicted_commitments": 6,
+            "predicted_open_loops": 6,
+            "predictions_with_valid_provenance": 12,
+            "superseded_latest_due": 3
+          }
+        ]
+      },
+      "predictions": 12,
+      "seed": 44,
+      "tier": "heldout",
+      "usage": {
+        "cost_micro_usd": 0.0,
+        "input_tokens": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      }
+    },
+    {
+      "latency": {
+        "events": 300,
+        "ingest_ms": 243.044201,
+        "ingest_ms_per_event": 0.8101473366666666,
+        "process_ms": 1907.9505379999994,
+        "read_ms": 0.46456200000000003,
+        "total_ms": 2155.5508990000003
+      },
+      "points": {
+        "actionable": [
+          {
+            "commitment_f1": 0.0,
+            "commitment_precision": null,
+            "commitment_recall": 0.0,
+            "false_closure_rate": null,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.0,
+            "open_loop_precision": null,
+            "open_loop_recall": 0.0,
+            "provenance_validity": null,
+            "resolution_accuracy": 0.0,
+            "supersession_accuracy": 0.0,
+            "tracking_f1": 0.0
+          },
+          {
+            "closed_and_read_closed": 0,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 12,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 0,
+            "matched_open": 0,
+            "matched_open_loops": 0,
+            "open_read_closed": 0,
+            "predicted_commitments": 0,
+            "predicted_open_loops": 0,
+            "predictions_with_valid_provenance": 0,
+            "superseded_latest_due": 0
+          }
+        ],
+        "all": [
+          {
+            "commitment_f1": 0.6666666666666666,
+            "commitment_precision": 1.0,
+            "commitment_recall": 0.5,
+            "false_closure_rate": 0.0,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.5,
+            "open_loop_precision": 1.0,
+            "open_loop_recall": 0.3333333333333333,
+            "provenance_validity": 1.0,
+            "resolution_accuracy": 0.16666666666666666,
+            "supersession_accuracy": 0.0,
+            "tracking_f1": 0.5882352941176471
+          },
+          {
+            "closed_and_read_closed": 2,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 12,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 6,
+            "matched_open": 3,
+            "matched_open_loops": 4,
+            "open_read_closed": 0,
+            "predicted_commitments": 6,
+            "predicted_open_loops": 4,
+            "predictions_with_valid_provenance": 10,
+            "superseded_latest_due": 0
+          }
+        ]
+      },
+      "predictions": 10,
+      "seed": 45,
+      "tier": "heldout",
+      "usage": {
+        "cost_micro_usd": 0.0,
+        "input_tokens": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      }
+    },
+    {
+      "latency": {
+        "events": 300,
+        "ingest_ms": 217.2568490000001,
+        "ingest_ms_per_event": 0.724189496666667,
+        "process_ms": 1700.468358,
+        "read_ms": 0.49576899999999996,
+        "total_ms": 1922.790961
+      },
+      "points": {
+        "actionable": [
+          {
+            "commitment_f1": 0.0,
+            "commitment_precision": null,
+            "commitment_recall": 0.0,
+            "false_closure_rate": null,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.0,
+            "open_loop_precision": null,
+            "open_loop_recall": 0.0,
+            "provenance_validity": null,
+            "resolution_accuracy": 0.0,
+            "supersession_accuracy": 0.0,
+            "tracking_f1": 0.0
+          },
+          {
+            "closed_and_read_closed": 0,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 13,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 0,
+            "matched_open": 0,
+            "matched_open_loops": 0,
+            "open_read_closed": 0,
+            "predicted_commitments": 0,
+            "predicted_open_loops": 0,
+            "predictions_with_valid_provenance": 0,
+            "superseded_latest_due": 0
+          }
+        ],
+        "all": [
+          {
+            "commitment_f1": 0.5882352941176471,
+            "commitment_precision": 1.0,
+            "commitment_recall": 0.4166666666666667,
+            "false_closure_rate": 0.0,
+            "false_commitment_rate": 0.0,
+            "open_loop_f1": 0.6666666666666666,
+            "open_loop_precision": 1.0,
+            "open_loop_recall": 0.5,
+            "provenance_validity": 1.0,
+            "resolution_accuracy": 0.15384615384615385,
+            "supersession_accuracy": 0.3333333333333333,
+            "tracking_f1": 0.6285714285714286
+          },
+          {
+            "closed_and_read_closed": 2,
+            "distractors": 16,
+            "distractors_hit": 0,
+            "gold_closed": 13,
+            "gold_commitments": 12,
+            "gold_open_loops": 12,
+            "gold_superseded": 6,
+            "matched_commitments": 5,
+            "matched_open": 5,
+            "matched_open_loops": 6,
+            "open_read_closed": 0,
+            "predicted_commitments": 5,
+            "predicted_open_loops": 6,
+            "predictions_with_valid_provenance": 11,
+            "superseded_latest_due": 2
+          }
+        ]
+      },
+      "predictions": 11,
+      "seed": 46,
+      "tier": "heldout",
+      "usage": {
+        "cost_micro_usd": 0.0,
+        "input_tokens": 0,
+        "model_calls": 0,
+        "output_tokens": 0
+      }
+    }
+  ],
+  "schema": "shogunagent/loop-bench-results/v1",
+  "seeds": [
+    42,
+    43,
+    44,
+    45,
+    46
+  ],
+  "summary": {
+    "heldout": {
+      "cost": {
+        "cost_micro_usd": 0.0,
+        "model_calls": 0
+      },
+      "latency": {
+        "ingest_ms_per_event": {
+          "ci95": [
+            0.6795261555904745,
+            0.8034740282297518
+          ],
+          "mean": 0.7415000919101131,
+          "n": 5
+        },
+        "process_ms": {
+          "ci95": [
+            1597.7302600246226,
+            1906.4384811753775
+          ],
+          "mean": 1752.0843706,
+          "n": 5
+        },
+        "read_ms": {
+          "ci95": [
+            0.4647996406504929,
+            0.5345295593495072
+          ],
+          "mean": 0.4996646,
+          "n": 5
+        },
+        "total_ms": {
+          "ci95": [
+            1757.68796570026,
+            2332.9777382997404
+          ],
+          "mean": 2045.3328520000002,
+          "n": 5
+        }
+      },
+      "operating_points": {
+        "actionable": {
+          "commitment_f1": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          },
+          "commitment_precision": {
+            "ci95": null,
+            "mean": null,
+            "n": 0
+          },
+          "commitment_recall": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          },
+          "false_closure_rate": {
+            "ci95": null,
+            "mean": null,
+            "n": 0
+          },
+          "false_commitment_rate": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          },
+          "open_loop_f1": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          },
+          "open_loop_precision": {
+            "ci95": null,
+            "mean": null,
+            "n": 0
+          },
+          "open_loop_recall": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          },
+          "provenance_validity": {
+            "ci95": null,
+            "mean": null,
+            "n": 0
+          },
+          "resolution_accuracy": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          },
+          "supersession_accuracy": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          },
+          "tracking_f1": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          }
+        },
+        "all": {
+          "commitment_f1": {
+            "ci95": [
+              0.6024363382131843,
+              0.7556647969777341
+            ],
+            "mean": 0.6790505675954592,
+            "n": 5
+          },
+          "commitment_precision": {
+            "ci95": [
+              1.0,
+              1.0
+            ],
+            "mean": 1.0,
+            "n": 5
+          },
+          "commitment_recall": {
+            "ci95": [
+              0.4301096591192962,
+              0.6032236742140372
+            ],
+            "mean": 0.5166666666666667,
+            "n": 5
+          },
+          "false_closure_rate": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          },
+          "false_commitment_rate": {
+            "ci95": [
+              0.0,
+              0.0
+            ],
+            "mean": 0.0,
+            "n": 5
+          },
+          "open_loop_f1": {
+            "ci95": [
+              0.5383591415845194,
+              0.7563777005207436
+            ],
+            "mean": 0.6473684210526315,
+            "n": 5
+          },
+          "open_loop_precision": {
+            "ci95": [
+              1.0,
+              1.0
+            ],
+            "mean": 1.0,
+            "n": 5
+          },
+          "open_loop_recall": {
+            "ci95": [
+              0.37000360790056497,
+              0.5966630587661018
+            ],
+            "mean": 0.4833333333333334,
+            "n": 5
+          },
+          "provenance_validity": {
+            "ci95": [
+              1.0,
+              1.0
+            ],
+            "mean": 1.0,
+            "n": 5
+          },
+          "resolution_accuracy": {
+            "ci95": [
+              0.1074236015731211,
+              0.24415815000863045
+            ],
+            "mean": 0.17579087579087577,
+            "n": 5
+          },
+          "supersession_accuracy": {
+            "ci95": [
+              -0.07013333333333338,
+              0.6701333333333332
+            ],
+            "mean": 0.29999999999999993,
+            "n": 5
+          },
+          "tracking_f1": {
+            "ci95": [
+              0.5916718400922634,
+              0.7375354388363777
+            ],
+            "mean": 0.6646036394643206,
+            "n": 5
+          }
+        }
+      },
+      "seeds": 5
+    }
+  },
+  "tiers": [
+    "heldout"
+  ],
+  "version": "1.0"
+}
