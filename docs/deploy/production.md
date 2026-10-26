@@ -313,8 +313,8 @@ Each lane: apply its SQL (step 2), set its secrets, add its `vars` in a PR, depl
    `ROUTER_WALLET_URL` (the relay's public origin). Leave `ROUTER_TOPUP_URL` unset in production (it
    is used by the in-memory development wallet only).
 3. The `hyperdrive` block of step 3 and a `routes` entry (§1.1), in one PR.
-4. **Do not set** `GOOGLE_OAUTH_ACCESS_TOKEN`, `GITHUB_TOKEN`, `LINEAR_OAUTH_TOKEN`, `SLACK_TOKEN` or
-   `ROUTER_DEV_SHARED_CREDENTIALS`. With `ROUTER_WALLET_URL` set the router never reads those
+4. **Do not set** `GOOGLE_OAUTH_ACCESS_TOKEN`, `GITHUB_TOKEN`, `LINEAR_OAUTH_TOKEN`, `SLACK_TOKEN`,
+   `NOTION_TOKEN` or `ROUTER_DEV_SHARED_CREDENTIALS`. With `ROUTER_WALLET_URL` set the router never reads those
    variables: the first-party connectors (`caller_connector` auth, E48) fetch the calling
    principal's own token per run from the relay's `POST /v1/internal/router/connector-token`
    (`docs/api/connector-tokens.md`), and the development flag is ignored (logged
@@ -520,6 +520,7 @@ token for the slot below from the relay (`docs/api/connector-tokens.md`):
 | `GITHUB_TOKEN` | `github` | `github-tokenset` |
 | `LINEAR_OAUTH_TOKEN` | `linear` | `linear-tokenset` |
 | `SLACK_TOKEN` | `slack` | `slack-tokenset` |
+| `NOTION_TOKEN` | `notion` | `notion-tokenset` |
 
 ### 5.3 Deploy tooling and the conformance suite (not read by the Workers)
 
@@ -537,7 +538,9 @@ token for the slot below from the relay (`docs/api/connector-tokens.md`):
 
 ### 5.4 Sidecar (`shogun-api --multi`, details in `deploy/README.md` §3.2)
 
-Not covered by `check-env-docs.mjs` (the sidecar is Rust); `deploy/README.md` is the source.
+`deploy/README.md` is the source. `check-env-docs.mjs` covers the `SHOGUN_CONNECT_*` names the
+sidecar's connect flow reads (the `*_VAR` constants of `crates/shogun-integrations/src/hosted_connect.rs`,
+E51); the rest of the sidecar's variables are checked by hand against `deploy/README.md`.
 
 | Name | Kind | Required | Notes |
 |---|---|---|---|
@@ -557,7 +560,8 @@ Not covered by `check-env-docs.mjs` (the sidecar is Rust); `deploy/README.md` is
 | `SHOGUN_CONNECT_GOOGLE_CLIENT_ID`, `SHOGUN_CONNECT_GOOGLE_CLIENT_SECRET` | env / secret | with Gmail / Calendar | E50: a Google "Web application" client; the secret is required |
 | `SHOGUN_CONNECT_SLACK_CLIENT_ID`, `SHOGUN_CONNECT_SLACK_CLIENT_SECRET` | env / secret | with Slack | E50: user scopes; the secret is optional for a PKCE-enabled app |
 | `SHOGUN_CONNECT_LINEAR_CLIENT_ID`, `SHOGUN_CONNECT_LINEAR_CLIENT_SECRET` | env / secret | with Linear | E50: the secret is optional |
-| `SHOGUN_CONNECT_GITHUB_CLIENT_ID`, `SHOGUN_CONNECT_GITHUB_CLIENT_SECRET` | env / secret | with GitHub | E50 follow-up: a GitHub App with the device flow enabled (no callback); the secret is optional, sent on refresh when set. Also read by `shogun-api --dream-tick` (with the other `SHOGUN_CONNECT_*`) to refresh grants for the read-sync |
+| `SHOGUN_CONNECT_GITHUB_CLIENT_ID`, `SHOGUN_CONNECT_GITHUB_CLIENT_SECRET` | env / secret | with GitHub | E50 follow-up: a GitHub App with the device flow enabled (no callback); the secret is optional, sent on refresh when set, and needed to revoke a grant at disconnect (E51: `DELETE /applications/{client_id}/grant` authenticates as the app; without it `vendor_revoke: "not_supported"`). Also read by `shogun-api --dream-tick` (with the other `SHOGUN_CONNECT_*`) to refresh grants for the read-sync |
+| `SHOGUN_CONNECT_NOTION_CLIENT_ID`, `SHOGUN_CONNECT_NOTION_CLIENT_SECRET` | env / secret | with Notion | E51: a Notion **public** integration (OAuth) with read-content capability only and the callback above as its redirect URI; the secret is required (Notion's token endpoint takes `client_id:client_secret` as Basic auth). The grant lands in `notion-tokenset`, read by the router's `notion.*` tools and the read-sync |
 | `SHOGUN_REGION` | env | yes | set by the chart from `region` |
 | `SHOGUN_AWS_KMS_KEY_ID`, `SHOGUN_AWS_KMS_REGION`, `SHOGUN_AWS_KMS_ENDPOINT`, `SHOGUN_AWS_STS_ENDPOINT`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` | env | with `aws-kms` | IRSA preferred over static `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
 | `SHOGUN_GCP_KMS_KEY`, `SHOGUN_GCP_KMS_ENDPOINT`, `SHOGUN_GCP_ACCESS_TOKEN_FILE` | env | with `gcp-kms` | Workload Identity preferred |
@@ -711,12 +715,15 @@ Owner decisions still open:
       `github.com/login/device` and presses Check); pending flows sealed in the principal's store
       (a restart keeps them); status and disconnect on every face (`connections.list` /
       `connections.disconnect`, `GET /v1/connectors`, `POST /v1/connectors/{provider}/disconnect`,
-      revoking at Google and Slack); an audit row per connect, refresh, revocation, disconnect and
+      revoking at Google, Slack and Linear, and at GitHub with the app's secret, E51; the answer's
+      `vendor_revoke` says which); Notion's hosted sign-in and the router's `notion.search` /
+      `notion.pages.text` (E51); an audit row per connect, refresh, revocation, disconnect and
       read-sync fetch in the principal's traceability log (threat model R10 closed). Still needed
       before any of them is listed in the hosted catalog: (a) the vendor OAuth apps (Google "Web
       application" client with the restricted `gmail.modify` scope verified and its security
       assessment passed, a Slack app with user scopes, a Linear OAuth app, a GitHub App with the
-      device flow enabled), their ids and secrets in the sidecar's `SHOGUN_CONNECT_*` and the
+      device flow enabled, a Notion public integration with read-content capability), their ids and
+      secrets in the sidecar's `SHOGUN_CONNECT_*` and the
       callback registered with each redirect vendor; (b) the Worker → sidecar path above, with
       `SHOGUN_SIDECAR_ADMIN_TOKEN` and `CONNECTOR_CONNECT_SECRET` on the relay; (c) the sidecar's
       NetworkPolicy egress to the vendors' token endpoints and the read-sync's read hosts
@@ -729,8 +736,8 @@ Owner decisions still open:
       --dream-tick` (scheduled hourly) runs with the sidecar's token store, key provider and
       `SHOGUN_CONNECT_*`, on the same volume; one staging run with a Gmail and a Calendar ingest
       hook shows the notice `queued` and, after the tick, the message or event stored once
-      (`connector read-sync: … stored=…`). Notion stays without content until the core has a hosted
-      Notion sign-in (`docs/api/ingest-sources.md` §2.8).
+      (`connector read-sync: … stored=…`); with the Notion integration (E51) connected, a Notion
+      hook's page notice is fetched the same way (`docs/api/ingest-sources.md` §2.8).
 - [ ] **The deploy workflow** (`.github/workflows/deploy.yml`, §3.1) is written and has never run:
       create the `staging` and `production` environments with their reviewers, secrets and
       variables, then do one dry run per component and environment before the first real deploy;

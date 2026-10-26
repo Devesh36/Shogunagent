@@ -1,7 +1,7 @@
 /**
  * Connector tokens for the router (docs/implementation-plan.md E48, E50; contract:
  * docs/api/connector-tokens.md). The router's first-party connectors (Gmail, Google Calendar,
- * GitHub, Linear, Slack) act as the CALLING principal's own account; per run the router asks this
+ * GitHub, Linear, Slack, Notion) act as the CALLING principal's own account; per run the router asks this
  * route for that principal's access token and drops it after the one vendor request.
  *
  *   POST /v1/internal/router/connector-token      [ROUTER_SETTLEMENT_TOKEN]
@@ -47,6 +47,7 @@ export const CONNECTOR_SLOT_BY_PROVIDER = Object.freeze({
   github: "github-tokenset",
   linear: "linear-tokenset",
   slack: "slack-tokenset",
+  notion: "notion-tokenset",
 } as const);
 export type ConnectorProviderId = keyof typeof CONNECTOR_SLOT_BY_PROVIDER;
 export type ConnectorSlot = (typeof CONNECTOR_SLOT_BY_PROVIDER)[ConnectorProviderId];

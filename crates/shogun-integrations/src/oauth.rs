@@ -27,6 +27,10 @@ pub const SLACK_TOKEN_ENDPOINT: &str = "https://slack.com/api/oauth.v2.user.acce
 pub const LINEAR_AUTH_ENDPOINT: &str = "https://linear.app/oauth/authorize";
 pub const LINEAR_TOKEN_ENDPOINT: &str = "https://api.linear.app/oauth/token";
 pub const GITHUB_TOKEN_ENDPOINT: &str = "https://github.com/login/oauth/access_token";
+/// Notion's public-integration OAuth endpoints (E51). The token endpoint takes the app's client id
+/// and secret as HTTP Basic auth and a JSON body, not the form the other vendors take.
+pub const NOTION_AUTH_ENDPOINT: &str = "https://api.notion.com/v1/oauth/authorize";
+pub const NOTION_TOKEN_ENDPOINT: &str = "https://api.notion.com/v1/oauth/token";
 const GRANOLA_AUTH_ORIGIN: &str = "https://mcp-auth.granola.ai/";
 const GRANOLA_RESOURCE: &str = "https://mcp.granola.ai/mcp";
 
@@ -262,6 +266,115 @@ struct RawAuthedUser {
 pub trait TokenExchange {
     /// POST `form` (application/x-www-form-urlencoded) to `token_endpoint`, returning the JSON body.
     fn post_form(&self, token_endpoint: &str, form: &[(String, String)]) -> Result<String, String>;
+
+    /// One OAuth request that is not a plain form POST (E51): Notion's token endpoint (HTTP Basic
+    /// client authentication and a JSON body), Linear's revocation (the access token as bearer) and
+    /// GitHub's grant deletion (`DELETE` with the app's Basic auth). The errors follow
+    /// [`Self::post_form`]'s words: `token exchange failed: …` when nothing came back,
+    /// `token endpoint http <status>` for a non-2xx answer (the body is never surfaced). The
+    /// default answers a plain form POST through [`Self::post_form`] and refuses anything else, so
+    /// an exchange that cannot speak a request never sends a different one.
+    fn send(&self, request: &ExchangeRequest<'_>) -> Result<String, String> {
+        match (request.method, &request.auth, &request.body) {
+            (ExchangeMethod::Post, ExchangeAuth::None, ExchangeBody::Form(form)) if request.headers.is_empty() => {
+                self.post_form(request.endpoint, form)
+            }
+            _ => Err("token exchange unsupported request".to_string()),
+        }
+    }
+}
+
+/// The HTTP method of an [`ExchangeRequest`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExchangeMethod {
+    Post,
+    Delete,
+}
+
+/// How an [`ExchangeRequest`] authenticates. No `Debug`: it holds a secret or a token.
+pub enum ExchangeAuth<'a> {
+    /// Client credentials, if any, are in the form.
+    None,
+    /// `Authorization: Basic base64(user:password)` (RFC 7617): an app's client id and secret.
+    Basic { user: &'a str, password: &'a str },
+    /// `Authorization: Bearer <token>`.
+    Bearer(&'a str),
+}
+
+/// The body of an [`ExchangeRequest`]. No `Debug`: it holds codes and tokens.
+pub enum ExchangeBody<'a> {
+    Form(&'a [(String, String)]),
+    Json(&'a serde_json::Value),
+    Empty,
+}
+
+/// One request to a vendor's OAuth API through the core's single egress.
+pub struct ExchangeRequest<'a> {
+    pub method: ExchangeMethod,
+    pub endpoint: &'a str,
+    pub auth: ExchangeAuth<'a>,
+    pub body: ExchangeBody<'a>,
+    /// Extra fixed headers (an API version); never a credential.
+    pub headers: &'a [(&'static str, &'static str)],
+}
+
+/// Notion's authorize URL (E51): `owner=user`, the hosted callback and the gateway's state. Notion
+/// has no scopes (an integration's capabilities are set in its settings) and no PKCE.
+pub fn notion_authorize_url(cfg: &AuthConfig, state: &str) -> Result<String, String> {
+    let mut url = url::Url::parse(&cfg.auth_endpoint).map_err(|e| format!("bad auth endpoint: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("client_id", &cfg.client_id)
+        .append_pair("response_type", "code")
+        .append_pair("owner", "user")
+        .append_pair("redirect_uri", &cfg.redirect_uri)
+        .append_pair("state", state);
+    Ok(url.into())
+}
+
+/// Notion's token request body: the code exchange with the hosted callback, or a refresh.
+pub fn notion_code_body(cfg: &AuthConfig, code: &str) -> serde_json::Value {
+    serde_json::json!({ "grant_type": "authorization_code", "code": code, "redirect_uri": cfg.redirect_uri })
+}
+
+/// Notion's refresh request body.
+pub fn notion_refresh_body(refresh_token: &str) -> serde_json::Value {
+    serde_json::json!({ "grant_type": "refresh_token", "refresh_token": refresh_token })
+}
+
+/// Parse Notion's token response: an `access_token` of visible ASCII, `token_type: bearer` and a
+/// `bot_id`, with the workspace's name as the account label. A Notion integration token has not
+/// expired historically: a response without `expires_in` stores a grant that does not expire
+/// (`i64::MAX`, like a Slack token without rotation); one with `expires_in` (and a
+/// `refresh_token`) is refreshed like any other grant.
+pub fn parse_notion_token_response(body: &str, now_ms: i64, prior_refresh: Option<String>) -> Result<TokenSet, String> {
+    const INCOMPATIBLE: &str = "Notion OAuth token response is incompatible";
+    let response: serde_json::Value = serde_json::from_str(body).map_err(|_| "token response was not valid json".to_string())?;
+    let text = |name: &str| {
+        response
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty() && v.len() <= 4_096 && v.bytes().all(|b| b.is_ascii_graphic()))
+            .map(str::to_string)
+    };
+    let Some(access_token) = text("access_token") else {
+        return Err(INCOMPATIBLE.into());
+    };
+    if response.get("error").is_some()
+        || response.get("token_type").and_then(serde_json::Value::as_str).is_some_and(|t| !t.eq_ignore_ascii_case("bearer"))
+        || response.get("bot_id").and_then(serde_json::Value::as_str).map_or(true, str::is_empty)
+    {
+        return Err(INCOMPATIBLE.into());
+    }
+    let expires_at_ms = match response.get("expires_in") {
+        None | Some(serde_json::Value::Null) => i64::MAX,
+        Some(value) => value
+            .as_i64()
+            .filter(|seconds| *seconds > 0)
+            .and_then(|seconds| seconds.checked_mul(1_000))
+            .and_then(|ms| now_ms.checked_add(ms))
+            .ok_or(INCOMPATIBLE)?,
+    };
+    Ok(TokenSet { access_token, refresh_token: text("refresh_token").or(prior_refresh), expires_at_ms, account_label: account_label_from_response(body) })
 }
 
 /// A parsed token set with an absolute expiry (unix ms). `refresh_token` may be absent on a refresh

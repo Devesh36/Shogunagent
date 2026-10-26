@@ -91,8 +91,43 @@ describe("POST /v1/connectors/{provider}/connect (the agent's side)", () => {
     expect((await f.askLink(undefined)).status).toBe(401);
     expect((await f.askLink(await f.key("prn_r", ["read"]))).status).toBe(403);
     const k = await f.key("prn_a");
-    for (const provider of ["notion", "monid"]) expect((await f.askLink(k, provider)).status).toBe(404);
-    for (const provider of ["calendar", "slack", "linear", "github"]) expect((await f.askLink(k, provider)).status).toBe(202);
+    for (const provider of ["monid", "jira"]) expect((await f.askLink(k, provider)).status).toBe(404);
+    for (const provider of ["calendar", "slack", "linear", "github", "notion"]) expect((await f.askLink(k, provider)).status).toBe(202);
+  });
+
+  it("E51: Notion is connected through the same redirect, into notion-tokenset", async () => {
+    const f = fixture();
+    const k = await f.key("prn_n");
+    const link = await f.askLink(k, "notion");
+    expect(link.status).toBe(202);
+    const { connect_url, slot } = (await link.json()) as { connect_url: string; slot: string };
+    expect(slot).toBe("notion-tokenset");
+    const page = await (await f.rig.app.request(new URL(connect_url).pathname)).text();
+    expect(page).toContain("Connect Notion?");
+    const { res, flow } = await continueFlow(f, connect_url);
+    expect(res.status).toBe(303);
+    const state = new URL(res.headers.get("location") ?? "").searchParams.get("state") ?? "";
+    expect(f.sidecar.calls.at(-1)).toMatchObject({ path: "/v1/internal/connectors/connect/start", body: { provider: "notion", state } });
+    const done = await callback(f, { state, code: "vendor-code-1" }, flow);
+    expect(done.status).toBe(200);
+    expect(await done.text()).toContain("Notion connected");
+    // The code went to the sidecar only, never into a log line.
+    expect(f.sidecar.calls.at(-1)).toMatchObject({ path: "/v1/internal/connectors/connect/finish", body: { state, code: "vendor-code-1" } });
+    for (const line of f.rig.logLines) expect(line).not.toContain("vendor-code-1");
+    // The router's route serves the notion slot for the principal that connected it.
+    const token = await f.rig.app.request(CONNECTOR_TOKEN_PATH, {
+      method: "POST",
+      headers: { authorization: `Bearer ${ROUTER_TOKEN}`, "x-caller-authorization": `Bearer ${k}`, "content-type": "application/json" },
+      body: JSON.stringify({ slot: "notion-tokenset", provider_id: "notion" }),
+    });
+    expect(token.status).toBe(200);
+    // A slot that does not belong to the provider is still refused.
+    const mismatched = await f.rig.app.request(CONNECTOR_TOKEN_PATH, {
+      method: "POST",
+      headers: { authorization: `Bearer ${ROUTER_TOKEN}`, "x-caller-authorization": `Bearer ${k}`, "content-type": "application/json" },
+      body: JSON.stringify({ slot: "notion-tokenset", provider_id: "gmail" }),
+    });
+    expect(mismatched.status).toBe(400);
   });
 
   it("is not served without CONNECTOR_CONNECT_SECRET", async () => {
@@ -314,7 +349,7 @@ describe("the principal's connections (E50 follow-up)", () => {
     expect(await res.json()).toMatchObject({ disconnected: true, provider: "calendar", slot: "gcal-tokenset", removed: true, vendor_revoke: "revoked" });
     expect(f.sidecar.grants.get("prn_s")?.has("gcal-tokenset")).toBe(false);
     expect(await (await disconnect(writer, "calendar")).json()).toMatchObject({ removed: false, vendor_revoke: "nothing_stored" });
-    expect((await disconnect(writer, "notion")).status).toBe(404);
+    expect((await disconnect(writer, "jira")).status).toBe(404);
     f.sidecar.down = true;
     expect((await disconnect(writer, "gmail")).status).toBe(503);
     expect(f.rig.logLines.some((l) => l.includes("event=connector_disconnected"))).toBe(true);

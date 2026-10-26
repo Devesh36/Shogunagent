@@ -11,6 +11,8 @@
 //     required("NAME")  intFromEnv(env, "NAME", …)  nodeInt("NAME", …)  usd("NAME", …)  usdMicros("NAME", …)
 //   connector credentials: credential_env: "NAME", baseUrlEnv: "NAME", *_CREDENTIAL_ENV = "NAME"
 //   the router's ENV_NAMES block (apps/router/src/env.ts)
+//   the sidecar's hosted connect settings (E51): `pub const *_VAR: &str = "NAME";` in the Rust
+//   files of RUST_SOURCES (`SHOGUN_CONNECT_*`, read by `HostedClients::from_vars`)
 //
 //   node scripts/check-env-docs.mjs              check the tree
 //   node scripts/check-env-docs.mjs --list       print every name found, with where it is read
@@ -22,6 +24,8 @@ import { fileURLToPath } from "node:url";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RUNBOOK = "docs/deploy/production.md";
 const SOURCE_DIRS = ["apps/api/src", "apps/router/src", "apps/router/connectors"];
+/** Rust files whose `*_VAR` constants name environment variables the hosted sidecar reads. */
+const RUST_SOURCES = ["crates/shogun-integrations/src/hosted_connect.rs"];
 
 const NAME = "[A-Z][A-Z0-9_]*[A-Z0-9]";
 const PATTERNS = [
@@ -67,6 +71,14 @@ export function namesIn(src) {
   return found;
 }
 
+/** Every `pub const X_VAR: &str = "NAME";` in Rust source (comments stripped the same way). */
+export function rustVarNamesIn(src) {
+  const code = stripComments(src);
+  const found = new Set();
+  for (const m of code.matchAll(new RegExp(`\\bconst\\s+\\w+_VAR\\s*:\\s*&(?:'static\\s+)?str\\s*=\\s*"(${NAME})"`, "g"))) found.add(m[1]);
+  return found;
+}
+
 /** Names written as `NAME` in the runbook. */
 export function documentedIn(markdown) {
   const out = new Set();
@@ -105,6 +117,14 @@ function selfTest() {
   const docs = documentedIn("| `ALPHA_ONE` | x |\nBETA without backticks\n`GAMMA`");
   const failures = [];
   if (JSON.stringify(got) !== JSON.stringify(want)) failures.push(`extractor: got  ${got.join(",")}\n           want ${want.join(",")}`);
+  const rust = [...rustVarNamesIn(`
+    /// The callback.
+    pub const REDIRECT_URI_VAR: &str = "TAU_REDIRECT";
+    // pub const COMMENTED_VAR: &str = "NOT_READ";
+    pub const UPSILON_VAR: &'static str = "UPSILON_ID";
+    const PHI: &str = "NOT_A_VAR_CONST";
+  `)].sort();
+  if (JSON.stringify(rust) !== JSON.stringify(["TAU_REDIRECT", "UPSILON_ID"])) failures.push(`rust extractor: got ${rust.join(",")}`);
   if (!docs.has("ALPHA_ONE") || docs.has("BETA") || !docs.has("GAMMA")) failures.push("documentedIn: the backtick rule is broken");
   if (failures.length) {
     console.error(`check-env-docs self-test FAILED\n${failures.join("\n")}`);
@@ -123,6 +143,12 @@ function main() {
         if (!readAt.has(name)) readAt.set(name, new Set());
         readAt.get(name).add(relative(ROOT, file));
       }
+    }
+  }
+  for (const file of RUST_SOURCES) {
+    for (const name of rustVarNamesIn(readFileSync(join(ROOT, file), "utf8"))) {
+      if (!readAt.has(name)) readAt.set(name, new Set());
+      readAt.get(name).add(file);
     }
   }
   if (args.has("--list")) {
@@ -145,7 +171,7 @@ function main() {
     console.error("Add each one, in backticks, to the variable tables of the runbook: which component reads it, secret or var, required or optional.");
     process.exit(1);
   }
-  console.log(`check-env-docs: all ${readAt.size} environment variables read by apps/api and apps/router are documented in ${RUNBOOK}.`);
+  console.log(`check-env-docs: all ${readAt.size} environment variables read by apps/api, apps/router and the sidecar's connect flow are documented in ${RUNBOOK}.`);
 }
 
 main();

@@ -5693,7 +5693,8 @@
                       "gcal-tokenset",
                       "github-tokenset",
                       "linear-tokenset",
-                      "slack-tokenset"
+                      "slack-tokenset",
+                      "notion-tokenset"
                     ]
                   },
                   "provider_id": {
@@ -5703,7 +5704,8 @@
                       "calendar",
                       "github",
                       "linear",
-                      "slack"
+                      "slack",
+                      "notion"
                     ]
                   },
                   "run_id": {
@@ -5804,7 +5806,7 @@
         "tags": [
           "providers"
         ],
-        "summary": "Ask for a link a human opens to connect their own account for a first-party connector (gmail, calendar, slack, linear, github). An agent cannot connect an account: it hands connect_url to its human (next_action ask_human), who signs in at the provider (GitHub: types a code at github.com/login/device); the token goes into the principal's own store, never to the agent. Free.",
+        "summary": "Ask for a link a human opens to connect their own account for a first-party connector (gmail, calendar, slack, linear, github, notion). An agent cannot connect an account: it hands connect_url to its human (next_action ask_human), who signs in at the provider (GitHub: types a code at github.com/login/device); the token goes into the principal's own store, never to the agent. Free.",
         "operationId": "post_v1_connectors_provider_connect",
         "parameters": [
           {
@@ -5818,7 +5820,8 @@
                 "calendar",
                 "slack",
                 "linear",
-                "github"
+                "github",
+                "notion"
               ]
             }
           }
@@ -6176,7 +6179,7 @@
         "tags": [
           "providers"
         ],
-        "summary": "Disconnect one first-party connector account of the principal: the stored grant is deleted, and revoked at the vendor where it has an API (Google, Slack). Only removes access, so any agent with write may ask; reconnecting needs the human. Idempotent. Free.",
+        "summary": "Disconnect one first-party connector account of the principal: the stored grant is deleted, and revoked at the vendor where the credentials the core holds allow it (Google, Slack, Linear; GitHub with the app secret); vendor_revoke says which. Only removes access, so any agent with write may ask; reconnecting needs the human. Idempotent. Free.",
         "operationId": "post_v1_connectors_provider_disconnect",
         "parameters": [
           {
@@ -6190,7 +6193,8 @@
                 "calendar",
                 "slack",
                 "linear",
-                "github"
+                "github",
+                "notion"
               ]
             }
           }

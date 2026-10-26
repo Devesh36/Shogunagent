@@ -1,7 +1,7 @@
 //! Hosted connector credentials (ShogunAgent E50): the sidecar's [`ConnectorVault`] over a
 //! principal's [`TokenStore`].
 //!
-//! The router's first-party connectors (Gmail, Google Calendar, Slack, Linear, GitHub) act as the
+//! The router's first-party connectors (Gmail, Google Calendar, Slack, Linear, GitHub, Notion) act as the
 //! calling principal's own vendor account. The gateway (`apps/api`) asks the sidecar for that
 //! account's access token per run, and runs the hosted connect flow through it; this module is the
 //! sidecar's side of both (`docs/api/connector-tokens.md`):
@@ -15,7 +15,9 @@
 //!   is revoked by the vendor).
 //! - **Connect**: the authorization-code + PKCE flow the core already speaks
 //!   ([`crate::oauth`]: Google, Slack's user token, Linear's user actor), with a web redirect
-//!   (`SHOGUN_CONNECT_REDIRECT_URI`, the gateway's callback) instead of the desktop loopback; and
+//!   (`SHOGUN_CONNECT_REDIRECT_URI`, the gateway's callback) instead of the desktop loopback;
+//!   Notion's public-integration authorization code (no PKCE, the token request authenticated
+//!   with the app's client id and secret as HTTP Basic auth and sent as JSON, E51); and
 //!   GitHub's device flow ([`crate::device_flow`], the steps the Mac app's flow uses), which needs
 //!   no callback: the human types a code at github.com and presses "Check" on the gateway's page,
 //!   and each check is one poll here. A pending flow (the PKCE verifier, or the device code) is
@@ -25,8 +27,9 @@
 //!   exchanged here and the tokenset goes straight into the principal's store; neither is
 //!   returned to the gateway.
 //! - **Status and disconnect** (`connections.list` / `connections.disconnect` on every face, and
-//!   the gateway's REST): which connectors hold a usable grant, and removing one — revoked at the
-//!   vendor where it has a revocation endpoint (Google, Slack), deleted from the store always.
+//!   the gateway's REST): which connectors hold a usable grant, and removing one — deleted from the
+//!   store always, then revoked at the vendor where the credentials the core holds allow it
+//!   ([`Revocation`]: Google, Slack, Linear; GitHub with the app's client secret), fail-soft.
 //! - **Audit**: every connect, refresh, disconnect, revocation and read-sync fetch is reported to
 //!   the [`AuditSink`] the core composes (a traceability row in the principal's own store: the
 //!   action, provider, vendor host and outcome; never a token, a code or a body).
@@ -50,7 +53,7 @@ use shogun_mcp::connector_vault::{
 use shogun_mcp::scope::Service;
 
 use crate::device_flow::{self, DevicePoll};
-use crate::oauth::{self, AuthConfig, Pkce, TokenExchange, TokenSet};
+use crate::oauth::{self, AuthConfig, ExchangeAuth, ExchangeBody, ExchangeMethod, ExchangeRequest, Pkce, TokenExchange, TokenSet};
 use crate::token::{is_transient_token_failure, GrantStore, DEFAULT_REFRESH_SKEW_MS};
 use crate::token_store::{valid_principal, CredentialSlot, Modify, PrincipalGrants, Secret, TokenStore, TokenStoreError};
 
@@ -78,15 +81,54 @@ pub enum Vendor {
     Slack,
     Linear,
     GitHub,
-    /// Notion's REST API. The core has no hosted Notion OAuth flow (its Notion sign-in is the Mac
-    /// app's loopback registration with Notion's MCP server, whose tokens do not open the REST
-    /// API): a Notion grant is served while it is valid and cannot be connected or refreshed here.
+    /// Notion's REST API through a public integration (E51): the authorization code without PKCE,
+    /// exchanged with the app's client id and secret as HTTP Basic auth and a JSON body
+    /// ([`oauth::NOTION_TOKEN_ENDPOINT`]). The tokenset lands in `notion-tokenset`, the slot the
+    /// read-sync and the router's Notion connector read. (The Mac app's Notion sign-in is a
+    /// different grant: its loopback registration with Notion's MCP server, whose tokens do not
+    /// open the REST API.)
     Notion,
 }
 
+/// Google's RFC 7009 revocation endpoint.
+pub const GOOGLE_REVOKE_ENDPOINT: &str = "https://oauth2.googleapis.com/revoke";
+/// Slack's `auth.revoke` (the token in the form; `ok: true` when it revoked).
+pub const SLACK_REVOKE_ENDPOINT: &str = "https://slack.com/api/auth.revoke";
+/// Linear's revocation: `POST` with the access token as bearer revokes the authorization.
+pub const LINEAR_REVOKE_ENDPOINT: &str = "https://api.linear.app/oauth/revoke";
+/// GitHub's "delete an app authorization": `DELETE /applications/{client_id}/grant` with the app's
+/// client id and secret as Basic auth and `{"access_token"}` in the body. It removes the grant and
+/// every token of it for the user.
+pub const GITHUB_GRANT_ENDPOINT_PREFIX: &str = "https://api.github.com/applications/";
+/// The GitHub REST API version the grant deletion speaks.
+pub const GITHUB_API_VERSION: (&str, &str) = ("x-github-api-version", "2022-11-28");
+
+/// How a disconnect revokes a vendor's grant with what the core holds (E51). What each needs:
+///
+/// | Vendor | Request | Needs |
+/// |---|---|---|
+/// | Google | RFC 7009 `POST oauth2.googleapis.com/revoke`, `token=<refresh token>` | the stored grant only |
+/// | Slack | `POST slack.com/api/auth.revoke`, `token=<access token>` | the stored grant only |
+/// | Linear | `POST api.linear.app/oauth/revoke`, `Authorization: Bearer <access token>` | a valid access token: an expired one is refreshed first with the hosted Linear client |
+/// | GitHub | `DELETE api.github.com/applications/{client_id}/grant`, Basic `client_id:client_secret`, `{"access_token"}` | the hosted GitHub App's client id **and secret** (`SHOGUN_CONNECT_GITHUB_CLIENT_SECRET`) and a valid access token (refreshed first when expired); without the secret: `not_supported` |
+/// | Notion | none: Notion documents no revocation the core can call for a public integration | the human removes the connection in Notion's *Settings → Connections* |
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Revocation {
+    /// RFC 7009 form, the refresh token when stored (it revokes the whole grant), else the access token.
+    Rfc7009Form(&'static str),
+    /// Slack's `auth.revoke` form: the access token.
+    SlackForm,
+    /// Linear: the access token as bearer.
+    LinearBearer,
+    /// GitHub: the app's Basic auth deletes the grant named by the access token.
+    GitHubGrant,
+    /// No revocation the core can call.
+    None,
+}
+
 impl Vendor {
-    /// The host of the vendor's token endpoint (the destination of a refresh, a connect or a
-    /// revocation in the audit row).
+    /// The host of the vendor's token endpoint (the destination of a refresh or a connect in the
+    /// audit row).
     pub fn token_host(self) -> &'static str {
         match self {
             Vendor::Google => "oauth2.googleapis.com",
@@ -97,15 +139,22 @@ impl Vendor {
         }
     }
 
-    /// Where the vendor revokes a grant, when the core can call it with the token alone: Google's
-    /// RFC 7009 endpoint, Slack's `auth.revoke`. Linear's and GitHub's revocation need the app's
-    /// client secret or are not verified here, so a disconnect only deletes the stored grant
-    /// (`vendor_revoke: "not_supported"`; the human can also remove the app at the vendor).
-    pub fn revoke_endpoint(self) -> Option<&'static str> {
+    /// The host a revocation goes to (the destination of a `revoke` audit row).
+    pub fn revoke_host(self) -> &'static str {
         match self {
-            Vendor::Google => Some("https://oauth2.googleapis.com/revoke"),
-            Vendor::Slack => Some("https://slack.com/api/auth.revoke"),
-            Vendor::Linear | Vendor::GitHub | Vendor::Notion => None,
+            Vendor::GitHub => "api.github.com",
+            other => other.token_host(),
+        }
+    }
+
+    /// How a disconnect revokes this vendor's grant ([`Revocation`]).
+    pub fn revocation(self) -> Revocation {
+        match self {
+            Vendor::Google => Revocation::Rfc7009Form(GOOGLE_REVOKE_ENDPOINT),
+            Vendor::Slack => Revocation::SlackForm,
+            Vendor::Linear => Revocation::LinearBearer,
+            Vendor::GitHub => Revocation::GitHubGrant,
+            Vendor::Notion => Revocation::None,
         }
     }
 }
@@ -137,8 +186,9 @@ pub const PROVIDERS: &[HostedProvider] = &[
     HostedProvider { id: "linear", service: Service::Linear, vendor: Vendor::Linear, scopes: LINEAR_SCOPES, connectable: true },
     // The device flow (a GitHub App's user-to-server token); no scopes: the app's permissions.
     HostedProvider { id: "github", service: Service::GitHub, vendor: Vendor::GitHub, scopes: &[], connectable: true },
-    // Read-sync only (Notion change notices): not a router provider, not connectable here.
-    HostedProvider { id: "notion", service: Service::Notion, vendor: Vendor::Notion, scopes: &[], connectable: false },
+    // A Notion public integration (E51): no scopes (the integration's capabilities are set in its
+    // settings: read content only). Read by the router's Notion connector and the read-sync.
+    HostedProvider { id: "notion", service: Service::Notion, vendor: Vendor::Notion, scopes: &[], connectable: true },
 ];
 
 pub fn provider_by_id(id: &str) -> Option<&'static HostedProvider> {
@@ -174,6 +224,7 @@ pub struct HostedClients {
     slack: Option<OAuthClient>,
     linear: Option<OAuthClient>,
     github: Option<OAuthClient>,
+    notion: Option<OAuthClient>,
 }
 
 /// The variables [`HostedClients::from_vars`] reads.
@@ -186,8 +237,13 @@ pub const LINEAR_CLIENT_ID_VAR: &str = "SHOGUN_CONNECT_LINEAR_CLIENT_ID";
 pub const LINEAR_CLIENT_SECRET_VAR: &str = "SHOGUN_CONNECT_LINEAR_CLIENT_SECRET";
 /// The GitHub App's client id (device flow enabled). Public: the device flow needs no secret.
 pub const GITHUB_CLIENT_ID_VAR: &str = "SHOGUN_CONNECT_GITHUB_CLIENT_ID";
-/// Optional: sent with GitHub refreshes when the app requires it.
+/// Optional: sent with GitHub refreshes when the app requires it, and needed to revoke a GitHub
+/// grant at disconnect (the grant deletion authenticates as the app).
 pub const GITHUB_CLIENT_SECRET_VAR: &str = "SHOGUN_CONNECT_GITHUB_CLIENT_SECRET";
+/// A Notion public integration's OAuth client id (E51).
+pub const NOTION_CLIENT_ID_VAR: &str = "SHOGUN_CONNECT_NOTION_CLIENT_ID";
+/// Its client secret: required (Notion's token endpoint takes `client_id:client_secret` as Basic auth).
+pub const NOTION_CLIENT_SECRET_VAR: &str = "SHOGUN_CONNECT_NOTION_CLIENT_SECRET";
 
 /// Whether `uri` may be the hosted callback: `https://`, or plain http to a loopback host
 /// (development). No fragment.
@@ -230,6 +286,8 @@ impl HostedClients {
             slack: client(SLACK_CLIENT_ID_VAR, SLACK_CLIENT_SECRET_VAR, oauth::valid_slack_client_id, false)?,
             linear: client(LINEAR_CLIENT_ID_VAR, LINEAR_CLIENT_SECRET_VAR, oauth::valid_public_client_id, false)?,
             github: client(GITHUB_CLIENT_ID_VAR, GITHUB_CLIENT_SECRET_VAR, oauth::valid_public_client_id, false)?,
+            // A Notion public integration is confidential: the secret is its Basic auth.
+            notion: client(NOTION_CLIENT_ID_VAR, NOTION_CLIENT_SECRET_VAR, oauth::valid_public_client_id, true)?,
         })
     }
 
@@ -246,7 +304,7 @@ impl HostedClients {
             Vendor::Slack => self.slack = Some(client),
             Vendor::Linear => self.linear = Some(client),
             Vendor::GitHub => self.github = Some(client),
-            Vendor::Notion => {}
+            Vendor::Notion => self.notion = Some(client),
         }
         self
     }
@@ -267,8 +325,8 @@ impl HostedClients {
             Vendor::Slack => self.slack.as_ref(),
             Vendor::Linear => self.linear.as_ref(),
             Vendor::GitHub => self.github.as_ref(),
-            // No hosted Notion flow in the core.
-            Vendor::Notion => None,
+            // Notion's token endpoint authenticates the app with its secret: none, no client.
+            Vendor::Notion => self.notion.as_ref().filter(|c| c.client_secret.is_some()),
         }
     }
 
@@ -297,9 +355,53 @@ impl HostedClients {
                 auth_endpoint: device_flow::DEVICE_ENDPOINT.to_string(),
                 token_endpoint: oauth::GITHUB_TOKEN_ENDPOINT.to_string(),
             },
-            Vendor::Notion => return None,
+            Vendor::Notion => AuthConfig {
+                client_id: client.client_id.clone(),
+                client_secret: secret,
+                redirect_uri: redirect,
+                auth_endpoint: oauth::NOTION_AUTH_ENDPOINT.to_string(),
+                token_endpoint: oauth::NOTION_TOKEN_ENDPOINT.to_string(),
+            },
         })
     }
+}
+
+/// One token request: a code exchange or a refresh.
+enum Grant<'a> {
+    Code { code: &'a str, pkce: &'a Pkce },
+    Refresh(&'a str),
+}
+
+/// POST one token request for `vendor`: the form every vendor but Notion takes, or Notion's JSON
+/// body with the app's client id and secret as Basic auth. Through the core's single egress.
+fn post_token<X: TokenExchange>(exchange: &X, vendor: Vendor, cfg: &AuthConfig, grant: Grant<'_>) -> Result<String, String> {
+    if vendor == Vendor::Notion {
+        let body = match grant {
+            Grant::Code { code, .. } => oauth::notion_code_body(cfg, code),
+            Grant::Refresh(refresh) => oauth::notion_refresh_body(refresh),
+        };
+        let password = cfg.client_secret.as_deref().ok_or_else(|| "token exchange unsupported request".to_string())?;
+        return exchange.send(&ExchangeRequest {
+            method: ExchangeMethod::Post,
+            endpoint: &cfg.token_endpoint,
+            auth: ExchangeAuth::Basic { user: &cfg.client_id, password },
+            body: ExchangeBody::Json(&body),
+            headers: &[],
+        });
+    }
+    let form = match grant {
+        Grant::Code { code, pkce } => oauth::token_exchange_form(cfg, code, pkce),
+        Grant::Refresh(refresh) => oauth::refresh_form(cfg, refresh),
+    };
+    exchange.post_form(&cfg.token_endpoint, &form)
+}
+
+/// Parse a token response the way `vendor` answers it.
+fn parse_tokens(vendor: Vendor, cfg: &AuthConfig, body: &str, now_ms: i64, prior_refresh: Option<String>) -> Result<TokenSet, String> {
+    if vendor == Vendor::Notion {
+        return oauth::parse_notion_token_response(body, now_ms, prior_refresh);
+    }
+    oauth::parse_token_response_for(cfg, body, now_ms, prior_refresh)
 }
 
 /// One audited connector action. Fixed words and a host: never a token, a code, a body or an
@@ -451,10 +553,21 @@ impl<X: TokenExchange + Send + Sync> HostedConnectors<X> {
 
     /// Refresh `current` with the vendor and write it back. Called with the row lock held.
     fn refresh(&self, principal: &str, provider: &HostedProvider, grants: &PrincipalGrants<&dyn TokenStore>, current: &TokenSet, now_ms: i64) -> Result<TokenSet, VaultError> {
+        let fresh = self.exchange_refresh(principal, provider, current, now_ms)?;
+        // A failed write-back still answers with the fresh access token, which is valid now. When
+        // the refresh token rotated, the consumed one is gone either way: the next refresh fails
+        // and the human reconnects.
+        let _ = grants.save(provider.service, &fresh);
+        Ok(fresh)
+    }
+
+    /// Spend `current`'s refresh token with the vendor and answer the fresh tokenset (not stored
+    /// here). Audited.
+    fn exchange_refresh(&self, principal: &str, provider: &HostedProvider, current: &TokenSet, now_ms: i64) -> Result<TokenSet, VaultError> {
         let refresh = current.refresh_token.clone().ok_or(VaultError::NotConnected)?;
         let cfg = self.clients.auth_config(provider.vendor).ok_or(VaultError::NotConfigured)?;
         let event = |outcome| AuditEvent { action: "refresh", provider: provider.id, outcome, destination: provider.vendor.token_host() };
-        let body = self.exchange()?.post_form(&cfg.token_endpoint, &oauth::refresh_form(&cfg, &refresh)).map_err(|reason| {
+        let body = post_token(self.exchange()?, provider.vendor, &cfg, Grant::Refresh(&refresh)).map_err(|reason| {
             if is_transient_token_failure(&reason) {
                 self.audit(principal, event("unavailable"));
                 VaultError::Unavailable
@@ -464,7 +577,7 @@ impl<X: TokenExchange + Send + Sync> HostedConnectors<X> {
             }
         })?;
         // A refresh response may omit the refresh token: the stored one stays valid.
-        let mut fresh = oauth::parse_token_response_for(&cfg, &body, now_ms, Some(refresh)).map_err(|_| {
+        let mut fresh = parse_tokens(provider.vendor, &cfg, &body, now_ms, Some(refresh)).map_err(|_| {
             self.audit(principal, event("rejected"));
             VaultError::NotConnected
         })?;
@@ -472,10 +585,6 @@ impl<X: TokenExchange + Send + Sync> HostedConnectors<X> {
             fresh.account_label = current.account_label.clone();
         }
         self.audit(principal, event("ok"));
-        // A failed write-back still answers with the fresh access token, which is valid now. When
-        // the refresh token rotated, the consumed one is gone either way: the next refresh fails
-        // and the human reconnects.
-        let _ = grants.save(provider.service, &fresh);
         Ok(fresh)
     }
 
@@ -560,26 +669,80 @@ impl<X: TokenExchange + Send + Sync> HostedConnectors<X> {
         })
     }
 
-    /// Ask the vendor to revoke `token`. `revoked`, `failed` or `not_supported`.
-    fn revoke(&self, principal: &str, provider: &HostedProvider, token: &str) -> &'static str {
-        let Some(endpoint) = provider.vendor.revoke_endpoint() else {
+    /// A currently valid access token of `tokens` for a revocation that authenticates with it
+    /// (Linear, GitHub): the stored one, or a refreshed one when it has expired. The grant is
+    /// already deleted from the store, so the refreshed tokenset is not written back.
+    fn access_for_revoke(&self, principal: &str, provider: &HostedProvider, tokens: &TokenSet, now_ms: i64) -> Option<String> {
+        if !tokens.is_expired(now_ms, 0) {
+            return Some(tokens.access_token.clone());
+        }
+        self.exchange_refresh(principal, provider, tokens, now_ms).ok().map(|fresh| fresh.access_token)
+    }
+
+    /// Ask the vendor to revoke the grant `tokens` holds (E51; what each vendor needs is on
+    /// [`Revocation`]). `revoked`, `failed` (the vendor refused, did not answer, or the token could
+    /// not be made valid) or `not_supported` (no revocation the core can call with what it holds).
+    /// Fail-soft: the caller has already deleted the grant locally.
+    fn revoke(&self, principal: &str, provider: &HostedProvider, tokens: &TokenSet, now_ms: i64) -> &'static str {
+        let revocation = provider.vendor.revocation();
+        // GitHub's grant deletion authenticates as the app: without its secret there is nothing to call.
+        let github_app = match (revocation, self.clients.client(Vendor::GitHub)) {
+            (Revocation::GitHubGrant, Some(client)) => match &client.client_secret {
+                Some(secret) => Some((client.client_id.clone(), secret.clone())),
+                None => return "not_supported",
+            },
+            (Revocation::GitHubGrant, None) => return "not_supported",
+            _ => None,
+        };
+        if revocation == Revocation::None {
             return "not_supported";
-        };
-        let outcome = match self.exchange().ok().map(|x| x.post_form(endpoint, &[("token".to_string(), token.to_string())])) {
-            // Slack answers 200 with `ok: false` when it did not revoke.
-            Some(Ok(body)) if provider.vendor == Vendor::Slack => {
-                if serde_json::from_str::<serde_json::Value>(&body).ok().and_then(|v| v.get("ok").and_then(serde_json::Value::as_bool)) == Some(true) {
-                    "revoked"
-                } else {
-                    "failed"
+        }
+        let outcome = (|| -> Result<(), ()> {
+            let exchange = self.exchange().map_err(|_| ())?;
+            match revocation {
+                Revocation::Rfc7009Form(endpoint) => {
+                    let token = tokens.refresh_token.as_deref().unwrap_or(&tokens.access_token);
+                    exchange.post_form(endpoint, &[("token".to_string(), token.to_string())]).map(drop).map_err(drop)
                 }
+                Revocation::SlackForm => {
+                    // Slack answers 200 with `ok: false` when it did not revoke.
+                    let body = exchange.post_form(SLACK_REVOKE_ENDPOINT, &[("token".to_string(), tokens.access_token.clone())]).map_err(drop)?;
+                    let ok = serde_json::from_str::<serde_json::Value>(&body).ok().and_then(|v| v.get("ok").and_then(serde_json::Value::as_bool));
+                    if ok == Some(true) {
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                }
+                Revocation::LinearBearer => {
+                    let access = self.access_for_revoke(principal, provider, tokens, now_ms).ok_or(())?;
+                    exchange
+                        .send(&ExchangeRequest { method: ExchangeMethod::Post, endpoint: LINEAR_REVOKE_ENDPOINT, auth: ExchangeAuth::Bearer(&access), body: ExchangeBody::Empty, headers: &[] })
+                        .map(drop)
+                        .map_err(drop)
+                }
+                Revocation::GitHubGrant => {
+                    let (client_id, secret) = github_app.as_ref().ok_or(())?;
+                    let access = self.access_for_revoke(principal, provider, tokens, now_ms).ok_or(())?;
+                    let body = serde_json::json!({ "access_token": access });
+                    exchange
+                        .send(&ExchangeRequest {
+                            method: ExchangeMethod::Delete,
+                            endpoint: &format!("{GITHUB_GRANT_ENDPOINT_PREFIX}{client_id}/grant"),
+                            auth: ExchangeAuth::Basic { user: client_id, password: secret.expose() },
+                            body: ExchangeBody::Json(&body),
+                            headers: &[GITHUB_API_VERSION],
+                        })
+                        .map(drop)
+                        .map_err(drop)
+                }
+                Revocation::None => Err(()),
             }
-            Some(Ok(_)) => "revoked",
-            _ => "failed",
-        };
+        })();
+        let outcome = if outcome.is_ok() { "revoked" } else { "failed" };
         self.audit(
             principal,
-            AuditEvent { action: "revoke", provider: provider.id, outcome: if outcome == "revoked" { "ok" } else { "failed" }, destination: provider.vendor.token_host() },
+            AuditEvent { action: "revoke", provider: provider.id, outcome: if outcome == "revoked" { "ok" } else { "failed" }, destination: provider.vendor.revoke_host() },
         );
         outcome
     }
@@ -672,7 +835,13 @@ impl<X: TokenExchange + Send + Sync> ConnectorVault for HostedConnectors<X> {
         getrandom::fill(&mut entropy).map_err(|_| VaultError::Unavailable)?;
         let pkce = Pkce::from_entropy(&entropy);
         entropy.fill(0);
-        let authorize_url = oauth::authorize_url(&cfg, provider.scopes, &pkce, state).map_err(|_| VaultError::NotConfigured)?;
+        // Notion takes no PKCE and no scopes: its verifier is kept but never sent.
+        let authorize_url = if provider.vendor == Vendor::Notion {
+            oauth::notion_authorize_url(&cfg, state)
+        } else {
+            oauth::authorize_url(&cfg, provider.scopes, &pkce, state)
+        }
+        .map_err(|_| VaultError::NotConfigured)?;
         let expires_at_ms = now_ms.saturating_add(FLOW_TTL_MS);
         let flow = StoredFlow {
             key: hex(&state_key(state)),
@@ -710,7 +879,7 @@ impl<X: TokenExchange + Send + Sync> ConnectorVault for HostedConnectors<X> {
         let cfg = self.clients.auth_config(provider.vendor).ok_or(VaultError::NotConfigured)?;
         let pkce = Pkce { verifier: flow.secret, challenge: String::new() };
         let event = |outcome| AuditEvent { action: "connect", provider: provider.id, outcome, destination: provider.vendor.token_host() };
-        let body = self.exchange()?.post_form(&cfg.token_endpoint, &oauth::token_exchange_form(&cfg, code, &pkce)).map_err(|reason| {
+        let body = post_token(self.exchange()?, provider.vendor, &cfg, Grant::Code { code, pkce: &pkce }).map_err(|reason| {
             if is_transient_token_failure(&reason) {
                 self.audit(principal, event("unavailable"));
                 VaultError::Unavailable
@@ -726,7 +895,7 @@ impl<X: TokenExchange + Send + Sync> ConnectorVault for HostedConnectors<X> {
         if !scopes_granted(provider, &body) {
             return Err(rejected());
         }
-        let tokens = oauth::parse_token_response_for(&cfg, &body, now_ms, None).map_err(|_| rejected())?;
+        let tokens = parse_tokens(provider.vendor, &cfg, &body, now_ms, None).map_err(|_| rejected())?;
         // Google answers a refresh token only with offline access; without one the grant would die
         // within the hour, so it is not stored.
         if provider.vendor == Vendor::Google && tokens.refresh_token.is_none() {
@@ -815,7 +984,7 @@ impl<X: TokenExchange + Send + Sync> ConnectorVault for HostedConnectors<X> {
             .collect()
     }
 
-    fn disconnect(&self, principal: &str, service: Service, _now_ms: i64) -> Result<Disconnected, VaultError> {
+    fn disconnect(&self, principal: &str, service: Service, now_ms: i64) -> Result<Disconnected, VaultError> {
         if !valid_principal(principal) {
             return Err(VaultError::Invalid("principal"));
         }
@@ -834,10 +1003,7 @@ impl<X: TokenExchange + Send + Sync> ConnectorVault for HostedConnectors<X> {
         let _ = self.modify_json(principal, CredentialSlot::ConnectFlows, |doc: &mut StoredFlows| doc.flows.retain(|f| f.provider != provider_id));
         let (removed, vendor_revoke) = match (stored, provider) {
             (Ok(None), _) => (false, "nothing_stored"),
-            (Ok(Some(tokens)), Some(provider)) => {
-                let token = tokens.refresh_token.as_deref().unwrap_or(&tokens.access_token);
-                (true, self.revoke(principal, provider, token))
-            }
+            (Ok(Some(tokens)), Some(provider)) => (true, self.revoke(principal, provider, &tokens, now_ms)),
             (Ok(Some(_)), None) => (true, "not_supported"),
             (Err(_), _) => (true, "failed"),
         };
@@ -880,7 +1046,19 @@ mod tests {
         device_body: Mutex<Option<String>>,
         polls: Mutex<VecDeque<String>>,
         revoke_body: Mutex<Option<String>>,
+        notion_refresh_body: Mutex<Option<String>>,
+        /// Every non-form request ([`TokenExchange::send`]): method, endpoint, auth, body, headers.
+        sent: Mutex<Vec<SentRequest>>,
         down: std::sync::atomic::AtomicBool,
+    }
+
+    #[derive(Debug, Clone)]
+    struct SentRequest {
+        method: ExchangeMethod,
+        endpoint: String,
+        auth: String,
+        body: String,
+        headers: Vec<(&'static str, &'static str)>,
     }
 
     impl TokenExchange for Arc<FakeVendor> {
@@ -911,6 +1089,32 @@ mod tests {
             }
             *generation += 1;
             Ok(format!(r#"{{"access_token":"access-{n}-0123456789","token_type":"Bearer","expires_in":3600,"scope":"read","refresh_token":"r{n}"}}"#, n = *generation))
+        }
+
+        /// Notion's token endpoint (code → `code_body`, refresh → `notion_refresh_body`); any other
+        /// endpoint is a revocation answering `revoke_body` (none: 401).
+        fn send(&self, request: &ExchangeRequest<'_>) -> Result<String, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let auth = match &request.auth {
+                ExchangeAuth::None => "none".to_string(),
+                ExchangeAuth::Basic { user, password } => format!("basic {user}:{password}"),
+                ExchangeAuth::Bearer(token) => format!("bearer {token}"),
+            };
+            let body = match &request.body {
+                ExchangeBody::Json(value) => value.to_string(),
+                ExchangeBody::Form(form) => format!("{form:?}"),
+                ExchangeBody::Empty => String::new(),
+            };
+            self.sent.lock().unwrap().push(SentRequest { method: request.method, endpoint: request.endpoint.to_string(), auth, body: body.clone(), headers: request.headers.to_vec() });
+            if self.down.load(Ordering::SeqCst) {
+                return Err("token exchange failed: connect".into());
+            }
+            if request.endpoint == oauth::NOTION_TOKEN_ENDPOINT {
+                let grant: serde_json::Value = serde_json::from_str(&body).unwrap();
+                let answer = if grant["grant_type"] == "authorization_code" { &self.code_body } else { &self.notion_refresh_body };
+                return answer.lock().unwrap().clone().ok_or_else(|| "token endpoint http 400 Bad Request".to_string());
+            }
+            self.revoke_body.lock().unwrap().clone().ok_or_else(|| "token endpoint http 401 Unauthorized".to_string())
         }
     }
 
@@ -1279,8 +1483,9 @@ mod tests {
         *vendor.revoke_body.lock().unwrap() = Some(r#"{"ok":false,"error":"invalid_auth"}"#.into());
         assert_eq!(vault.disconnect("prn_a", Service::Slack, NOW).unwrap().vendor_revoke, "failed");
         assert!(load(&store, "prn_a", Service::Slack).is_none());
-        // Linear: no revocation the core can call; deleted.
-        assert_eq!(vault.disconnect("prn_a", Service::Linear, NOW).unwrap().vendor_revoke, "not_supported");
+        // Linear: its access token expired and the vendor refuses the refresh, so the bearer
+        // revocation cannot be made: failed, deleted all the same.
+        assert_eq!(vault.disconnect("prn_a", Service::Linear, NOW).unwrap().vendor_revoke, "failed");
         assert!(load(&store, "prn_a", Service::Linear).is_none());
         // Nothing stored: idempotent. Another principal's grant is untouched.
         save(&store, "prn_b", Service::Gmail, &grant("ya29.bob", Some("rb"), NOW + 3_600_000));
@@ -1329,9 +1534,14 @@ mod tests {
             (GOOGLE_CLIENT_SECRET_VAR, "s"),
             (LINEAR_CLIENT_ID_VAR, "linear-client"),
             (GITHUB_CLIENT_ID_VAR, "Iv1.8a61f9b3a7aba766"),
+            (NOTION_CLIENT_ID_VAR, "1a2b3c4d-0000-1111-2222-333344445555"),
+            (NOTION_CLIENT_SECRET_VAR, "secret_notion"),
         ]))
         .unwrap();
-        assert_eq!(ok.connectable(), vec!["gmail", "calendar", "linear", "github"]);
+        assert_eq!(ok.connectable(), vec!["gmail", "calendar", "linear", "github", "notion"]);
+        // Notion's Basic auth needs the secret.
+        assert_eq!(HostedClients::from_vars(&vars(&[(NOTION_CLIENT_ID_VAR, "1a2b3c4d-0000-1111-2222-333344445555")])).err(), Some(NOTION_CLIENT_SECRET_VAR));
+        assert_eq!(HostedClients::from_vars(&vars(&[(NOTION_CLIENT_SECRET_VAR, "s")])).err(), Some(NOTION_CLIENT_ID_VAR));
         assert!(HostedClients::from_vars(&HashMap::new()).unwrap().connectable().is_empty());
         for (pairs, bad) in [
             (vec![(REDIRECT_URI_VAR, "http://api.example.test/cb")], REDIRECT_URI_VAR),
@@ -1344,5 +1554,179 @@ mod tests {
         }
         assert!(valid_redirect_uri("http://127.0.0.1:8787/v1/connectors/callback"));
         assert!(!valid_redirect_uri("https://api.example.test/cb#frag"));
+    }
+
+    fn with_notion_and_github_secret() -> HostedClients {
+        clients()
+            .with_client(Vendor::Notion, OAuthClient::new("notion-client-id", Some(Secret::new("notion-secret"))))
+            .with_client(Vendor::GitHub, OAuthClient::new("Iv1.github-app", Some(Secret::new("github-app-secret"))))
+    }
+
+    const NOTION_TOKEN: &str = r#"{"access_token":"ntn_connected_token","token_type":"bearer","bot_id":"bot-1","workspace_id":"ws-1","workspace_name":"Acme Docs","owner":{"type":"user"}}"#;
+
+    #[test]
+    fn notion_connects_with_basic_auth_and_a_json_body_into_the_read_sync_slot() {
+        let store = Arc::new(MemorySecretStore::new());
+        let vendor = Arc::new(FakeVendor::default());
+        let events: Arc<Mutex<Vec<AuditEvent>>> = Arc::default();
+        let sink = events.clone();
+        let vendor_handle = vendor.clone();
+        let vault = HostedConnectors::new(store.clone(), with_notion_and_github_secret(), move || Ok(vendor_handle.clone()))
+            .with_audit(Arc::new(move |_: &str, e: &AuditEvent| sink.lock().unwrap().push(*e)));
+        assert_eq!(with_notion_and_github_secret().connectable(), vec!["gmail", "calendar", "slack", "linear", "github", "notion"]);
+
+        let started = vault.connect_start("prn_a", "notion", STATE, NOW).unwrap();
+        assert!(started.authorize_url.starts_with(oauth::NOTION_AUTH_ENDPOINT));
+        let q = query(&started.authorize_url);
+        assert_eq!((q["client_id"].as_str(), q["owner"].as_str(), q["response_type"].as_str()), ("notion-client-id", "user", "code"));
+        assert_eq!((q["redirect_uri"].as_str(), q["state"].as_str()), (REDIRECT, STATE));
+        assert!(!q.contains_key("code_challenge") && !q.contains_key("scope"), "Notion takes no PKCE and no scopes");
+        assert!(!started.authorize_url.contains("notion-secret"));
+
+        *vendor.code_body.lock().unwrap() = Some(NOTION_TOKEN.into());
+        assert_eq!(vault.connect_finish("prn_b", STATE, "notion-code", NOW).err(), Some(VaultError::FlowUnknown), "another principal finds nothing");
+        let done = vault.connect_finish("prn_a", STATE, "notion-code", NOW + 1_000).unwrap();
+        assert_eq!((done.provider, done.slot.as_str()), ("notion", "notion-tokenset"));
+        // One request, through `send`: Basic client auth and a JSON body; no form, no verifier.
+        assert!(vendor.forms.lock().unwrap().is_empty());
+        let sent = vendor.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!((sent[0].method, sent[0].endpoint.as_str(), sent[0].auth.as_str()), (ExchangeMethod::Post, oauth::NOTION_TOKEN_ENDPOINT, "basic notion-client-id:notion-secret"));
+        let body: serde_json::Value = serde_json::from_str(&sent[0].body).unwrap();
+        assert_eq!(body, serde_json::json!({ "grant_type": "authorization_code", "code": "notion-code", "redirect_uri": REDIRECT }));
+        // The slot the read-sync and the router's Notion connector read; a token that does not expire.
+        let stored = load(&store, "prn_a", Service::Notion).unwrap();
+        assert_eq!((stored.access_token.as_str(), stored.expires_at_ms, stored.account_label.as_deref()), ("ntn_connected_token", i64::MAX, Some("Acme Docs")));
+        assert_eq!(vault.access_token("prn_a", "notion-tokenset", NOW + 86_400_000).unwrap().access_token, Secret::new("ntn_connected_token"));
+        assert!(load(&store, "prn_b", Service::Notion).is_none());
+        let states = vault.status("prn_a", NOW).unwrap();
+        let notion = states.iter().find(|s| s.service == Service::Notion).unwrap();
+        assert_eq!((notion.provider, notion.state, notion.connectable), (Some("notion"), "connected", true));
+        assert!(events.lock().unwrap().contains(&AuditEvent { action: "connect", provider: "notion", outcome: "ok", destination: "api.notion.com" }));
+
+        // An expiring Notion grant (refresh tokens) refreshes the same way: Basic auth, JSON.
+        save(&store, "prn_a", Service::Notion, &grant("ntn_expiring", Some("nrt_1"), NOW + 10_000));
+        *vendor.notion_refresh_body.lock().unwrap() =
+            Some(r#"{"access_token":"ntn_refreshed","token_type":"bearer","bot_id":"bot-1","expires_in":3600,"refresh_token":"nrt_2"}"#.into());
+        assert_eq!(vault.access_token("prn_a", "notion-tokenset", NOW).unwrap().access_token, Secret::new("ntn_refreshed"));
+        let refresh = vendor.sent.lock().unwrap().last().unwrap().clone();
+        assert_eq!(refresh.auth, "basic notion-client-id:notion-secret");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&refresh.body).unwrap(), serde_json::json!({ "grant_type": "refresh_token", "refresh_token": "nrt_1" }));
+        let stored = load(&store, "prn_a", Service::Notion).unwrap();
+        assert_eq!((stored.refresh_token.as_deref(), stored.expires_at_ms, stored.account_label.as_deref()), (Some("nrt_2"), NOW + 3_600_000, Some("someone@example.test")));
+
+        // A response the core does not accept (no bot, an error) is refused; nothing is stored.
+        for (state, body) in [("state-notion-no-bot-00001", r#"{"access_token":"ntn_x_token","token_type":"bearer"}"#), ("state-notion-error-000001", r#"{"error":"invalid_grant"}"#)] {
+            *vendor.code_body.lock().unwrap() = Some(body.into());
+            vault.connect_start("prn_c", "notion", state, NOW).unwrap();
+            assert_eq!(vault.connect_finish("prn_c", state, "c", NOW).err(), Some(VaultError::ProviderRejected));
+        }
+        assert!(load(&store, "prn_c", Service::Notion).is_none());
+        // Without a configured client, Notion is not connectable (and an exchange that cannot speak
+        // Basic auth never sends the secret in a form instead).
+        let bare = HostedConnectors::new(store.clone(), clients(), || Ok(Arc::new(FakeVendor::default())));
+        assert_eq!(bare.connect_start("prn_a", "notion", "state-notion-unconfigured", NOW).err(), Some(VaultError::NotConfigured));
+    }
+
+    #[test]
+    fn linear_and_github_are_revoked_with_what_the_core_holds() {
+        let store = Arc::new(MemorySecretStore::new());
+        let vendor = Arc::new(FakeVendor::default());
+        let events: Arc<Mutex<Vec<AuditEvent>>> = Arc::default();
+        let sink = events.clone();
+        let vendor_handle = vendor.clone();
+        let vault = HostedConnectors::new(store.clone(), with_notion_and_github_secret(), move || Ok(vendor_handle.clone()))
+            .with_audit(Arc::new(move |_: &str, e: &AuditEvent| sink.lock().unwrap().push(*e)));
+        *vendor.revoke_body.lock().unwrap() = Some(String::new());
+
+        // Linear, valid token: POST oauth/revoke with the access token as bearer.
+        save(&store, "prn_a", Service::Linear, &grant("lin_live_access", Some("lin_refresh"), NOW + 3_600_000));
+        let gone = vault.disconnect("prn_a", Service::Linear, NOW).unwrap();
+        assert_eq!((gone.removed, gone.vendor_revoke), (true, "revoked"));
+        let sent = vendor.sent.lock().unwrap().last().unwrap().clone();
+        assert_eq!((sent.method, sent.endpoint.as_str(), sent.auth.as_str(), sent.body.as_str()), (ExchangeMethod::Post, LINEAR_REVOKE_ENDPOINT, "bearer lin_live_access", ""));
+        assert!(load(&store, "prn_a", Service::Linear).is_none());
+
+        // Linear, expired token: refreshed first (the rotating refresh token), then revoked with
+        // the fresh access token; the fresh tokenset is not written back.
+        save(&store, "prn_a", Service::Linear, &grant("lin_expired", Some("r0"), NOW - 1));
+        assert_eq!(vault.disconnect("prn_a", Service::Linear, NOW).unwrap().vendor_revoke, "revoked");
+        assert_eq!(vendor.sent.lock().unwrap().last().unwrap().auth, "bearer access-1-0123456789");
+        assert!(load(&store, "prn_a", Service::Linear).is_none());
+
+        // Linear refuses: failed, deleted anyway.
+        *vendor.revoke_body.lock().unwrap() = None;
+        save(&store, "prn_a", Service::Linear, &grant("lin_live_access", None, NOW + 3_600_000));
+        assert_eq!(vault.disconnect("prn_a", Service::Linear, NOW).unwrap().vendor_revoke, "failed");
+        assert!(load(&store, "prn_a", Service::Linear).is_none());
+
+        // GitHub with the app's secret: DELETE the grant as the app, naming the access token.
+        *vendor.revoke_body.lock().unwrap() = Some(String::new());
+        save(&store, "prn_a", Service::GitHub, &grant("ghu_live_token", Some("ghr_1"), NOW + 3_600_000));
+        assert_eq!(vault.disconnect("prn_a", Service::GitHub, NOW).unwrap().vendor_revoke, "revoked");
+        let sent = vendor.sent.lock().unwrap().last().unwrap().clone();
+        assert_eq!(sent.method, ExchangeMethod::Delete);
+        assert_eq!(sent.endpoint, "https://api.github.com/applications/Iv1.github-app/grant");
+        assert_eq!(sent.auth, "basic Iv1.github-app:github-app-secret");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&sent.body).unwrap(), serde_json::json!({ "access_token": "ghu_live_token" }));
+        assert_eq!(sent.headers, vec![GITHUB_API_VERSION]);
+        assert!(load(&store, "prn_a", Service::GitHub).is_none());
+
+        // The vendor is down: failed, deleted.
+        vendor.down.store(true, Ordering::SeqCst);
+        save(&store, "prn_a", Service::GitHub, &grant("ghu_live_token", Some("ghr_1"), NOW + 3_600_000));
+        assert_eq!(vault.disconnect("prn_a", Service::GitHub, NOW).unwrap().vendor_revoke, "failed");
+        assert!(load(&store, "prn_a", Service::GitHub).is_none());
+        vendor.down.store(false, Ordering::SeqCst);
+
+        // Notion: no revocation the core can call; deleted.
+        save(&store, "prn_a", Service::Notion, &grant("ntn_token_123", None, i64::MAX));
+        assert_eq!(vault.disconnect("prn_a", Service::Notion, NOW).unwrap().vendor_revoke, "not_supported");
+        assert!(load(&store, "prn_a", Service::Notion).is_none());
+
+        // GitHub without the app's secret: nothing to call with; deleted.
+        let calls = vendor.calls.load(Ordering::SeqCst);
+        let no_secret = super::tests::vault(&store, &vendor); // clients(): the GitHub App without its secret
+        save(&store, "prn_a", Service::GitHub, &grant("ghu_live_token", Some("ghr_1"), NOW + 3_600_000));
+        assert_eq!(no_secret.disconnect("prn_a", Service::GitHub, NOW).unwrap().vendor_revoke, "not_supported");
+        assert_eq!(vendor.calls.load(Ordering::SeqCst), calls, "no vendor call");
+        assert!(load(&store, "prn_a", Service::GitHub).is_none());
+
+        let events = events.lock().unwrap();
+        assert!(events.contains(&AuditEvent { action: "revoke", provider: "linear", outcome: "ok", destination: "api.linear.app" }));
+        assert!(events.contains(&AuditEvent { action: "revoke", provider: "linear", outcome: "failed", destination: "api.linear.app" }));
+        assert!(events.contains(&AuditEvent { action: "revoke", provider: "github", outcome: "ok", destination: "api.github.com" }));
+        assert!(events.contains(&AuditEvent { action: "refresh", provider: "linear", outcome: "ok", destination: "api.linear.app" }));
+        // No secret or token in any audit row.
+        let rendered = format!("{events:?}");
+        for value in ["github-app-secret", "ghu_live_token", "lin_live_access", "notion-secret"] {
+            assert!(!rendered.contains(value));
+        }
+    }
+
+
+    #[test]
+    fn the_default_exchange_never_turns_a_basic_or_json_request_into_a_form() {
+        struct FormOnly(Mutex<usize>);
+        impl TokenExchange for FormOnly {
+            fn post_form(&self, _: &str, _: &[(String, String)]) -> Result<String, String> {
+                *self.0.lock().unwrap() += 1;
+                Ok("{}".into())
+            }
+        }
+        let exchange = FormOnly(Mutex::new(0));
+        let body = serde_json::json!({ "grant_type": "authorization_code" });
+        let refused = exchange.send(&ExchangeRequest {
+            method: ExchangeMethod::Post,
+            endpoint: oauth::NOTION_TOKEN_ENDPOINT,
+            auth: ExchangeAuth::Basic { user: "id", password: "secret" },
+            body: ExchangeBody::Json(&body),
+            headers: &[],
+        });
+        assert_eq!(refused, Err("token exchange unsupported request".to_string()));
+        assert!(!is_transient_token_failure("token exchange unsupported request"), "a refusal, not a retry");
+        let form = vec![("token".to_string(), "t".to_string())];
+        assert!(exchange.send(&ExchangeRequest { method: ExchangeMethod::Post, endpoint: GOOGLE_REVOKE_ENDPOINT, auth: ExchangeAuth::None, body: ExchangeBody::Form(&form), headers: &[] }).is_ok());
+        assert_eq!(*exchange.0.lock().unwrap(), 1, "only the plain form reached post_form");
     }
 }

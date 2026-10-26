@@ -111,7 +111,8 @@ Common (sidecar):
 | `SHOGUN_CONNECT_GOOGLE_CLIENT_ID` / `SHOGUN_CONNECT_GOOGLE_CLIENT_SECRET` | Google "Web application" OAuth client for Gmail and Calendar (secret: the client secret) |
 | `SHOGUN_CONNECT_SLACK_CLIENT_ID` / `SHOGUN_CONNECT_SLACK_CLIENT_SECRET` | Slack app (user scopes); the secret is optional for a PKCE-enabled app (secret) |
 | `SHOGUN_CONNECT_LINEAR_CLIENT_ID` / `SHOGUN_CONNECT_LINEAR_CLIENT_SECRET` | Linear OAuth app; the secret is optional (secret) |
-| `SHOGUN_CONNECT_GITHUB_CLIENT_ID` / `SHOGUN_CONNECT_GITHUB_CLIENT_SECRET` | GitHub App with the device flow enabled (no callback); the secret is optional, sent on refresh when set (secret) |
+| `SHOGUN_CONNECT_GITHUB_CLIENT_ID` / `SHOGUN_CONNECT_GITHUB_CLIENT_SECRET` | GitHub App with the device flow enabled (no callback); the secret is optional, sent on refresh when set, and needed to revoke a grant at disconnect (secret) |
+| `SHOGUN_CONNECT_NOTION_CLIENT_ID` / `SHOGUN_CONNECT_NOTION_CLIENT_SECRET` | Notion public integration (OAuth, read content only, redirect URI = the callback above); the secret is required: Notion's token endpoint takes `client_id:client_secret` as HTTP Basic auth (secret) |
 
 `env` (evaluation only): `SHOGUN_DB_KEY` (64 hex) for every principal, `SHOGUN_DB_KEY_<PRINCIPAL>`
 for one.
@@ -158,7 +159,7 @@ Policy: `update` on `<mount>/encrypt/<key>` and `<mount>/decrypt/<key>`, `read` 
 
 ### 3.3 Hosted connector credentials (E50)
 
-The router's first-party tools (Gmail, Calendar, Slack, Linear, GitHub) act as the calling
+The router's first-party tools (Gmail, Calendar, Slack, Linear, GitHub, Notion) act as the calling
 principal's own account. The sidecar keeps each principal's grants in its token store and serves
 them to the gateway only (`docs/api/connector-tokens.md`):
 
@@ -167,13 +168,17 @@ them to the gateway only (`docs/api/connector-tokens.md`):
   within 60 seconds, under a per-(principal, slot) lock, and writes the new tokenset back. The
   refresh token never leaves the sidecar.
 - `POST /v1/internal/connectors/connect/{start,finish,poll}`: the hosted connect flow
-  (authorization code + PKCE for Google, Slack and Linear; GitHub's device flow, one poll per
-  human "Check"). The pending flow (verifier or device code) is sealed in the principal's token
+  (authorization code + PKCE for Google, Slack and Linear; Notion's authorization code, exchanged
+  with the integration's Basic auth and a JSON body; GitHub's device flow, one poll per human
+  "Check"). The pending flow (verifier or device code) is sealed in the principal's token
   store for ten minutes, so a sidecar restart keeps it; the code is exchanged here and the tokenset
   goes straight into the principal's store.
 - `POST /v1/internal/connectors/{status,disconnect}`: the principal's connections, and removing
-  one (deleted from the store; revoked at Google and Slack through the core's egress). The same
-  vault answers `connections.list` / `connections.disconnect` on the sidecar's MCP, REST and CLI.
+  one (deleted from the store, then revoked through the core's egress where the credentials it
+  holds allow: Google, Slack, Linear with the access token, GitHub with the app's client secret;
+  Notion has no revocation the core can call, `vendor_revoke` says which). The same vault answers
+  `connections.list` / `connections.disconnect` on the sidecar's MCP, REST and CLI, each with the
+  same `vendor_revoke`.
 - Every connect, refresh, revocation, disconnect and read-sync fetch writes a traceability row in
   the principal's own store (`connector.<action>.<provider>.<outcome>`, the vendor host, zero
   bytes; never a token).
@@ -183,7 +188,9 @@ flow `SHOGUN_CONNECT_REDIRECT_URI` plus one client per vendor (`SHOGUN_CONNECT_*
 malformed one stops the sidecar at start-up naming the variable; an unset vendor cannot be
 connected or refreshed (its stored tokens are still served while valid). The start-up line says
 which providers can be connected. GitHub needs only `SHOGUN_CONNECT_GITHUB_CLIENT_ID` (a GitHub App
-with "Enable Device Flow"); it has no callback.
+with "Enable Device Flow"); it has no callback, and revoking its grants at disconnect also needs
+`SHOGUN_CONNECT_GITHUB_CLIENT_SECRET`. Notion needs both `SHOGUN_CONNECT_NOTION_CLIENT_ID` and
+`SHOGUN_CONNECT_NOTION_CLIENT_SECRET` (a public integration with the callback as its redirect URI).
 
 Read-sync (E44): `shogun-api --dream-tick` (the hourly tick) drains each principal's queue of
 Gmail, Calendar and Notion change notices before the review, fetching with the principal's own
@@ -191,8 +198,9 @@ grant. Run it with the same `SHOGUN_TOKEN_STORE_DIR`, key provider and `SHOGUN_C
 sidecar (it refreshes expired grants), on the same volume (the queue is a sealed file the two
 processes share under a lock file).
 
-Egress: the vendors' token endpoints are reached from the sidecar (`oauth2.googleapis.com`,
-`slack.com`, `api.linear.app`, `github.com`), and the read-sync's reads from the tick
+Egress: the vendors' token and revocation endpoints are reached from the sidecar
+(`oauth2.googleapis.com`, `slack.com`, `api.linear.app`, `github.com`, `api.github.com` for a
+GitHub grant deletion, `api.notion.com`), and the read-sync's reads from the tick
 (`gmail.googleapis.com`, `www.googleapis.com`, `api.notion.com`), all through the core's single
 HTTP client; add them to the NetworkPolicy (§5.4) with `egress.extraRules`. Moving a principal's store between replicas moves
 its grants only if `SHOGUN_TOKEN_STORE_DIR` moves with it (keep it on the PVC, the default).

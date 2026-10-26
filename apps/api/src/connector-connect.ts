@@ -1,7 +1,9 @@
 /**
- * The hosted connect flow (docs/implementation-plan.md E50; contract: docs/api/connector-tokens.md
+ * The hosted connect flow (docs/implementation-plan.md E50, E51; contract: docs/api/connector-tokens.md
  * §"Connecting an account"). A principal's first-party connector (Gmail, Google Calendar, Slack,
- * Linear) acts as the principal's own vendor account; this is how a human connects that account.
+ * Linear, GitHub, Notion) acts as the principal's own vendor account; this is how a human connects
+ * that account. Notion's code exchange (Basic client auth, a JSON body) happens in the sidecar like
+ * every other: the gateway's part is the same redirect and callback.
  *
  * Connecting an account is a human's act, never an agent's (the L3 rule: an agent cannot grant
  * itself a vendor credential). An agent can only ask for a link:
@@ -45,8 +47,8 @@ import { agentError, agentPrincipalOf, type AgentScope, type AgentVars } from ".
 import { CONNECTOR_SLOT_BY_PROVIDER, type ConnectorVault, type DeviceStep, type VaultPrincipal } from "./connector-tokens.js";
 
 /** The providers the hosted flow connects: the ones the core has a hosted flow for (an OAuth
- * redirect for Google, Slack and Linear; the device flow for GitHub). */
-export const CONNECTABLE_PROVIDERS = Object.freeze(["gmail", "calendar", "slack", "linear", "github"] as const);
+ * redirect for Google, Slack, Linear and Notion; the device flow for GitHub). */
+export const CONNECTABLE_PROVIDERS = Object.freeze(["gmail", "calendar", "slack", "linear", "github", "notion"] as const);
 export type ConnectableProvider = (typeof CONNECTABLE_PROVIDERS)[number];
 
 export const CONNECT_LINK_PATH = "/v1/connectors/connect";
@@ -59,7 +61,7 @@ export const CONNECT_CSRF_COOKIE = "shogun_connect_csrf";
 export const CONNECT_FLOW_COOKIE = "shogun_connect_flow";
 const MAX_FORM_BYTES = 4 * 1024;
 
-const PROVIDER_NAME: Record<ConnectableProvider, string> = { gmail: "Gmail", calendar: "Google Calendar", slack: "Slack", linear: "Linear", github: "GitHub" };
+const PROVIDER_NAME: Record<ConnectableProvider, string> = { gmail: "Gmail", calendar: "Google Calendar", slack: "Slack", linear: "Linear", github: "GitHub", notion: "Notion" };
 
 const PAGE_HEADERS: Record<string, string> = {
   "content-type": "text/html; charset=utf-8",
