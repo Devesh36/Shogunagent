@@ -977,7 +977,8 @@ pub fn get_open_loop_scoped(conn: &Connection, id: i64, scope: ReadScope) -> Res
 }
 
 /// Match contiguous source text using the same AX whitespace rule at ingestion and read time.
-pub(crate) fn source_contains_quote(source: &str, quote: &str) -> bool {
+/// Recall adapters share this check so they cannot return a stale or unsupported quote.
+pub fn source_contains_quote(source: &str, quote: &str) -> bool {
     source_quote_start(source, quote).is_some()
 }
 

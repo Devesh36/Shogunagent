@@ -46,7 +46,8 @@ scripts/check-state-quality.sh --live gemini-cli
 
 This sends the same production review/consolidation prompts to the selected CLI
 through the existing contained, text-only subscription adapter. Authentication
-stays in the vendor CLI; its configured model and account allowance apply. The
+stays in the vendor CLI; its default model and account allowance apply. The runner
+does not request a particular model. The
 evaluation requests six model steps (two per conversation stage), uses only the
 checked-in synthetic conversation, and creates no external sends or payments.
 
@@ -58,11 +59,14 @@ An explicit live run must fail on missing authentication, an unsupported provide
 non-JSON output, or a quality assertion. It never falls back to scripted answers.
 The live test is ignored in normal CI; no provider call is made by the default runner,
 even if `SHOGUN_STATE_QUALITY_LIVE` is already exported. Changing model versions can
-change live results. Record the provider/model and command when reporting a live run.
+change live results. Record the provider, CLI version, model when known, and command
+when reporting a live run.
 
 ## Regressions found while adding the scenario
 
 - Recall selected the oldest reviewed quote after a deadline update. It now prefers
-  the newest source within the reviewed provenance class.
+  the newest valid, readable source within the reviewed provenance class. A mixed
+  world/scratch provenance regression also checks that a world-only reader cannot
+  receive a private source quote and that an invalid quote falls back to valid proof.
 - Recall still returned completed commitments and closed loops as current state
   items. They are now omitted from those items; dated source evidence remains searchable.

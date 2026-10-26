@@ -312,15 +312,20 @@ fn band_label(confidence: f64) -> Option<&'static str> {
 /// The stored proving quote of a state row and the event it comes from: a Batch-reviewed quote
 /// first, newest source first within that class. Re-listed state must cite its current
 /// evidence, even when an older quote was linked more recently during a replay.
-fn proving_quote(conn: &Connection, table: StateTable, id: i64) -> Result<Option<(String, i64)>, rusqlite::Error> {
-    conn.query_row(
-        "SELECT p.quote, p.event_id FROM state_provenance p JOIN event_log e ON e.id = p.event_id
-         WHERE p.state_table = ?1 AND p.state_id = ?2 AND p.quote IS NOT NULL
-         ORDER BY p.batch_reviewed DESC, e.ts DESC, p.id DESC LIMIT 1",
-        params![table.as_str(), id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )
-    .optional()
+fn proving_quote(conn: &Connection, table: StateTable, id: i64, scope: ReadScope) -> Result<Option<(String, i64)>, rusqlite::Error> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT p.quote, p.event_id, e.content, e.source FROM state_provenance p JOIN event_log e ON e.id = p.event_id
+         WHERE p.state_table = ?1 AND p.state_id = ?2 AND p.quote IS NOT NULL AND ({})
+         ORDER BY p.batch_reviewed DESC, e.ts DESC, p.id DESC", scope.predicate("e.")
+    ))?;
+    let mut rows = statement.query(params![table.as_str(), id])?;
+    while let Some(row) = rows.next()? {
+        let (quote, event_id, content, source): (String, i64, String, String) = (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
+        if shogun_mcp::source_policy::current_allows_source(&source) && state::source_contains_quote(&content, &quote) {
+            return Ok(Some((quote, event_id)));
+        }
+    }
+    Ok(None)
 }
 
 /// The state rows a query names, with band and quote (E5-T3). Low rows are never returned;
@@ -335,7 +340,7 @@ fn recall_items(conn: &Connection, query: &str, scope: ReadScope) -> Result<Vec<
         let Some(band) = band_label(confidence) else {
             return Ok(());
         };
-        let quote = proving_quote(conn, table, id)?;
+        let quote = proving_quote(conn, table, id, scope)?;
         items.push(RecallItem {
             kind,
             id,
@@ -690,6 +695,40 @@ mod tests {
             .agent_recall(&recall_request(&json!({ "query": "Zephyr migration", "include_scratch": true })).expect("req"))
             .expect("recall");
         assert!(with_scratch.evidence.iter().any(|e| e.excerpt.contains("Zephyr")), "{with_scratch:?}");
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn newer_proving_quotes_must_be_readable_and_still_match_the_source() {
+        let db = db();
+        let public = "I'll send the Zephyr deck to Bob by Friday.";
+        let private = "The Zephyr deck contains a private acquisition plan.";
+        let public_id = db.agent_ingest(&request("public-proof", &[public])).unwrap().event_ids[0];
+        let scratch = ingest_request(&json!({
+            "events": [{"content": private, "ts_ms": 1_001_000}],
+            "source": "harness", "actor": "agent:test", "idempotency_key": "private-proof", "namespace": "agent_scratch"
+        })).unwrap();
+        let private_id = db.agent_ingest(&scratch).unwrap().event_ids[0];
+        db.with_conn_mut("seed-proofs", |c| {
+            let id = state::insert_commitment(c, &state::NewCommitment {
+                direction: state::CommitmentDirection::Mine, counterparty_id: None,
+                description: "send the Zephyr deck to Bob", due_at: None, status: state::CommitmentStatus::Open,
+                project_id: None, confidence: 0.9, now: 1_000_000,
+            }, &[state::Provenance::new(public_id), state::Provenance::new(private_id)])
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            for (event_id, quote) in [(public_id, public), (private_id, private)] {
+                c.execute("UPDATE state_provenance SET quote=?1, batch_reviewed=1 WHERE state_table='commitments' AND state_id=?2 AND event_id=?3", params![quote, id, event_id])?;
+            }
+            Ok::<_, rusqlite::Error>(())
+        }).unwrap();
+        let selected = |include_scratch| {
+            let pack = db.agent_recall(&recall_request(&json!({"query": "Zephyr", "include_scratch": include_scratch})).unwrap()).unwrap();
+            pack.items.into_iter().find(|item| item.kind == "commitment").unwrap()
+        };
+        assert_eq!(selected(false).quote.as_deref(), Some(public));
+        assert_eq!(selected(true).quote.as_deref(), Some(private));
+        db.with_conn_mut("invalidate-proof", |c| c.execute("UPDATE state_provenance SET quote='invented unsupported words' WHERE event_id=?1", [private_id])).unwrap();
+        assert_eq!(selected(true).quote.as_deref(), Some(public));
     }
 
     /// E5-T3: the estimate the recall reports, and a fresh count of everything it returned, stay
