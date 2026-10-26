@@ -63,6 +63,7 @@ import { CONNECTOR_TOKEN_PATH, registerConnectorTokenRoute, type ConnectorVault 
 import { createEnterpriseApp, ssoConsentPolicy, type EnterpriseDeps } from "./enterprise/app.js";
 import { registerIngestHookRoutes, type IngestHookDeps } from "./ingest-hooks/app.js";
 import { regionAdmission } from "./enterprise/region.js";
+import { STATE_READ_ROUTES } from "./mcp-proxy.js";
 
 /** Self-registration: at most this many per IP per hour (in-process default; production wires
  * `SqlWindowLimiter`). */
@@ -686,6 +687,9 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   // --- E51: payments.* over hosted REST, relayed to the core like /mcp (metered by the pinned tool) ---
   const relayDeps = onApprovalToken ? { ...meteringDeps, onApprovalToken } : meteringDeps;
   for (const route of PAYMENT_ROUTES) {
+    app.on(route.method.toUpperCase(), route.path, bodyLimit({ maxSize: MAX_SMALL_BODY_BYTES, onError: bodyTooLarge }), metered(relayDeps, { method: "tools/call", name: route.tool }));
+  }
+  for (const route of STATE_READ_ROUTES) {
     app.on(route.method.toUpperCase(), route.path, bodyLimit({ maxSize: MAX_SMALL_BODY_BYTES, onError: bodyTooLarge }), metered(relayDeps, { method: "tools/call", name: route.tool }));
   }
 

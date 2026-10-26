@@ -14,6 +14,7 @@ import { DEFAULT_CAPS } from "../caps.js";
 import { FREE_ALLOWANCE_MICROS, MICRO_USD_PER_USD, RATE_MICROS, RUN_MARKUP_BPS } from "../pricing.js";
 import { DISPLAY_NAME, DOCS_URL, LONG_DESCRIPTION, PROVIDER, REPOSITORY_URL, VERSION, mcpUrl, origin, wellknownLinks, type WellknownContext } from "./identity.js";
 import { annotationsFor, type ToolTable } from "./tool-table.js";
+import { STATE_READ_ROUTES } from "../mcp-proxy.js";
 
 type Json = Record<string, unknown>;
 
@@ -408,6 +409,14 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     },
     // --- E51: payments.* relayed to the core (docs/api/payments.md) ---
     ...paymentRoutes(),
+    ...STATE_READ_ROUTES.map((route): Route => ({
+      method: route.method, path: route.path.replace(":person", "{person}"), tag: "state", security: "key", scope: "read",
+      summary: `${route.tool}: a free read from the caller's own state store.`,
+      description: "Relayed to the principal's core without reading or storing bodies. The path pins the tool's free-read classification; caller-supplied MCP headers cannot change it.",
+      ...(route.path.includes(":person") ? { parameters: [{ name: "person", in: "path", required: true, schema: { type: "integer", minimum: 1 }, description: "The core's numeric person id." }] } : {}),
+      ...(route.method === "post" ? { requestBody: jsonBody(table.tools.find((tool) => tool.name === route.tool)?.input_schema ?? { type: "object" }) } : {}),
+      responses: { "200": jsonBody({ type: "object", description: "The core's REST response, relayed untouched." }), "400": errorResponse("Invalid core arguments"), "401": errorResponse("missing_key | invalid_key"), "403": errorResponse("insufficient_scope"), "404": errorResponse("not_found"), "503": errorResponse("Core unavailable") },
+    })),
     // --- E44: provider webhooks into memory (ingest-hooks/app.ts) ---
     {
       method: "post", path: "/v1/ingest-hooks", tag: "ingest", security: "key", scope: "write",

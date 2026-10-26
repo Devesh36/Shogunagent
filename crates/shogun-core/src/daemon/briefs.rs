@@ -306,9 +306,50 @@ pub fn brief_input_window(created_at_ms: i64, cycle_from: i64, cycle_to: i64) ->
     )
 }
 
+/// Midnight in the requested host-calendar day. Chrono keeps the server and desktop
+/// on the same OS timezone as SQLite's `localtime` validation, including DST.
+#[cfg(not(feature = "desktop"))]
+fn day_start_in_zone<Tz: chrono::TimeZone>(now_ms: i64, days: i64, zone: &Tz) -> Option<i64> {
+    let today = zone.timestamp_millis_opt(now_ms).single()?.date_naive();
+    let date = today.checked_add_signed(chrono::Duration::try_days(days)?)?;
+    zone.from_local_datetime(&date.and_hms_opt(0, 0, 0)?)
+        .earliest()
+        .map(|time| time.timestamp_millis())
+}
+
+#[cfg(all(test, not(feature = "desktop")))]
+#[allow(clippy::unwrap_used)]
+mod calendar_regression_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    #[test]
+    fn server_days_follow_non_utc_midnights_on_both_sides_of_utc() {
+        let now = chrono::Utc.with_ymd_and_hms(2026, 10, 26, 1, 0, 0).unwrap().timestamp_millis();
+        let east = chrono::FixedOffset::east_opt(19_800).unwrap();
+        let west = chrono::FixedOffset::west_opt(28_800).unwrap();
+        assert_eq!(day_start_in_zone(now, 0, &east), Some(chrono::Utc.with_ymd_and_hms(2026, 10, 25, 18, 30, 0).unwrap().timestamp_millis()));
+        assert_eq!(day_start_in_zone(now, 0, &west), Some(chrono::Utc.with_ymd_and_hms(2026, 10, 25, 8, 0, 0).unwrap().timestamp_millis()));
+    }
+
+    #[test]
+    fn server_day_window_matches_sqlites_canonical_local_day() {
+        let now = 1_800_000_000_000;
+        let bounds = local_day_bounds(now);
+        let conn = shogun_memory::open_in_memory().unwrap();
+        let dates: (String, String) = conn.query_row(
+            "SELECT datetime(?1/1000,'unixepoch','localtime'),datetime(?2/1000,'unixepoch','localtime')",
+            rusqlite::params![bounds.yesterday_start_ms, bounds.today_start_ms],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(dates.0, format!("{} 00:00:00", local_date_days_before(now, 1)));
+        assert_eq!(dates.1, format!("{} 00:00:00", local_date_string(now)));
+    }
+}
+
 /// The local calendar day around `now_ms`. The Mac app's build (feature `desktop`) asks libc
-/// (`localtime_r` / `mktime`, DST folded in); the server build keeps the documented UTC fallback
-/// until the principal's time zone lands (E1-T7 kept the two paths, only the gate changed).
+/// (`localtime_r` / `mktime`, DST folded in); the server uses Chrono for the same host-local
+/// calendar as SQLite. UTC hosts keep UTC days until principal-specific timezones land.
 pub fn local_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
     #[cfg(feature = "desktop")]
     {
@@ -344,7 +385,15 @@ pub fn local_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
     }
     #[cfg(not(feature = "desktop"))]
     {
-        utc_day_bounds(now_ms)
+        match (
+            day_start_in_zone(now_ms, -1, &chrono::Local),
+            day_start_in_zone(now_ms, 0, &chrono::Local),
+        ) {
+            (Some(yesterday_start_ms), Some(today_start_ms)) => {
+                shogun_memory::search::LocalDayBounds { yesterday_start_ms, today_start_ms }
+            }
+            _ => utc_day_bounds(now_ms),
+        }
     }
 }
 
@@ -375,6 +424,10 @@ pub fn local_wrap_window(now_ms: i64) -> (i64, i64) {
             }
         }
     }
+    #[cfg(not(feature = "desktop"))]
+    if let Some(end) = day_start_in_zone(now_ms, 2, &chrono::Local) {
+        return (today_start, end);
+    }
     (today_start, today_start + 2 * 24 * 60 * 60 * 1000)
 }
 
@@ -402,11 +455,10 @@ fn utc_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
 }
 
 /// The local calendar date (`YYYY-MM-DD`) an instant falls on — the `briefs` row key.
-/// Mirrors [`local_day_bounds`]: real local time on macOS (`localtime_r`, DST folded in), UTC
-/// elsewhere (the Linux-test path).
+/// Mirrors [`local_day_bounds`]: the host calendar, with DST folded in.
 #[cfg(feature = "db")]
-/// Seconds east of UTC per the OS, DST folded in. macOS asks libc; elsewhere 0 (UTC) is the
-/// honest fallback — matching `local_date_string`'s convention.
+/// Seconds east of UTC per the OS, DST folded in. The server uses the same host
+/// timezone as SQLite rather than assuming every server runs in UTC.
 pub fn os_gmt_offset_secs(now_ms: i64) -> i32 {
     #[cfg(feature = "desktop")]
     {
@@ -419,7 +471,13 @@ pub fn os_gmt_offset_secs(now_ms: i64) -> i32 {
             }
         }
     }
-    let _ = now_ms;
+    #[cfg(not(feature = "desktop"))]
+    {
+        use chrono::TimeZone;
+        if let Some(time) = chrono::Local.timestamp_millis_opt(now_ms).single() {
+            return time.offset().local_minus_utc();
+        }
+    }
     0
 }
 
@@ -447,7 +505,7 @@ pub fn local_date_string(now_ms: i64) -> String {
             }
         }
     }
-    let ymd = crate::dreamcycle::schedule::local_time(secs, 0).yyyymmdd;
+    let ymd = crate::dreamcycle::schedule::local_time(secs, os_gmt_offset_secs(now_ms)).yyyymmdd;
     format!(
         "{:04}-{:02}-{:02}",
         ymd / 10_000,
@@ -458,7 +516,7 @@ pub fn local_date_string(now_ms: i64) -> String {
 
 /// The local calendar date a whole number of calendar days before `now_ms`. This uses the same
 /// `localtime_r`/`mktime` path as [`local_day_bounds`], so a DST day is one date rather than an
-/// assumed 24-hour elapsed interval. Non-macOS keeps the documented UTC fallback.
+/// assumed 24-hour elapsed interval. The server follows the same host-local calendar.
 pub fn local_date_days_before(now_ms: i64, days: i32) -> String {
     #[cfg(feature = "desktop")]
     {
@@ -476,6 +534,10 @@ pub fn local_date_days_before(now_ms: i64, days: i32) -> String {
                 }
             }
         }
+    }
+    #[cfg(not(feature = "desktop"))]
+    if let Some(midnight) = day_start_in_zone(now_ms, -i64::from(days), &chrono::Local) {
+        return local_date_string(midnight);
     }
     const DAY_MS: i64 = 24 * 60 * 60 * 1000;
     local_date_string(now_ms.saturating_sub(i64::from(days) * DAY_MS))

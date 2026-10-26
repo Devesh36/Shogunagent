@@ -8,6 +8,9 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // Crypto-heavy SSO tests time out when the default pool competes with the other
+    // workspace suites on smaller machines. Keep their CPU use bounded.
+    maxWorkers: 2,
     include: ["test/**/*.test.ts"],
     exclude: ["test/workers/**", "node_modules/**"],
     env: { BATCH_PROVIDER: "anthropic" },
