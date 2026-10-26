@@ -245,8 +245,19 @@ gateway meters is the call: `payments.mandates.list` is a free read; `payments.m
 `payments.mandates.revoke` and `payments.spend` are `run` calls (scope `run`) priced at $0 at the
 call (`FREE_RUN_TOOLS`). A request only queues an L3 for a human and a revoke only narrows; a spend
 would be priced at the rail's fee, and the only rail today is a stub with none. The gateway relays
-these calls over `/mcp` without reading or storing their bodies (no payee, amount or memo in a
-receipt, a log or a metric).
+these calls over `/mcp`, and over its REST routes `GET /v1/payments/mandates`, `POST
+/v1/payments/mandates/{list,request,revoke}` and `POST /v1/payments/spend` (E51: each route pinned
+to its tool, so the scope and the price above come from the path, never from a header the caller
+sends), without reading or storing their bodies (no payee, amount or memo in a receipt, a log or a
+metric).
+
+## Write-only ingest keys (E51)
+
+`POST /v1/keys` issues a key with the `ingest` scope only (the browser extension's,
+[ingest-sources.md](ingest-sources.md) §3). On `/mcp` it may call `memory.ingest` (metered as
+`ingest`, per event the core stores, from the principal's wallet like any key) plus the MCP
+handshake and `tools/list`; every other tool, protocol method and REST route answers `403
+insufficient_scope` before anything is reserved. Issuing one is free.
 
 ## ShogunAI Pro bundle
 

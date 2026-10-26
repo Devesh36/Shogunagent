@@ -19,19 +19,21 @@
  *   POST /v1/connectors/:provider/connect   a link a human opens to connect their account (connector-connect.ts) [run]
  *   GET|POST /v1/connectors/connect/:link, GET /v1/connectors/callback  the human's connect pages, no key
  *   POST /v1/handoff                     an A2A state-of-work handoff, relayed to the core (handoff.ts) [read]
+ *   POST /v1/keys                        issue a write-only `ingest` key (the browser extension's, E51) [write]
+ *   GET|POST /v1/payments/...            payments.* relayed to the core (docs/api/payments.md, E51) [list: read; request/revoke/spend: run]
  *   /v1/ingest-hooks…                    provider webhooks into memory (ingest-hooks/app.ts, E44) [write / signed]
  *   ALL  /mcp                            the metered MCP proxy (metering.ts)       [by unit]
  *
  * Bodies are read only where the route's contract is JSON the gateway itself defines
- * (registration, caps, top-up, quote, dispute, the Stripe event); `/mcp` and `/v1/handoff` bodies
- * are relayed untouched and never parsed.
+ * (registration, caps, key issue, top-up, quote, dispute, the Stripe event); `/mcp`, `/v1/handoff`
+ * and `/v1/payments/...` bodies are relayed untouched and never parsed.
  */
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
-  DEFAULT_PBKDF2_ITERATIONS, agentError, agentPrincipalOf, generateAgentKey, hashAgentKey, requireAgentKey,
+  DEFAULT_PBKDF2_ITERATIONS, agentError, agentPrincipalOf, generateAgentKey, hashAgentKey, isIngestOnly, requireAgentKey,
   type AgentKeyLookup, type AgentKeyRecord, type AgentPrincipal, type AgentScope, type AgentVars,
 } from "./agent-keys.js";
 import type { KeyObject } from "node:crypto";
@@ -75,6 +77,27 @@ const MAX_RECEIPTS = 500;
 const MAX_REASON_LENGTH = 1_000;
 const MAX_REF_LENGTH = 128;
 const REF_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+/** E51: where a principal issues a write-only `ingest` key (the browser extension's). */
+export const INGEST_KEYS_PATH = "/v1/keys";
+/** An ingest key lives 90 days by default (the extension asks for a new one), at most a year. */
+export const INGEST_KEY_DEFAULT_DAYS = 90;
+export const INGEST_KEY_MAX_DAYS = 365;
+
+/** The key id an Idempotency-Key derives for an ingest key, so a retry finds the key it issued. */
+export function ingestKeyId(principalId: string, idem: string): string {
+  return `ak_${createHash("sha256").update(`shogun/ingest-key/v1\n${principalId}\n${idem}`).digest("hex").slice(0, 32)}`;
+}
+
+/** E51: the hosted REST face of `payments.*` (docs/api/payments.md): each route is one tool,
+ * relayed to the principal's sidecar at the same path through the `/mcp` relay, the body never
+ * read. The method and tool pin the metering classification (list: a free read; the rest: `run`). */
+export const PAYMENT_ROUTES: ReadonlyArray<{ method: "get" | "post"; path: string; tool: string }> = Object.freeze([
+  { method: "get", path: "/v1/payments/mandates", tool: "payments.mandates.list" },
+  { method: "post", path: "/v1/payments/mandates/list", tool: "payments.mandates.list" },
+  { method: "post", path: "/v1/payments/mandates/request", tool: "payments.mandates.request" },
+  { method: "post", path: "/v1/payments/mandates/revoke", tool: "payments.mandates.revoke" },
+  { method: "post", path: "/v1/payments/spend", tool: "payments.spend" },
+]);
 
 export interface StripeDeps {
   secretKey: string;
@@ -202,7 +225,7 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   // --- the other agent-readable documents (E10) and the status window over the agent routes ---
   const wellknown = createWellknown({ ...(deps.wellknown ?? {}), publicBaseUrl: deps.publicBaseUrl, now });
   for (const path of ["/mcp", "/v1/agents", "/v1/agents/*", "/v1/keys/*", "/v1/wallet", "/v1/wallet/*", "/v1/quote", "/v1/receipts", "/v1/receipts/*",
-    HANDOFF_PATH, "/v1/statements", "/v1/commit", "/oauth/*"]) {
+    HANDOFF_PATH, "/v1/statements", "/v1/commit", "/oauth/*", INGEST_KEYS_PATH, "/v1/payments/*"]) {
     app.use(path, wellknown.observe);
   }
   app.route("/", wellknown.app);
@@ -312,11 +335,76 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
   const keyOnly = (c: Context<{ Variables: AgentVars }>): Response | undefined =>
     principalOf(c).via === "oauth" ? agentError(c, 403, "oauth_not_allowed", "Manage keys with an agent key, not an OAuth access token.") : undefined;
 
+  // E51: a write-only ingest key (the browser extension's) manages only itself.
+  const sameKeyOnly = (p: AgentPrincipal, id: string): boolean => !isIngestOnly(p.scopes) || p.keyId === id;
+
+  // E51: issue a write-only `ingest` key for this principal (docs/api/ingest-sources.md §3). The
+  // holder of a `write` key (the human who registered the principal) hands it to the browser
+  // extension; it can call memory.ingest and nothing else. Stored hashed like every key; the secret
+  // is in this answer once. An Idempotency-Key makes a retry answer the key it already issued.
+  app.post(INGEST_KEYS_PATH, requireKey(["write"]), bodyLimit({ maxSize: MAX_SMALL_BODY_BYTES, onError: bodyTooLarge }), async (c) => {
+    const refused = keyOnly(c);
+    if (refused) return refused;
+    const p = principalOf(c);
+    const body = c.req.header("content-length") === "0" ? {} : await readJson(c);
+    if (body === undefined) return agentError(c, 400, "invalid_json", "The body must be JSON.");
+    const scopes = body.scopes ?? ["ingest"];
+    if (!Array.isArray(scopes) || scopes.length !== 1 || scopes[0] !== "ingest") {
+      return agentError(c, 400, "invalid_scopes", "This route issues write-only keys: scopes must be [\"ingest\"]. Keys with read, write or run come from POST /v1/agents or a tenant admin.", "fix_input");
+    }
+    const days = body.expires_in_days ?? INGEST_KEY_DEFAULT_DAYS;
+    if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > INGEST_KEY_MAX_DAYS) {
+      return agentError(c, 400, "invalid_expiry", `expires_in_days must be a whole number from 1 to ${INGEST_KEY_MAX_DAYS}.`, "fix_input");
+    }
+    const idem = c.req.header("idempotency-key")?.trim();
+    if (idem !== undefined && (idem.length === 0 || idem.length > 255)) return agentError(c, 400, "invalid_idempotency_key", "Idempotency-Key must be 1 to 255 characters.", "fix_input");
+    const nowMs = now().getTime();
+    const keyId = idem !== undefined ? ingestKeyId(p.principalId, idem) : `ak_${randomUUID()}`;
+    const answerExisting = (existing: AgentKeyRecord): Response => {
+      if (existing.principalId !== p.principalId || !isIngestOnly(existing.scopes)) {
+        return agentError(c, 409, "idempotency_key_reused", "This Idempotency-Key already issued another key. Use a new key for a different request.", "fix_input");
+      }
+      c.set("relayLogAgentKey", keyId);
+      c.set("relayLogEvent", "ingest_key_replayed");
+      return c.json({
+        key: null, key_id: keyId, principal_id: p.principalId, scopes: existing.scopes, expires_at: isoOrNull(existing.expiresAt), created: false,
+        revoked: existing.revokedAt !== undefined,
+        note: "Same Idempotency-Key: the key issued before. Its secret is shown only once; if it was lost, revoke it with POST /v1/keys/{id}/revoke and issue a new one with a new Idempotency-Key.",
+      }, 200, { "cache-control": "no-store" });
+    };
+    try {
+      if (idem !== undefined) {
+        const existing = await store.keyById(keyId);
+        if (existing) return answerExisting(existing);
+      }
+      const { key, prefix } = generateAgentKey("live");
+      const record: AgentKeyRecord = {
+        keyId, prefix, hash: await hashAgentKey(key, deps.keyIterations ?? DEFAULT_PBKDF2_ITERATIONS), mode: "live",
+        principalId: p.principalId, tenantId: p.tenantId, scopes: ["ingest"], createdAt: nowMs, expiresAt: nowMs + days * 86_400_000,
+      };
+      if (!(await store.insertKeyOnce(record))) {
+        const existing = await store.keyById(keyId);
+        if (!existing) return storeFailure(c);
+        return answerExisting(existing);
+      }
+      c.set("relayLogAgentKey", keyId);
+      c.set("relayLogEvent", "ingest_key_issued");
+      return c.json({
+        key, key_id: keyId, prefix, principal_id: p.principalId, scopes: record.scopes, expires_at: isoOrNull(record.expiresAt), created: true,
+        note: "Shown once. Paste it into the browser extension; it can only call memory.ingest. Revoke it with POST /v1/keys/{id}/revoke.",
+        next_action: null,
+      }, 201, { "cache-control": "no-store" });
+    } catch {
+      return storeFailure(c);
+    }
+  });
+
   app.post("/v1/keys/:id/revoke", requireKey([]), async (c) => {
     const refused = keyOnly(c);
     if (refused) return refused;
     const p = principalOf(c);
     const id = c.req.param("id");
+    if (!sameKeyOnly(p, id)) return agentError(c, 404, "key_not_found", "No such key.");
     try {
       const target = await store.keyById(id);
       // Unknown and someone else's answer the same: no oracle on key ids.
@@ -333,6 +421,7 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     if (refused) return refused;
     const p = principalOf(c);
     const id = c.req.param("id");
+    if (!sameKeyOnly(p, id)) return agentError(c, 404, "key_not_found", "No such key.");
     const body = await readJson(c);
     if (body === undefined) return agentError(c, 400, "invalid_json", "The body must be JSON.");
     const capsIn = (typeof body.caps === "object" && body.caps !== null ? body.caps : body) as Record<string, unknown>;
@@ -594,13 +683,19 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     onApprovalToken = approvals.notifyCreated;
   }
 
+  // --- E51: payments.* over hosted REST, relayed to the core like /mcp (metered by the pinned tool) ---
+  const relayDeps = onApprovalToken ? { ...meteringDeps, onApprovalToken } : meteringDeps;
+  for (const route of PAYMENT_ROUTES) {
+    app.on(route.method.toUpperCase(), route.path, bodyLimit({ maxSize: MAX_SMALL_BODY_BYTES, onError: bodyTooLarge }), metered(relayDeps, { method: "tools/call", name: route.tool }));
+  }
+
   // --- the metered MCP proxy (E9-T5) ---
   // --- provider webhooks into memory (E44): verified here, stored by the core over the relay ---
   if (deps.ingestHooks) {
     registerIngestHookRoutes(app, deps.ingestHooks, meteringDeps, lookup, (path) => app.use(path, wellknown.observe));
   }
 
-  app.all("/mcp", metered(onApprovalToken ? { ...meteringDeps, onApprovalToken } : meteringDeps));
+  app.all("/mcp", metered(relayDeps));
 
   return app;
 }

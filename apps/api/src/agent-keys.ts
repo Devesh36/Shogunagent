@@ -32,8 +32,24 @@ import type { Context, MiddlewareHandler } from "hono";
 
 import type { LogVars } from "./logging.js";
 
-export const AGENT_SCOPES = ["read", "write", "run", "admin"] as const;
+/** `ingest` (E51) is the write-only scope of a browser-extension key: it may call `memory.ingest`
+ * over `/mcp` and nothing else (no read, no other write, no run; `memory.ingest_webhook` is the
+ * ingest hooks' and is not included). It is issued alone (`POST /v1/keys`, a tenant admin's member
+ * key) and `write` already covers it. */
+export const AGENT_SCOPES = ["read", "write", "run", "admin", "ingest"] as const;
 export type AgentScope = (typeof AGENT_SCOPES)[number];
+
+/** The only tool an `ingest` key may call (by `Mcp-Name`; the core refuses a body whose tool
+ * differs from the header, so the header is the call). */
+export const INGEST_KEY_TOOLS: ReadonlySet<string> = new Set(["memory.ingest"]);
+/** The MCP protocol methods an `ingest` key may send besides that tool: the handshake and the
+ * tool list. Nothing that reads state (resources, prompts) is among them. */
+export const INGEST_KEY_PROTOCOL_METHODS: ReadonlySet<string> = new Set(["initialize", "notifications/initialized", "ping", "tools/list"]);
+
+/** Whether a key holds `ingest` and nothing broader: the write-only browser-extension key. */
+export function isIngestOnly(scopes: readonly AgentScope[]): boolean {
+  return scopes.includes("ingest") && !scopes.some((s) => s === "read" || s === "write" || s === "run" || s === "admin");
+}
 
 export type AgentKeyMode = "live" | "test";
 
@@ -144,10 +160,10 @@ export function agentMeterSubject(principal: Pick<AgentPrincipal, "principalId">
   return `principal:${principal.principalId}`;
 }
 
-/** `admin` implies every scope. */
+/** `admin` implies every scope; `write` implies `ingest`. */
 export function hasScopes(granted: readonly AgentScope[], required: readonly AgentScope[]): boolean {
   if (granted.includes("admin")) return true;
-  return required.every((s) => granted.includes(s));
+  return required.every((s) => granted.includes(s) || (s === "ingest" && granted.includes("write")));
 }
 
 /** The lookup half of the store the middleware needs: candidates for a prefix. */

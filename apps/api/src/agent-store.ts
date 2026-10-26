@@ -261,7 +261,7 @@ export function scopesToText(scopes: readonly AgentScope[]): string {
 }
 
 export function scopesFromText(text: string): AgentScope[] {
-  return text.split(SCOPES_SEPARATOR).filter((s): s is AgentScope => s === "read" || s === "write" || s === "run" || s === "admin");
+  return text.split(SCOPES_SEPARATOR).filter((s): s is AgentScope => s === "read" || s === "write" || s === "run" || s === "admin" || s === "ingest");
 }
 
 /** Receipts older than this are deleted by maintenance in the SQL store (the in-memory store

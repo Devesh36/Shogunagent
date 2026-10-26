@@ -185,3 +185,35 @@ fn a_mandate_is_granted_by_a_human_and_pre_approves_payments_within_its_bounds()
     let (status, after) = spend(port, 10, "pay-3");
     assert_eq!((status, after["reason"].as_str()), (202, Some("no_mandate")), "{after}");
 }
+
+#[test]
+fn a_rejected_per_payment_approval_marks_the_spend_rejected_and_pays_nothing() {
+    let (port, _root, store) = boot("reject");
+
+    // No mandate: the payment waits for a human.
+    let (status, asked) = spend(port, 1200, "rej-1");
+    assert_eq!((status, asked["authorization"].as_str()), (202, Some("approval")), "{asked}");
+    let approval_id = asked["approval_id"].as_u64().unwrap();
+    let spend_ref = asked["spend_ref"].as_str().unwrap().to_string();
+
+    // The human rejects it: actions.status and payments.* agree, with who and which approval.
+    let (status, decided) = admin_decide(port, approval_id, "reject");
+    assert_eq!((status, decided["status"].as_str()), (200, Some("rejected")), "{decided}");
+    let polled = request(port, "GET", &format!("/v1/actions/status/{approval_id}"), Some(TOKEN_A), None).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&polled.body).unwrap()["status"], "rejected", "{}", polled.body);
+    let (status, replay) = spend(port, 1200, "rej-1");
+    assert_eq!((status, replay["status"].as_str(), replay["replayed"].as_bool()), (200, Some("rejected"), Some(true)), "{replay}");
+    assert_eq!(replay["spend"]["spend_ref"], spend_ref.as_str());
+    assert_eq!(replay["spend"]["approval_id"], approval_id);
+    assert_eq!(replay["spend"]["decided_by"], "human:owner");
+    assert_eq!(replay["next_action"], "ask_human");
+
+    // A second decision changes nothing, and nothing ever reached the rail.
+    let (status, _) = admin_decide(port, approval_id, "approve");
+    assert_eq!(status, 409);
+    let (_, replay) = spend(port, 1200, "rej-1");
+    assert_eq!(replay["status"], "rejected", "{replay}");
+    let open = store.open(&PrincipalId::parse("alice").unwrap()).unwrap();
+    let rows = open.db().try_trace_page(200, 0).unwrap();
+    assert!(!rows.iter().any(|(_, row)| row.destination == "payment_rail"), "nothing was sent to the rail");
+}

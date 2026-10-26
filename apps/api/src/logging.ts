@@ -56,6 +56,8 @@ export interface LogVars {
     | "stripe_unavailable" | "stripe_failure" | "topup_session_created" | "topup_credited" | "topup_duplicate" | "webhook_rejected"
     // `POST /v1/handoff` (handoff.ts, plan E16 / E35): relayed to the core, which assembles it.
     | "handoff_relayed"
+    // E51: a write-only ingest key issued (agent-app.ts `POST /v1/keys`), or its replay.
+    | "ingest_key_issued" | "ingest_key_replayed"
     // E19 billing (billing/routes.ts, the Stripe webhook): fixed words.
     | "statement_closed" | "commit_created" | "adjustment_applied" | "refund_debited" | "dispute_resolved" | "licence_linked" | "topup_expired"
     // E3-T2 OAuth (oauth/app.ts): fixed words, never a client id, a code or a token.
@@ -102,6 +104,8 @@ export function routeTemplate(pathname: string): string {
   // collapsed to their template.
   if (["/v1/agents", "/v1/agents/challenge", "/v1/agents/me", "/v1/wallet", "/v1/wallet/topup", "/v1/wallet/topup/done",
     "/v1/stripe/webhook", "/v1/quote", "/v1/receipts", "/v1/handoff", "/mcp", "/.well-known/pricing.json"].includes(pathname)) return pathname;
+  // E51: the ingest-key issue route and the payments REST relay (fixed paths, no ids).
+  if (["/v1/keys", "/v1/payments/mandates", "/v1/payments/mandates/list", "/v1/payments/mandates/request", "/v1/payments/mandates/revoke", "/v1/payments/spend"].includes(pathname)) return pathname;
   // The agent-readable documents (plan E10, wellknown/app.ts): fixed paths, no ids.
   if (["/.well-known/mcp/server-card.json", "/.well-known/agent-card.json", "/.well-known/status.json", "/.well-known/mcp-config",
     "/health", "/openapi.json", "/llms.txt", "/llms-full.txt", "/privacy", "/terms"].includes(pathname)) return pathname;

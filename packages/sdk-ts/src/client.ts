@@ -14,15 +14,16 @@ import {
   type Handoff, type HandoffParams, type HandoffResult,
 } from "./handoff.js";
 import type {
-  ActionArgs, ApprovalInfo, ApprovalStatus, DiscoverParams, DiscoverResult, Envelope, FetchLike,
-  AcceptHandoffResult, Hint, IngestParams, IngestResult, InputRequest, InputResponse, Namespace, QuoteParams, QuoteResult,
-  RecallParams, RecallResult, ResponseLike, RunParams, RunResult, StateListParams, StateListResult, Usage,
+  ActionArgs, ApprovalInfo, ApprovalStatus, ConnectionsStatus, DiscoverParams, DiscoverResult, Envelope, FetchLike,
+  AcceptHandoffResult, Hint, IngestParams, IngestResult, InputRequest, InputResponse, MandateListParams, MandateListResult,
+  MandateRequestParams, Namespace, PaymentMandate, PaymentSpend, QuoteParams, QuoteResult,
+  RecallParams, RecallResult, ResponseLike, RunParams, RunResult, SpendParams, StateListParams, StateListResult, Usage,
 } from "./types.js";
 
 export const LOCAL_BASE_URL = "http://127.0.0.1:7464";
 export const HOSTED_BASE_URL = "https://api.shogunagent.dev";
 export const MCP_PROTOCOL_VERSION = "2026-07-28";
-export const SDK_VERSION = "0.1.0";
+export const SDK_VERSION = "0.2.0";
 /** Most items one `memory.ingest` carries (crates/shogun-mcp/src/ingest_api.rs). */
 export const MAX_INGEST_ITEMS = 200;
 
@@ -65,6 +66,34 @@ export type ActionOutcome<T = unknown> =
   }
   | { type: "declined"; result: unknown };
 
+/** A pending L3 the human decides at `approval.url`. The SDK never approves: hand the URL over. */
+export interface PendingApproval {
+  type: "approval_required";
+  approval: ApprovalInfo;
+  /** One `actions.status` read. */
+  status(): Promise<ApprovalStatus>;
+  /** Poll `actions.status` until the approval leaves `pending`. */
+  wait(options?: WaitOptions): Promise<ApprovalStatus>;
+}
+
+/** What `payments.mandates.request` answered. */
+export type MandateRequestOutcome = { mandateId: string; idempotencyKey: string; raw: unknown } & (
+  | PendingApproval
+  /** Narrower terms on an existing mandate applied at once; or a retried request whose mandate a
+   * human already granted (`replayed`). */
+  | { type: "narrowed" | "replayed"; mandate: PaymentMandate }
+);
+
+/** What `payments.spend` answered. Never report a payment as made unless `type` is `settled`. */
+export type SpendOutcome = { idempotencyKey: string; raw: unknown } & (
+  | { type: "settled"; spend: PaymentSpend; replayed: boolean }
+  /** Outside every mandate: a per-payment approval for a human. `reason` says why. */
+  | (PendingApproval & { spendRef: string; reason: string })
+  /** A replay of a spend that did not settle: still awaiting a human, rejected, expired or failed.
+   * `rejected` / `expired` paid nothing; ask the human before trying again under a new key. */
+  | { type: "not_settled"; spend: PaymentSpend; replayed: boolean }
+);
+
 export interface WaitOptions {
   intervalMs?: number;
   timeoutMs?: number;
@@ -80,7 +109,7 @@ interface ToolCallOptions {
 type RawToolResult =
   | { kind: "payload"; payload: unknown }
   | { kind: "input_required"; inputRequests: InputRequest[] }
-  | { kind: "approval_required"; approval: ApprovalInfo };
+  | { kind: "approval_required"; approval: ApprovalInfo; payload: unknown };
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -226,7 +255,9 @@ export class ShogunAgent {
       return { kind: "input_required", inputRequests: Array.isArray(result.inputRequests) ? (result.inputRequests as InputRequest[]) : [] };
     }
     if (result.resultType === "approval_required" && isObj(result.approval)) {
-      return { kind: "approval_required", approval: result.approval as unknown as ApprovalInfo };
+      const first = Array.isArray(result.content) ? (result.content as unknown[])[0] : undefined;
+      const payload = isObj(first) && typeof first.text === "string" ? parseJson(first.text) : null;
+      return { kind: "approval_required", approval: result.approval as unknown as ApprovalInfo, payload };
     }
     let payload: unknown = result.structuredContent;
     if (payload === undefined) {
@@ -402,6 +433,124 @@ export class ShogunAgent {
       await sleep(interval, options.signal);
     }
   }
+
+  // --- payments (E46 / E51, docs/api/payments.md) ---
+
+  readonly payments = {
+    mandates: {
+      /** `payments.mandates.list`: the mandates a human granted, with spent and remaining; with
+       * `mandateId`, that mandate and its recent spends. Free. */
+      list: (params: MandateListParams = {}): Promise<MandateListResult> => this.listMandates(params),
+      /**
+       * `payments.mandates.request`: ask the human for a mandate (L3). Answers `approval_required`
+       * with the URL to hand to the human; nothing is granted until they approve, and this SDK never
+       * approves. Terms that only narrow an existing mandate (`mandateId`) apply at once.
+       */
+      request: (params: MandateRequestParams): Promise<MandateRequestOutcome> => this.requestMandate(params),
+      /** `payments.mandates.revoke`: revoked at once (L1); twice is harmless. */
+      revoke: (mandateId: string, options: { idempotencyKey?: string } = {}): Promise<{ revoked: boolean; already_revoked: boolean; mandate: PaymentMandate }> => {
+        const args: Record<string, unknown> = { mandate_id: mandateId };
+        if (options.idempotencyKey !== undefined) args.idempotency_key = options.idempotencyKey;
+        return this.callTool("payments.mandates.revoke", args);
+      },
+    },
+    /**
+     * `payments.spend` (L3 by type). Inside an active mandate granted to you it settles through the
+     * payment rail; otherwise it answers `approval_required` with the URL for a human. An
+     * idempotency key is generated when absent: reuse the returned `idempotencyKey` to retry, and a
+     * retry never pays twice.
+     */
+    spend: (params: SpendParams): Promise<SpendOutcome> => this.spend(params),
+  };
+
+  private pendingOf(approval: ApprovalInfo): PendingApproval {
+    return { type: "approval_required", approval, status: () => this.approvalStatus(approval.approval_id), wait: (o = {}) => this.waitForApproval(approval.approval_id, o) };
+  }
+
+  /** The approval of a payload that is still the core's plain pending envelope (no MRTR shaping). */
+  private plainPending(payload: unknown): ApprovalInfo | undefined {
+    if (!isObj(payload) || payload.pending !== true || typeof payload.approval_id !== "number") return undefined;
+    const id = payload.approval_id;
+    return {
+      approval_id: id, level: typeof payload.level === "string" ? payload.level : "L3",
+      url: typeof payload.url === "string" ? payload.url : null,
+      poll: { tool: "actions.status", arguments: { approval_id: id } },
+      message: "Hand the URL to the human, or wait for approval in the ShogunAI app; poll actions.status.",
+    };
+  }
+
+  private async listMandates(params: MandateListParams): Promise<MandateListResult> {
+    const args: Record<string, unknown> = {};
+    if (params.mandateId !== undefined) args.mandate_id = params.mandateId;
+    if (params.limit !== undefined) args.limit = params.limit;
+    const raw = await this.callTool<Record<string, unknown>>("payments.mandates.list", args);
+    const obj = isObj(raw) ? raw : {};
+    const mandate = isObj(obj.mandate) ? (obj.mandate as unknown as PaymentMandate) : undefined;
+    return {
+      mandates: Array.isArray(obj.mandates) ? (obj.mandates as PaymentMandate[]) : mandate ? [mandate] : [],
+      ...(mandate ? { mandate } : {}),
+      ...(Array.isArray(obj.spends) ? { spends: obj.spends as PaymentSpend[] } : {}),
+    };
+  }
+
+  private async requestMandate(params: MandateRequestParams): Promise<MandateRequestOutcome> {
+    if ((params.payee === undefined) === (params.payeeClass === undefined)) {
+      throw new ShogunAgentError({ status: 0, code: "invalid_payee", message: "Give exactly one of payee (an exact payee id) or payeeClass.", nextAction: "fix_input" });
+    }
+    const key = params.idempotencyKey ?? newIdempotencyKey("mandate");
+    const args: Record<string, unknown> = {
+      currency: params.currency, max_per_payment_minor: params.maxPerPaymentMinor, total_cap_minor: params.totalCapMinor,
+      purpose: params.purpose, idempotency_key: key,
+    };
+    if (params.payee !== undefined) args.payee = params.payee;
+    if (params.payeeClass !== undefined) args.payee_class = params.payeeClass;
+    if (params.expiresInDays !== undefined) args.expires_in_days = params.expiresInDays;
+    if (params.expiresAtMs !== undefined) args.expires_at_ms = params.expiresAtMs;
+    if (params.singleUse !== undefined) args.single_use = params.singleUse;
+    if (params.mandateId !== undefined) args.mandate_id = params.mandateId;
+    const raw = await this.toolCall("payments.mandates.request", args);
+    const payload = raw.kind === "input_required" ? null : raw.payload;
+    const p = isObj(payload) ? payload : {};
+    const mandateId = typeof p.mandate_id === "string" ? p.mandate_id : isObj(p.mandate) && typeof p.mandate.mandate_id === "string" ? p.mandate.mandate_id : params.mandateId ?? "";
+    const approval = raw.kind === "approval_required" ? raw.approval : this.plainPending(payload);
+    if (approval) return { ...this.pendingOf(approval), mandateId, idempotencyKey: key, raw: payload };
+    if (raw.kind === "input_required" || !isObj(p.mandate)) {
+      throw new ToolError({ status: 200, code: "invalid_response", message: "payments.mandates.request answered neither an approval nor a mandate.", body: payload });
+    }
+    return { type: p.narrowed === true ? "narrowed" : "replayed", mandate: p.mandate as unknown as PaymentMandate, mandateId, idempotencyKey: key, raw: payload };
+  }
+
+  private async spend(params: SpendParams): Promise<SpendOutcome> {
+    const key = params.idempotencyKey ?? newIdempotencyKey("pay");
+    const args: Record<string, unknown> = { payee: params.payee, currency: params.currency, amount_minor: params.amountMinor, idempotency_key: key };
+    if (params.memo !== undefined) args.memo = params.memo;
+    if (params.mandateId !== undefined) args.mandate_id = params.mandateId;
+    const raw = await this.toolCall("payments.spend", args);
+    const payload = raw.kind === "input_required" ? null : raw.payload;
+    const p = isObj(payload) ? payload : {};
+    const approval = raw.kind === "approval_required" ? raw.approval : this.plainPending(payload);
+    if (approval) {
+      return { ...this.pendingOf(approval), spendRef: typeof p.spend_ref === "string" ? p.spend_ref : "", reason: typeof p.reason === "string" ? p.reason : "no_mandate", idempotencyKey: key, raw: payload };
+    }
+    if (raw.kind === "input_required" || !isObj(p.spend)) {
+      throw new ToolError({ status: 200, code: "invalid_response", message: "payments.spend answered neither a spend nor an approval.", body: payload });
+    }
+    const spend = p.spend as unknown as PaymentSpend;
+    const replayed = p.replayed === true;
+    return spend.status === "settled"
+      ? { type: "settled", spend, replayed, idempotencyKey: key, raw: payload }
+      : { type: "not_settled", spend, replayed, idempotencyKey: key, raw: payload };
+  }
+
+  // --- connections (docs/api/connector-tokens.md) ---
+
+  readonly connections = {
+    /** `connections.list`: which accounts the principal has connected and each one's state. Free. */
+    status: (): Promise<ConnectionsStatus> => this.callTool<ConnectionsStatus>("connections.list", {}),
+    /** `connections.disconnect`: remove one connected account (`gcal`, `gmail`, `slack`, …). Only
+     * removes access; reconnecting is always the human's. */
+    disconnect: (service: string): Promise<Record<string, unknown>> => this.callTool("connections.disconnect", { service }),
+  };
 
   // --- router ---
 

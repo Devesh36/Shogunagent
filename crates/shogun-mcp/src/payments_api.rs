@@ -29,6 +29,8 @@ use shogun_memory::payment_mandates::{MandateRow, NewSpend, Reserved, SpendRow, 
 use crate::backend::MemoryBackend;
 use crate::memory_api::Tool;
 
+pub use shogun_agents::approval::APPROVAL_TIMEOUT_MS;
+
 /// The rail label recorded on every spend row when the rail does not name itself.
 pub const DEFAULT_RAIL: &str = "stub";
 /// The longest idempotency key accepted.
@@ -124,6 +126,15 @@ pub enum PaymentsOp<'a> {
     PayReserved { confirmed: &'a shogun_agents::approval::ConfirmedSend },
     /// A per-payment approval was queued (`Some(id)`) or refused (`None`, the row is closed).
     Queued { spend_ref: &'a str, approval_id: Option<u64> },
+    /// The per-payment approval `approval_id` will never run: a human rejected it (`outcome`
+    /// `rejected`, `by` the human) or its window elapsed (`expired`). Closes the spend still
+    /// waiting on it (`Done(false)` when none is). Called by the decide route.
+    Close { spend_ref: &'a str, approval_id: u64, outcome: &'a str, by: &'a str },
+    /// Close every waiting per-payment spend whose approval the ledger records as rejected, or
+    /// whose approval window ([`APPROVAL_TIMEOUT_MS`]) elapsed at `now_ms` without an approval.
+    /// Answers `Done(any closed)`. Run before a payments read so `payments.*` and
+    /// `actions.status` agree.
+    Reconcile { now_ms: i64 },
 }
 
 /// What a [`PaymentsOp`] answered.
@@ -317,7 +328,7 @@ pub fn spend_json(row: &SpendRow) -> Value {
         "payee": row.payee,
         "currency": row.currency,
         "amount_minor": row.amount_minor,
-        "status": row.status,
+        "status": row.reported_status(),
         "reason_class": row.reason_class,
         "rail": row.rail,
         "rail_ref": row.rail_ref,
@@ -339,6 +350,10 @@ pub fn serve<B: MemoryBackend + ?Sized>(
     let args = if args.is_null() { &Value::Object(Default::default()) } else { args };
     if !args.is_object() {
         return bad("invalid_arguments", "The arguments must be one JSON object.");
+    }
+    if matches!(tool, Tool::PaymentsMandatesList | Tool::PaymentsSpend) {
+        // Best effort: a store that cannot reconcile answers the read or the spend as it can.
+        let _ = backend.payments(PaymentsOp::Reconcile { now_ms });
     }
     match tool {
         Tool::PaymentsMandatesList => list(args, backend, now_ms),
@@ -513,7 +528,14 @@ fn with_fields(body: &str, extra: Value) -> String {
 }
 
 fn replay(row: &SpendRow) -> Answer {
-    let mut body = json!({ "tool": Tool::PaymentsSpend.wire_name(), "replayed": true, "status": row.status, "spend": spend_json(row) });
+    let mut body = json!({ "tool": Tool::PaymentsSpend.wire_name(), "replayed": true, "status": row.reported_status(), "spend": spend_json(row) });
+    if matches!(row.reported_status(), "rejected" | "expired") {
+        body["message"] = Value::String(format!(
+            "This payment was not made: its approval was {}. Nothing was paid. Ask the human before requesting it again under a new idempotency_key.",
+            row.reported_status()
+        ));
+        body["next_action"] = Value::String("ask_human".into());
+    }
     if row.status == "awaiting_approval" {
         body["next_action"] = Value::String("poll_status".into());
         if let Some(id) = row.approval_id {
@@ -786,6 +808,12 @@ mod tests {
                 PaymentsOp::Queued { spend_ref, approval_id: None } => {
                     PaymentsReply::Done(pm::settle_spend(&conn, spend_ref, "not_queued", Some("not_queued"), None, NOW).map_err(e)?)
                 }
+                PaymentsOp::Close { spend_ref, approval_id, outcome, by } => {
+                    PaymentsReply::Done(pm::close_unapproved_spend(&conn, spend_ref, approval_id, outcome, by, NOW).map_err(e)?)
+                }
+                PaymentsOp::Reconcile { now_ms } => PaymentsReply::Done(
+                    pm::reconcile_unapproved_spends(&conn, now_ms, i64::try_from(APPROVAL_TIMEOUT_MS).unwrap()).map_err(e)? > 0,
+                ),
             })
         }
     }
@@ -910,6 +938,51 @@ mod tests {
         both["payee"] = json!("cloud:x");
         let (status, body) = call(&store, &queued, Tool::PaymentsMandatesRequest, both, "agent:builder");
         assert_eq!((status, body["error"].as_str()), (400, Some("invalid_payee")));
+    }
+
+    fn call_at(store: &Store, queued: &Queued, tool: Tool, args: Value, actor: &str, now: i64) -> (u16, Value) {
+        let (status, body) = serve(tool, &args, store, actor, now, |send, preview| {
+            let mut q = queued.lock().unwrap();
+            q.push((send, preview));
+            (202, json!({ "pending": true, "approval_id": q.len(), "level": "L3", "origin": "mcp" }).to_string())
+        });
+        (status, serde_json::from_str(&body).unwrap())
+    }
+
+    #[test]
+    fn a_rejected_or_expired_per_payment_approval_closes_the_spend_and_never_pays() {
+        let store = Store::new(true);
+        let queued = Queued::default();
+        let spend = |key: &str| json!({ "payee": "cloud:hetzner", "currency": "USD", "amount_minor": 700, "idempotency_key": key });
+        let (status, body) = call(&store, &queued, Tool::PaymentsSpend, spend("r1"), "agent:builder");
+        assert_eq!((status, body["authorization"].as_str()), (202, Some("approval")), "{body}");
+        let spend_ref = body["spend_ref"].as_str().unwrap().to_string();
+        let approval_id = body["approval_id"].as_u64().unwrap();
+
+        // The decide route closes it when the human rejects; twice is harmless.
+        for expected in [true, false] {
+            let closed = store.payments(PaymentsOp::Close { spend_ref: &spend_ref, approval_id, outcome: "rejected", by: "human:owner" });
+            assert!(matches!(closed, Ok(PaymentsReply::Done(done)) if done == expected));
+        }
+        let (status, body) = call(&store, &queued, Tool::PaymentsSpend, spend("r1"), "agent:builder");
+        assert_eq!((status, body["replayed"].as_bool(), body["status"].as_str()), (200, Some(true), Some("rejected")), "{body}");
+        assert_eq!(body["spend"]["decided_by"], "human:owner");
+        assert_eq!(body["spend"]["approval_id"], approval_id);
+        assert_eq!(body["next_action"], "ask_human");
+        assert!(body.get("poll").is_none());
+
+        // Never approved and the window elapsed: the next payments read closes it as expired.
+        let (status, body) = call(&store, &queued, Tool::PaymentsSpend, spend("e1"), "agent:builder");
+        assert_eq!(status, 202, "{body}");
+        let window = i64::try_from(APPROVAL_TIMEOUT_MS).unwrap();
+        let (_, body) = call_at(&store, &queued, Tool::PaymentsSpend, spend("e1"), "agent:builder", NOW + window);
+        assert_eq!(body["status"], "awaiting_approval", "inside the window: {body}");
+        let (_, body) = call_at(&store, &queued, Tool::PaymentsSpend, spend("e1"), "agent:builder", NOW + window + 1);
+        assert_eq!((body["status"].as_str(), body["spend"]["decided_by"].as_str()), (Some("expired"), Some("system:approval-timeout")), "{body}");
+        assert!(store.paid.lock().unwrap().is_empty(), "nothing was paid");
+        // A closed spend never counts against anything and is never claimed.
+        let conn = store.conn.lock().unwrap();
+        assert_eq!(shogun_memory::payment_mandates::claim_approved_spend(&conn, &spend_ref, approval_id).ok().flatten(), None);
     }
 
     #[test]

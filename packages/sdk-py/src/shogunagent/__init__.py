@@ -15,6 +15,7 @@ from .client import (
     ApprovalRequired,
     AsyncShogunAgent,
     InputRequired,
+    PaymentOutcome,
     ShogunAgent,
     new_idempotency_key,
 )
@@ -52,7 +53,7 @@ __version__ = SDK_VERSION
 
 __all__ = [
     "HOSTED_BASE_URL", "LOCAL_BASE_URL", "MAX_INGEST_ITEMS", "MCP_PROTOCOL_VERSION", "SDK_VERSION",
-    "ActionDeclined", "ActionOutcome", "ActionResult", "ApprovalRequired", "AsyncShogunAgent", "InputRequired", "ShogunAgent", "new_idempotency_key",
+    "ActionDeclined", "ActionOutcome", "ActionResult", "ApprovalRequired", "AsyncShogunAgent", "InputRequired", "PaymentOutcome", "ShogunAgent", "new_idempotency_key",
     "CONTEXT_CLOSE", "CONTEXT_OPEN", "context_block", "escape_context", "render_context", "replace_context", "strip_context",
     "AuthenticationError", "HandoffError", "PaymentRequiredError", "PermissionDeniedError", "RateLimitError", "ServiceUnavailableError",
     "ShogunAgentError", "ToolError", "TransportError",

@@ -62,6 +62,9 @@ export const FREE_TOOLS: ReadonlySet<string> = new Set([
   "handoff.create",
   // E46: the payment mandates and what was spent against them.
   "payments.mandates.list",
+  // E51: the principal's connections (status only; docs/api/connector-tokens.md calls it a free
+  // read on every face, and the SDKs' connections.status() reaches it over /mcp).
+  "connections.list",
 ]);
 const FREE_PREFIXES = ["state.", "approvals."] as const;
 

@@ -43,6 +43,13 @@ impl Db {
                 PaymentsOp::Queued { spend_ref, approval_id: None } => {
                     pm::settle_spend(conn, spend_ref, "not_queued", Some("not_queued"), None, now).map(PaymentsReply::Done).map_err(code)
                 }
+                PaymentsOp::Close { spend_ref, approval_id, outcome, by } => {
+                    pm::close_unapproved_spend(conn, spend_ref, approval_id, outcome, by, now).map(PaymentsReply::Done).map_err(code)
+                }
+                PaymentsOp::Reconcile { now_ms } => {
+                    let window = i64::try_from(shogun_mcp::payments_api::APPROVAL_TIMEOUT_MS).unwrap_or(i64::MAX);
+                    pm::reconcile_unapproved_spends(conn, now_ms, window).map(|n| PaymentsReply::Done(n > 0)).map_err(code)
+                }
                 PaymentsOp::PayeeClass(_) | PaymentsOp::PayReserved { .. } => Err("payment_rail_unavailable".to_string()),
             })
         });

@@ -644,8 +644,10 @@ export function createEnterpriseApp(deps: EnterpriseAppDeps): Hono<{ Variables: 
     const requested = Array.isArray(body.scopes) ? body.scopes : [...MEMBER_SCOPES];
     const idem = c.req.header("idempotency-key")?.trim();
     if (idem !== undefined && (idem.length === 0 || idem.length > 255)) return agentError(c, 400, "invalid_idempotency_key", "Idempotency-Key must be 1 to 255 characters.");
-    if (requested.length === 0 || !requested.every((s): s is AgentScope => typeof s === "string" && (MEMBER_SCOPES as readonly string[]).includes(s))) {
-      return agentError(c, 400, "invalid_scopes", "scopes must be a non-empty subset of read, write, run (admin is never issued here).");
+    // E51: ["ingest"] alone is the write-only browser-extension key (memory.ingest only).
+    const ingestOnly = requested.length === 1 && requested[0] === "ingest";
+    if (!ingestOnly && (requested.length === 0 || !requested.every((s): s is AgentScope => typeof s === "string" && (MEMBER_SCOPES as readonly string[]).includes(s)))) {
+      return agentError(c, 400, "invalid_scopes", "scopes must be a non-empty subset of read, write, run, or [\"ingest\"] alone for a write-only browser-extension key (admin is never issued here).");
     }
     try {
       if ((await deps.store.membership(principalId)) !== tenant.tenantId) return agentError(c, 404, "member_not_found", "No such member of this tenant.");

@@ -25,7 +25,7 @@ const micro = (description: string): Json => ({ type: "integer", minimum: 0, des
 
 const components: Json = {
   securitySchemes: {
-    agentKey: { type: "http", scheme: "bearer", bearerFormat: "sa_live_<key>", description: "An agent key from POST /v1/agents. Scopes: read, write, run, admin (admin implies all)." },
+    agentKey: { type: "http", scheme: "bearer", bearerFormat: "sa_live_<key>", description: "An agent key from POST /v1/agents. Scopes: read, write, run, admin (admin implies all), and ingest: a write-only key from POST /v1/keys that may call memory.ingest over /mcp and nothing else (write implies it)." },
     oauth: {
       type: "oauth2",
       description: "OAuth 2.1 for MCP clients (docs/api/oauth.md): authorization code with PKCE S256; the client_id is the URL of a Client ID Metadata Document; no dynamic registration. Access tokens (sat_…) act as the consenting key, with at most its scopes and never admin.",
@@ -277,6 +277,36 @@ interface Route {
   servedBy?: "apps/api" | "apps/router";
 }
 
+/** E51: the hosted REST face of `payments.*` (agent-app.ts `PAYMENT_ROUTES`), relayed to the
+ * principal's core; the arguments are the body, the answer is the core's (docs/api/payments.md). */
+function paymentRoutes(): Route[] {
+  const relayed = "Relayed to the principal's core at the same path (the body is never read or stored by the gateway); the answer is the core's, the same as MCP and the CLI give (docs/api/payments.md).";
+  const answer = jsonBody({ type: "object", description: "The core's answer: tool, status and the mandate / spend; a pending answer carries approval_id, url and next_action approve_at_url." });
+  const pending = jsonBody({ type: "object", properties: { pending: { type: "boolean", const: true }, approval_id: { type: "integer" }, url: { type: ["string", "null"] }, next_action: { type: "string", enum: ["approve_at_url"] } } }, "L3: queued for a human. Hand url to the human and poll actions.status; nothing is granted or paid before a human approves.");
+  const common = { "403": errorResponse("insufficient_scope"), "421": errorResponse("wrong_shard"), "503": errorResponse("upstream_unavailable | payments_unavailable | payment_rail_unavailable | principal_not_provisioned, with Retry-After where it applies") };
+  const usage = { headers: Object.fromEntries(["X-Receipt-Id", "X-Usage-Unit", "X-Usage-Cost-Micro-Usd"].map((h) => [h, { $ref: `#/components/headers/${h}` }])) };
+  const listBody = jsonBody({ type: "object", properties: { mandate_id: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100 } } });
+  return [
+    { method: "get", path: "/v1/payments/mandates", tag: "payments", security: "key", scope: "read", summary: "payments.mandates.list: the payment mandates a human granted this principal's agents, with spent and remaining. Free.", description: relayed, responses: { "200": { ...answer, ...usage }, ...common } },
+    { method: "post", path: "/v1/payments/mandates/list", tag: "payments", security: "key", scope: "read", summary: "payments.mandates.list with arguments (mandate_id for one mandate and its recent spends). Free.", description: relayed, requestBody: listBody, responses: { "200": { ...answer, ...usage }, "400": errorResponse("invalid_mandate_id | invalid_limit"), "404": errorResponse("mandate_not_found"), ...common } },
+    {
+      method: "post", path: "/v1/payments/mandates/request", tag: "payments", security: "key", scope: "run",
+      summary: "payments.mandates.request: ask a human for a payment mandate (L3, approval URL); terms that only narrow an existing mandate apply at once. Free at the call.",
+      description: `${relayed} Nothing is granted until a human approves at the URL; the SDKs never approve.`,
+      requestBody: jsonBody({ type: "object", required: ["currency", "max_per_payment_minor", "total_cap_minor", "purpose", "idempotency_key"], properties: { mandate_id: { type: "string" }, payee: { type: "string" }, payee_class: { type: "string" }, currency: { type: "string", pattern: "^[A-Z]{3}$" }, max_per_payment_minor: { type: "integer", minimum: 1 }, total_cap_minor: { type: "integer", minimum: 1 }, expires_in_days: { type: "integer", minimum: 1, maximum: 366 }, expires_at_ms: { type: "integer" }, purpose: { type: "string", maxLength: 280 }, single_use: { type: "boolean" }, idempotency_key: { type: "string", maxLength: 128 } } }),
+      responses: { "202": pending, "200": { ...answer, ...usage }, "400": errorResponse("invalid_payee | invalid_currency | invalid_expiry | invalid_idempotency_key | …"), "403": errorResponse("insufficient_scope | mandate_not_yours"), "404": errorResponse("mandate_not_found"), "409": errorResponse("mandate_revoked"), "421": common["421"], "503": common["503"] },
+    },
+    { method: "post", path: "/v1/payments/mandates/revoke", tag: "payments", security: "key", scope: "run", summary: "payments.mandates.revoke: revoke a mandate at once (L1); twice is harmless. Free at the call.", description: relayed, requestBody: jsonBody({ type: "object", required: ["mandate_id"], properties: { mandate_id: { type: "string" }, idempotency_key: { type: "string", maxLength: 128 } } }), responses: { "200": { ...answer, ...usage }, "400": errorResponse("invalid_mandate_id"), "404": errorResponse("mandate_not_found"), ...common } },
+    {
+      method: "post", path: "/v1/payments/spend", tag: "payments", security: "key", scope: "run",
+      summary: "payments.spend: pay inside a mandate granted to the caller, or queue a per-payment L3 approval. Priced at the rail's fee (0 with the stub rail).",
+      description: `${relayed} A retry with the same idempotency_key answers the recorded spend (replayed) and never pays twice; a spend whose approval a human rejected or that expired reads status rejected / expired.`,
+      requestBody: jsonBody({ type: "object", required: ["payee", "currency", "amount_minor", "idempotency_key"], properties: { payee: { type: "string" }, currency: { type: "string", pattern: "^[A-Z]{3}$" }, amount_minor: { type: "integer", minimum: 1 }, memo: { type: "string", maxLength: 280 }, mandate_id: { type: "string" }, idempotency_key: { type: "string", maxLength: 128 } } }),
+      responses: { "200": { ...answer, ...usage }, "202": pending, "400": errorResponse("invalid_payee | invalid_currency | invalid_amount | invalid_memo | invalid_idempotency_key"), "404": errorResponse("mandate_not_found"), "502": errorResponse("payment_failed — check spend.status before paying again"), ...common },
+    },
+  ];
+}
+
 /** The enterprise lane (E26; enterprise/app.ts, enterprise/scim.ts). Served when ENTERPRISE_ENABLED=1. */
 function enterpriseRoutes(): Route[] {
   const id = (name: string): Json => ({ name, in: "path", required: true, schema: { type: "string" } });
@@ -298,7 +328,7 @@ function enterpriseRoutes(): Route[] {
     { method: "get", path: "/sso/{tenant}/saml/metadata", tag: "enterprise", security: "none", summary: "This service provider's SAML metadata for the tenant (entity id, ACS URL, WantAssertionsSigned).", parameters: [id("tenant")], responses: { "200": { content: { "application/samlmetadata+xml": { schema: { type: "string" } } } }, "404": errorResponse("tenant_not_found") } },
     { method: "get", path: "/v1/tenant/me", tag: "enterprise", security: "session", summary: "The signed-in tenant admin and the tenant.", responses: { "200": jsonBody({ type: "object", properties: { admin: { type: "object" }, tenant: ref("Tenant") } }), "401": errorResponse("admin_session_required — next_action sign_in"), "421": regionRefused } },
     { method: "get", path: "/v1/tenant/members", tag: "enterprise", security: "session", summary: "The tenant's member principals with their SCIM state.", responses: { "200": jsonBody({ type: "object" }), "401": errorResponse("admin_session_required") } },
-    { method: "post", path: "/v1/tenant/members/{id}/keys", tag: "enterprise", security: "session", summary: "Issue an agent key (read / write / run; never admin) for a member principal. Shown once; with an Idempotency-Key a retry answers the same key reference (200, key null), never a second key or the secret again.", parameters: [id("id"), { $ref: "#/components/parameters/IdempotencyKey" }], requestBody: jsonBody({ type: "object", properties: { scopes: { type: "array", items: { type: "string", enum: ["read", "write", "run"] } } } }), responses: { "201": jsonBody({ type: "object", properties: { key: { type: "string", pattern: "^sa_live_" }, key_id: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, created: { type: "boolean", const: true } } }), "200": jsonBody({ type: "object", properties: { key: { type: "null" }, key_id: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, created: { type: "boolean", const: false }, revoked: { type: "boolean" } } }, "Same Idempotency-Key: the key issued before; its secret is not shown again."), "400": errorResponse("invalid_scopes | invalid_idempotency_key"), "404": errorResponse("member_not_found"), "409": errorResponse("member_inactive | idempotency_key_reused") } },
+    { method: "post", path: "/v1/tenant/members/{id}/keys", tag: "enterprise", security: "session", summary: "Issue an agent key (read / write / run, or ingest alone for a write-only browser-extension key; never admin) for a member principal. Shown once; with an Idempotency-Key a retry answers the same key reference (200, key null), never a second key or the secret again.", parameters: [id("id"), { $ref: "#/components/parameters/IdempotencyKey" }], requestBody: jsonBody({ type: "object", properties: { scopes: { type: "array", items: { type: "string", enum: ["read", "write", "run", "ingest"] } } } }), responses: { "201": jsonBody({ type: "object", properties: { key: { type: "string", pattern: "^sa_live_" }, key_id: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, created: { type: "boolean", const: true } } }), "200": jsonBody({ type: "object", properties: { key: { type: "null" }, key_id: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, created: { type: "boolean", const: false }, revoked: { type: "boolean" } } }, "Same Idempotency-Key: the key issued before; its secret is not shown again."), "400": errorResponse("invalid_scopes | invalid_idempotency_key"), "404": errorResponse("member_not_found"), "409": errorResponse("member_inactive | idempotency_key_reused") } },
     { method: "get", path: "/v1/tenant/audit/export", tag: "enterprise", security: "session", summary: "Every member's sidecar audit export, concatenated: a header line per principal, its records byte for byte, an end line.", parameters: [{ name: "since_ms", in: "query", required: false, schema: { type: "integer" } }, { name: "until_ms", in: "query", required: false, schema: { type: "integer" } }], responses: { "200": { description: "NDJSON stream.", content: { "application/x-ndjson": { schema: { type: "string" } } } }, "503": errorResponse("sidecar_unavailable") } },
     { method: "post", path: "/v1/tenant/logout", tag: "enterprise", security: "session", summary: "End the admin session.", responses: { "200": jsonBody({ type: "object" }) } },
     { method: "get", path: "/scim/v2/ServiceProviderConfig", tag: "scim", security: "scim", summary: "SCIM 2.0 service provider configuration (PATCH and filter supported; no bulk, sort or etag).", responses: { "200": scimBody("RFC 7643 §5") } },
@@ -348,6 +378,18 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
     // --- keys ---
     { method: "post", path: "/v1/keys/{id}/revoke", tag: "keys", security: "key", scope: "any", keyOnly: true, summary: "Revoke a key (own key; admin for others).", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": jsonBody({ type: "object", properties: { key_id: { type: "string" }, revoked: { type: "boolean" } } }), "404": errorResponse("key_not_found (unknown and someone else's answer the same)") } },
     { method: "patch", path: "/v1/keys/{id}", tag: "keys", security: "key", scope: "any", keyOnly: true, summary: "Set a key's hard caps. Lowering: any key; raising above the defaults: admin.", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], requestBody: jsonBody(ref("CapsPatch")), responses: { "200": jsonBody({ type: "object", properties: { key_id: { type: "string" }, caps: ref("Caps") } }), "400": errorResponse("invalid_caps | invalid_json"), "403": errorResponse("caps_above_default"), "404": errorResponse("key_not_found") } },
+    {
+      method: "post", path: "/v1/keys", tag: "keys", security: "key", scope: "write", keyOnly: true,
+      summary: "Issue a write-only ingest key for this principal (the browser extension's): it may call memory.ingest over /mcp and nothing else. Shown once.",
+      description: "Scopes must be [\"ingest\"] (the default). The key is stored hashed; it expires after expires_in_days (default 90, at most 365) and manages only itself (revoke, caps). memory.ingest_webhook, reads, other writes, runs and every REST route refuse it with 403 insufficient_scope. With an Idempotency-Key a retry answers the same key reference (200, key null), never a second key or the secret again. docs/api/ingest-sources.md §3.",
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }],
+      requestBody: jsonBody({ type: "object", properties: { scopes: { type: "array", items: { type: "string", enum: ["ingest"] }, minItems: 1, maxItems: 1 }, expires_in_days: { type: "integer", minimum: 1, maximum: 365, default: 90 } } }),
+      responses: {
+        "201": jsonBody({ type: "object", properties: { key: { type: "string", pattern: "^sa_live_" }, key_id: { type: "string" }, prefix: { type: "string" }, principal_id: { type: "string" }, scopes: { type: "array", items: { type: "string", const: "ingest" } }, expires_at: { type: "string", format: "date-time" }, created: { type: "boolean", const: true } } }),
+        "200": jsonBody({ type: "object", properties: { key: { type: "null" }, key_id: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, created: { type: "boolean", const: false }, revoked: { type: "boolean" } } }, "Same Idempotency-Key: the key issued before; its secret is not shown again."),
+        "400": errorResponse("invalid_scopes | invalid_expiry | invalid_idempotency_key | invalid_json"), "403": errorResponse("insufficient_scope | oauth_not_allowed"), "409": errorResponse("idempotency_key_reused"),
+      },
+    },
     // --- wallet ---
     { method: "get", path: "/v1/wallet", tag: "wallet", security: "key", scope: "read", summary: "Balance, reserved, spendable, caps, this day's and month's spend.", responses: { "200": jsonBody(ref("Wallet")) } },
     { method: "post", path: "/v1/wallet/topup", tag: "wallet", security: "key", scope: "write", summary: "A Stripe Checkout session (card rail). Hand the URL to a human once.", parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }], requestBody: jsonBody(ref("TopupRequest")), responses: { "201": jsonBody(ref("TopupSession")), "400": errorResponse("invalid_amount | invalid_idempotency_key | invalid_json"), "503": errorResponse("topup_unavailable") } },
@@ -364,6 +406,8 @@ function routes(table: ToolTable, ctx: WellknownContext): Route[] {
       requestBody: jsonBody(ref("HandoffRequest")),
       responses: { "200": jsonBody(ref("HandoffResponse")), "400": errorResponse("missing_task | missing_to_agent | invalid_to_agent | invalid_from_agent | invalid_budget_tokens | invalid_ttl_seconds | invalid_request (from the core)"), "403": errorResponse("insufficient_scope"), "421": errorResponse("wrong_shard"), "503": errorResponse("upstream_unavailable | recall_unavailable | memory_update_pending | principal_not_provisioned, with Retry-After where it applies") },
     },
+    // --- E51: payments.* relayed to the core (docs/api/payments.md) ---
+    ...paymentRoutes(),
     // --- E44: provider webhooks into memory (ingest-hooks/app.ts) ---
     {
       method: "post", path: "/v1/ingest-hooks", tag: "ingest", security: "key", scope: "write",
@@ -517,7 +561,8 @@ export function openapiDocument(table: ToolTable, ctx: WellknownContext): Json {
     tags: [
       { name: "well-known", description: "Machine-readable documents. No auth." },
       { name: "agents", description: "Self-registration and identity." },
-      { name: "keys", description: "Key caps and revocation." },
+      { name: "keys", description: "Key caps and revocation, and write-only ingest keys for the browser extension." },
+      { name: "payments", description: "Agent payment mandates and payments (docs/api/payments.md), relayed to the principal's core. L3 by type: nothing is granted or paid before a human approves." },
       { name: "wallet", description: "Prepaid micro-USD wallet (Stripe card rail)." },
       { name: "billing", description: "Quotes, receipts, disputes, statements, commits." },
       { name: "a2a", description: "State-of-work handoff between agents (docs/api/handoff.md)." },
