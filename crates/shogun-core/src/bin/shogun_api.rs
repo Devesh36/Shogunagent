@@ -612,13 +612,12 @@ async fn main() -> std::io::Result<()> {
     }
 
     let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
-    // Plan gate (issue #97): the trial stamp from the desktop app's onboarding.json and the signed
-    // licence in billing.json (the SHOGUN_*_JSON path overrides are debug builds only).
-    // Re-resolved on every request so a trial expiring while the server runs locks the next call.
-    let plan_source = shogun_mcp::plan_source::FilePlanSource::from_env();
+    // Desktop builds re-resolve the signed plan on every request. OSS builds use the
+    // same server entitlement policy as --multi, without consulting desktop plan files.
+    let plan_source = shogun_core::daemon::api_entitlements::ApiEntitlementSource::for_build();
     let plan_clock = clock.clone();
     // Issue #744: say once why a locked plan will answer 403, and name it in every 403 body.
-    if let Some(lock) = plan_source.diagnose(u64::try_from((clock)()).unwrap_or(0)).lock {
+    if let Some(lock) = plan_source.lock(u64::try_from((clock)()).unwrap_or(0)) {
         eprintln!("{}", startup_report::plan_lock_note(FACE, lock));
     }
     let lock_source = plan_source.clone();
@@ -659,7 +658,7 @@ async fn main() -> std::io::Result<()> {
             plan_source.resolve(u64::try_from((plan_clock)()).unwrap_or(0))
         })
         .with_live_session(live_tokens.clone(), None, true)
-        .with_plan_lock(move || lock_source.diagnose(u64::try_from((lock_clock)()).unwrap_or(0)).lock)
+        .with_plan_lock(move || lock_source.lock(u64::try_from((lock_clock)()).unwrap_or(0)))
         .with_memory_gate(move || store.unavailable())
         .with_approval_store(approval_store.clone())
         .with_remote_approvals(remote.clone())
@@ -678,7 +677,7 @@ async fn main() -> std::io::Result<()> {
         .with_entitlements(Arc::new(move || {
             plan_source.resolve(u64::try_from((plan_clock)()).unwrap_or(0))
         }))
-        .with_plan_lock(move || lock_source.diagnose(u64::try_from((lock_clock)()).unwrap_or(0)).lock)
+        .with_plan_lock(move || lock_source.lock(u64::try_from((lock_clock)()).unwrap_or(0)))
         // #800: every memory request re-checks the store's schema; no restart after an upgrade.
         .with_memory_gate(move || store.unavailable())
         .with_approval_store(approval_store)

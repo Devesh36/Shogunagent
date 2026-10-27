@@ -1,10 +1,5 @@
-//! The `shogun-api` binary (the REST face the CLI talks to) at start-up (issue #744): a refusal
-//! names the settings file it checked, and a locked plan is said once on stderr and named in every
-//! 403 `plan_required` body, after authentication.
-//!
-//! Debug builds only (the `SHOGUN_*_JSON` path overrides live there) and not on macOS (there the
-//! binary reads the token list from the real login Keychain; elsewhere it registers
-//! `SHOGUN_API_TOKEN`, which this test sets).
+//! The non-desktop `shogun-api` binary: authenticated OSS reads need a current encrypted store,
+//! not desktop plan files. Disabled settings and invalid tokens still fail closed.
 #![cfg(all(feature = "daemon-server", debug_assertions, not(feature = "desktop")))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -96,27 +91,11 @@ fn a_refusal_names_the_settings_file_it_checked() {
 }
 
 #[test]
-fn a_locked_plan_is_named_in_the_403_after_auth() {
+fn oss_reads_without_desktop_plan_files_still_require_authentication() {
     let dir = Dir::new("locked");
     std::fs::write(dir.0.join("memory_api.json"), r#"{"enabled":true}"#).unwrap();
-    let expired = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        - 30 * 86_400;
-    std::fs::write(
-        dir.0.join("onboarding.json"),
-        format!(r#"{{"version":1,"state":{{"completed":true,"step":"ready","trial_started_at":{expired}}}}}"#),
-    )
-    .unwrap();
-    // The licence API said the trial is over (no token, its end passed), as the desktop records
-    // it: a stamp alone would read as "not started" (issue #1031).
-    let ended = expired + 7 * 86_400;
-    std::fs::write(
-        dir.0.join("trial_relay.json"),
-        format!(r#"{{"version":1,"device_id":"dev-test","token":null,"expires_at":null,"checked_at":{ended},"trial_ends_at":{ended}}}"#),
-    )
-    .unwrap();
+    assert!(!dir.0.join("onboarding.json").exists());
+    assert!(!dir.0.join("billing.json").exists());
     // A current store, as the app leaves it: the server opens it without migrating (#800).
     drop(shogun_memory::open_encrypted(dir.0.join("memory.db"), &shogun_memory::DbKey::new([0; 32])).unwrap());
     let mut child = server(&dir.0)
@@ -140,18 +119,14 @@ fn a_locked_plan_is_named_in_the_403_after_auth() {
         .and_then(|p| p.parse().ok())
         .unwrap_or_else(|| panic!("no listening line: {line:?}"));
 
-    let locked = get(port, "/v1/state/people", Some("shogun_0123456789abcdef0123"));
-    assert!(locked.starts_with("HTTP/1.1 403"), "{locked}");
-    assert!(
-        locked.contains(r#""error":"plan_required""#)
-            && locked.contains(r#""reason":"trial_ended""#),
-        "{locked}"
-    );
+    let read = get(port, "/v1/state/people", Some("shogun_0123456789abcdef0123"));
+    assert!(read.starts_with("HTTP/1.1 200"), "{read}");
+    assert!(!read.contains("plan_required"), "{read}");
     for token in [None, Some("shogun_ffffffffffffffffffff")] {
         let refused = get(port, "/v1/state/people", token);
         assert!(
-            refused.starts_with("HTTP/1.1 401") && !refused.contains("trial_ended"),
-            "no plan before auth: {refused}"
+            refused.starts_with("HTTP/1.1 401") && !refused.contains("plan_required"),
+            "unauthenticated reads remain refused: {refused}"
         );
     }
 
@@ -159,7 +134,7 @@ fn a_locked_plan_is_named_in_the_403_after_auth() {
     let mut err = String::new();
     BufReader::new(stderr).read_to_string(&mut err).unwrap();
     assert!(
-        err.contains("shogun-api: the Memory API is locked on this Mac (trial_ended)"),
+        !err.contains("locked on this Mac"),
         "{err}"
     );
 }

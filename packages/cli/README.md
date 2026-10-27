@@ -12,6 +12,8 @@ The [repository status](../../README.md) describes the packages and hosted servi
 
 For a **fresh local evaluation**, the source-built sidecar also supports `shogun-api --multi <principals-directory> --key-provider env`, which can provision encrypted principal stores on first access. This is a separate server mode from the CLI's default single-store `serve`. Supply your own principal tokens and store keys through the environment described in [the deployment guide, §3.2](../../deploy/README.md#32-variables). The `env` key provider is for evaluation only; the same guide documents KMS-backed providers for production.
 
+The default OSS server build does not require a ShogunAI desktop subscription. Builds with the `desktop` Cargo feature retain the desktop's signed-plan checks. Authentication, the existing-store requirement and action approvals apply in either build.
+
 The data directory contains `memory.db`, `api.token`, `db.key` and `memory_api.json`. Its defaults are `~/.local/share/shogunagent` on Linux (or `$XDG_DATA_HOME/shogunagent`), `~/Library/Application Support/shogunagent` on macOS, and `%APPDATA%\shogunagent` on Windows; `SHOGUNAGENT_DATA_DIR` overrides it. Choose the absolute directory containing the existing store.
 
 `SHOGUN_DB_KEY` and `SHOGUN_API_TOKEN` take precedence over `db.key` and `api.token`. Otherwise the CLI uses those files and generates missing secrets with mode 0600. A newly generated key cannot decrypt an existing store: provide the matching key before starting. Supply secrets through the owner's secure environment or existing protected files, never through chat or MCP configuration. The CLI creates `memory_api.json` with `enabled: true` only when absent; it preserves an existing setting.

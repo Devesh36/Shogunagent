@@ -1,11 +1,6 @@
-//! The `shogun-mcp` binary as an MCP client launches it (issue #744): each start-up refusal says
-//! which file it checked and why, and a locked plan is explained on stderr, in the handshake and in
-//! every `plan_required` answer. Runs the real binary.
-//!
-//! Debug builds only: the `SHOGUN_*_JSON` path overrides that keep the plan and analytics files in
-//! a temp folder exist only there. The non-desktop build takes `SHOGUN_API_TOKEN` on every OS;
-//! the Keychain token loader is not used. The trial fixture still honours the host's hardware
-//! binding. CI runs this with `cargo test -p shogun-core --features daemon-server` (a superset of `db`).
+//! The non-desktop `shogun-mcp` binary as an MCP client launches it: settings, authentication
+//! and store-version gates remain enforced, while OSS reads need no desktop licence/trial.
+//! Debug-only path overrides keep the tests' analytics/settings isolated.
 #![cfg(all(feature = "db", debug_assertions, not(feature = "desktop")))]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -14,8 +9,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD as URL_SAFE};
-use base64::Engine as _;
 use serde_json::Value;
 
 /// A throwaway folder standing in for the app-data directory.
@@ -66,15 +59,13 @@ fn bare_server(dir: &Path) -> Command {
         "SHOGUN_MEMORY_API_SETTINGS",
         "SHOGUN_POSTHOG_KEY",
         "SHOGUN_LICENSE_PUBKEY_NEXT",
+        "SHOGUN_LICENSE_PUBKEY",
     ] {
         cmd.env_remove(var);
     }
     cmd.env("SHOGUN_ONBOARDING_JSON", dir.join("onboarding.json"))
         .env("SHOGUN_BILLING_JSON", dir.join("billing.json"))
         .env("SHOGUN_TRIAL_RELAY_JSON", dir.join("trial_relay.json"))
-        // Debug builds trust this key instead of the embedded one: the trial token below is
-        // signed with it.
-        .env("SHOGUN_LICENSE_PUBKEY", B64.encode(signing().verifying_key().to_bytes()))
         .env("SHOGUN_ANALYTICS_JSON", dir.join("analytics.json"))
         .env("SHOGUN_DB_KEY", "00".repeat(32))
         .current_dir(dir);
@@ -108,52 +99,6 @@ fn responses(out: &Output) -> Vec<Value> {
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str(l).expect("one JSON-RPC response per line"))
         .collect()
-}
-
-fn now_secs() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64
-}
-
-/// The test's licence API key.
-fn signing() -> ed25519_dalek::SigningKey {
-    ed25519_dalek::SigningKey::from_bytes(&[31u8; 32])
-}
-
-/// A trial that started at `trial_started_at` on this Mac: the stamp in `onboarding.json` and the
-/// licence API's signed trial token in `trial_relay.json` (issue #1031), issued at the start.
-/// Off macOS there is no hardware id, so the id recorded beside the token decides.
-fn stamp(dir: &Path, trial_started_at: i64) {
-    use ed25519_dalek::Signer as _;
-    std::fs::write(
-        dir.join("onboarding.json"),
-        format!(r#"{{"version":1,"state":{{"completed":true,"step":"ready","trial_started_at":{trial_started_at}}}}}"#),
-    )
-    .unwrap();
-    let (iat, end) = (trial_started_at, trial_started_at + 7 * 86_400);
-    let device = shogun_license::hardware_device_id().unwrap_or("dev-test");
-    let body = serde_json::json!({
-        "v": 1, "lic": "trial_dev-test", "plan": "trial", "status": "trialing", "device": device,
-        "iat": iat, "exp": iat + 24 * 3600, "period_end": end,
-        "cancel_at_period_end": true, "grace_days": 0,
-    })
-    .to_string();
-    let token = format!(
-        "v1.{}.{}",
-        URL_SAFE.encode(body.as_bytes()),
-        URL_SAFE.encode(signing().sign(body.as_bytes()).to_bytes())
-    );
-    std::fs::write(
-        dir.join("trial_relay.json"),
-        serde_json::json!({
-            "version": 1, "device_id": device, "token": token, "expires_at": iat + 24 * 3600,
-            "checked_at": iat, "trial_ends_at": end,
-        })
-        .to_string(),
-    )
-    .unwrap();
 }
 
 /// A current encrypted store under the harness's `SHOGUN_DB_KEY`, as the app leaves it: the
@@ -225,10 +170,12 @@ fn the_switch_off_and_a_broken_settings_file_read_differently() {
 }
 
 #[test]
-fn an_ended_trial_is_explained_on_stderr_in_the_handshake_and_in_every_refusal() {
+fn desktop_plan_metadata_cannot_lock_the_oss_stdio_server() {
     let dir = Dir::new("locked");
     std::fs::write(dir.0.join("memory_api.json"), r#"{"enabled":true}"#).unwrap();
-    stamp(&dir.0, now_secs() - 30 * 86_400);
+    // Stale/corrupt desktop metadata does not select server policy at runtime.
+    std::fs::write(dir.0.join("onboarding.json"), r#"{"version":1,"state":{"trial_started_at":1}}"#).unwrap();
+    std::fs::write(dir.0.join("billing.json"), "not a signed licence").unwrap();
     let mut cmd = server(&dir.0);
     cmd.env("SHOGUN_DB_PATH", seed_store(&dir.0));
     let out = run(cmd, &[INITIALIZE, SEARCH]);
@@ -238,7 +185,7 @@ fn an_ended_trial_is_explained_on_stderr_in_the_handshake_and_in_every_refusal()
         Some(0),
         "the server still starts and serves: {err}"
     );
-    assert!(err.contains("locked on this Mac (trial_ended)"), "{err}");
+    assert!(!err.contains("locked on this Mac"), "{err}");
     // Audit 2026-10-20 M5: no process-trust note; the session runs on the harness token.
     assert!(!err.contains("trusted as the local user"), "{err}");
 
@@ -248,22 +195,16 @@ fn an_ended_trial_is_explained_on_stderr_in_the_handshake_and_in_every_refusal()
         .as_str()
         .unwrap_or_default();
     assert!(
-        instructions.contains("(trial_ended)") && instructions.contains("Plan & billing"),
+        !instructions.contains("plan_required"),
         "{instructions}"
     );
-    assert_eq!(replies[1]["error"]["code"], -32003);
-    assert_eq!(
-        replies[1]["error"]["message"],
-        "plan_required: the Memory API needs Pro (or an active trial)"
-    );
-    assert_eq!(replies[1]["error"]["data"]["reason"], "trial_ended");
+    assert!(replies[1].get("error").is_none(), "{replies:?}");
 }
 
 #[test]
-fn a_running_trial_starts_quietly_and_answers() {
+fn no_desktop_plan_files_are_needed_for_authenticated_reads() {
     let dir = Dir::new("running");
     std::fs::write(dir.0.join("memory_api.json"), r#"{"enabled":true}"#).unwrap();
-    stamp(&dir.0, now_secs() - 86_400);
     let mut cmd = server(&dir.0);
     cmd.env("SHOGUN_DB_PATH", seed_store(&dir.0));
     let out = run(cmd, &[INITIALIZE, SEARCH]);
@@ -279,7 +220,7 @@ fn a_running_trial_starts_quietly_and_answers() {
     );
     assert!(
         replies[1].get("error").is_none(),
-        "an open plan answers the call: {:?}",
+        "an authenticated OSS read answers the call: {:?}",
         replies[1]
     );
 }
@@ -290,7 +231,6 @@ fn a_store_the_app_has_not_upgraded_is_refused_per_call_and_left_unmigrated() {
     // answers `memory_update_pending`, and the store's history is exactly as it was.
     let dir = Dir::new("pending");
     std::fs::write(dir.0.join("memory_api.json"), r#"{"enabled":true}"#).unwrap();
-    stamp(&dir.0, now_secs() - 86_400);
     let path = seed_store(&dir.0);
     let key = shogun_memory::DbKey::new([0; 32]);
     let latest = i64::from(shogun_memory::LATEST_SCHEMA_VERSION);
