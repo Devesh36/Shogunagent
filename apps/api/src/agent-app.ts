@@ -482,6 +482,9 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
     }
     const idem = c.req.header("idempotency-key")?.trim();
     if (idem !== undefined && (idem.length === 0 || idem.length > 255)) return agentError(c, 400, "invalid_idempotency_key", "Idempotency-Key must be 1 to 255 characters.");
+    const scopedIdem = idem ? `${p.principalId}:${idem}` : undefined;
+    // Stripe caps keys at 255 characters. Preserve keys already sent there so retries still match.
+    const stripeIdem = scopedIdem && (scopedIdem.length <= 255 ? scopedIdem : `topup-sha256:${createHash("sha256").update(scopedIdem).digest("hex")}`);
     const base = deps.publicBaseUrl.replace(/\/+$/, "");
     try {
       const session = await createCheckoutSession({
@@ -490,7 +493,7 @@ export function createAgentApp(deps: AgentDeps): Hono<{ Variables: AgentVars }> 
         successUrl: deps.stripe.successUrl ?? `${base}/v1/wallet/topup/done?status=success`,
         cancelUrl: deps.stripe.cancelUrl ?? `${base}/v1/wallet/topup/done?status=cancelled`,
         // Scoped to the principal so one agent's key cannot replay another's session.
-        ...(idem ? { idempotencyKey: `${p.principalId}:${idem}` } : {}),
+        ...(stripeIdem ? { idempotencyKey: stripeIdem } : {}),
       });
       // E19: the session is tracked so `checkout.session.expired` can close it. Best effort: the
       // credit does not depend on this row (the webhook carries the principal).
