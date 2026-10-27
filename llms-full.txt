@@ -357,22 +357,30 @@ Never present a `possibly:` fact as established. Never act externally on it.
 
 ## Setup
 
-Check for an existing connection first. If this environment already lists a `shogunagent` MCP server (Claude Code, Cursor, Codex and Claude Desktop auto-install a read-only one when the ShogunAI Mac app is present), use it and skip the rest.
+Check for an existing `shogunagent` MCP connection first, including one provided by the ShogunAI Mac app. Call `profile.whoami` to verify it and use the tools its permissions allow.
 
-Otherwise, from a terminal:
+The repository currently describes an unreleased service: npm publication, release assets and hosted deployment are separate steps. Check the repository's release status and the operator's endpoint before relying on either. For local development, follow [the CLI source-build instructions](packages/cli/README.md).
 
+The local CLI requires trusted `shogun-api` and `shogun-mcp` binaries, an **existing encrypted store** and its matching key. Its single-store server does not create or migrate `memory.db`; a fresh data directory is insufficient. On macOS, an existing ShogunAI app connection is an alternative. Release downloads support Linux x86_64 and arm64; building from source supplies binaries, not a new store.
+
+Once the npm package and matching release assets are available, and the store prerequisites are satisfied:
+
+```sh
+npx shogunagent@0.1 install         # explicitly download and verify Linux binaries
+npx shogunagent@0.1 serve --connect # write read-only MCP entries and start the local sidecar
+npx shogunagent@0.1 help --json     # commands and skill version
 ```
-npx shogunagent@0.1
-```
 
-This starts a local sidecar, writes an MCP entry into the agent configs it finds, and prints the endpoint. Version-lock: the skill version above matches the CLI minor version; if `npx shogunagent help --json` reports a different minor, re-read the skill from `https://shogunagent.dev/SKILL.md` before continuing.
+Bare `npx shogunagent@0.1` means `serve`: it neither downloads binaries nor connects apps. `--install` explicitly downloads before serving; `connect` only writes configuration, while `serve --connect` also starts HTTP. Restart the connected app and call `profile.whoami`. These MCP entries reject writes, including `memory.ingest`. An authorized local write uses the authenticated HTTP API; the CLI README includes a synthetic first-ingest example.
 
-Hosted endpoint (no install): `https://api.shogunagent.dev/mcp` (Streamable HTTP). `discover`, `inspect` and narrow reads work without a key. Writes and metered runs return `402` with the exact amount and a `payment.accepts[].url` the human can open once to attach a card; after that you spend within your cap.
+Version-lock: the skill version above matches the CLI minor version. If `help --json` reports a different minor, read the skill from the matching checkout or release before continuing.
+
+For a hosted deployment, use the operator-confirmed MCP URL and an agent key. The configured public URL in this repository is `https://api.shogunagent.dev/mcp` (Streamable HTTP); its presence in the code does not establish that a service is live. Free reads still require authorization for the principal's data. After authentication, a metered call with insufficient credit returns `402` with payment details; respect the key's cap.
 
 ## Auth
 
-- Local sidecar: no secret. The connection is granted per agent id.
-- Hosted: `Authorization: Bearer sa_live_…` from `POST /v1/agents` (self-registration, no email) or from the human. Scopes: `read`, `write`, `run`. Never paste the key into a chat, a log or a file.
+- Local HTTP: `Authorization: Bearer <local token>`. The CLI obtains the token from `SHOGUN_API_TOKEN` or the data directory's `api.token`; the store key comes from `SHOGUN_DB_KEY` or `db.key`. Existing stores require their original key. Generated secret files have mode 0600; the CLI does not put secret values in MCP configuration. Its stdio MCP connection is read-only.
+- Hosted: `Authorization: Bearer sa_live_…`, supplied by the operator or obtained through the deployment's `POST /v1/agents` registration flow. Use the scopes granted to that key (`read`, `write`, `run`, or write-only `ingest`). Never paste credentials into chat, logs or MCP configuration.
 
 ## Cost
 
@@ -394,7 +402,7 @@ Tool annotations tell you the tier before you call: `readOnlyHint: true` is L1; 
 
 - `next_action` on every error says what to do: `top_up`, `approve_at_url`, `retry_after`, `narrow_query`, `not_allowed`.
 - `source_not_allowed`: this connection may not read that source (for example meetings). Do not work around it.
-- `memory_update_pending`: the store is being upgraded by its owner app. Wait and retry; do not create a new store.
+- `memory_update_pending`: the store is missing or awaiting an upgrade. Have its owner provision or upgrade it; installing CLI binaries does not create the store. `memory_newer_than_app` requires a compatible server version.
 - `hints` on a result may name a cheaper or better-fitting tool. Prefer it when it fits the task.
 
 ## Rules

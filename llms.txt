@@ -4,11 +4,12 @@
 
 For teams running many AI agents, ShogunAgent is the shared state layer that gives every agent one calibrated model of the user's work (people, projects, commitments, open loops) with provenance on every fact and a human gate on every consequential action.
 
-Skill version 0.1.0. Hosted MCP endpoint (Streamable HTTP, 2026-07-28): https://api.shogunagent.dev/mcp. Local: `npx shogunagent@0.1`. Reads are free; writes and runs are metered in micro-USD and the first metered call without a wallet answers 402 with a top-up URL.
+Skill version 0.1.0. Check the repository's release status before relying on npm packages, release downloads or a hosted service. The configured hosted MCP URL is https://api.shogunagent.dev/mcp (Streamable HTTP, 2026-07-28); use an operator-confirmed endpoint and credentials. Local setup requires binaries, an existing encrypted store and its matching key. Bare `npx shogunagent@0.1` only serves; installation and MCP connection are explicit steps (see SKILL.md and the CLI guide). Reads of the principal's data are free but require authorization; hosted writes and runs are metered in micro-USD.
 
 ## Start here
 
 - [SKILL.md](https://github.com/Torutesu/Shogunagent/blob/main/SKILL.md): the skill agents install: when to use it and when not, setup, auth, precedence of facts, cost, what L1 / L2 / L3 mean for the caller, statuses and errors, numbered rules.
+- [CLI guide](https://github.com/Torutesu/Shogunagent/blob/main/packages/cli/README.md): existing-store prerequisites, source builds, explicit install/connect commands, local authentication and a synthetic first ingest.
 - [Agent API guide](https://github.com/Torutesu/Shogunagent/blob/main/apps/api/README-agent-api.md): The agent-facing half of the gateway: `sa_` keys, a prepaid micro-USD wallet, hard caps, the `402` contract, quotes, receipts, and the metered MCP proxy. Plan: `docs/implementation-plan.md` E3 / E9…
 - [README](https://github.com/Torutesu/Shogunagent/blob/main/README.md): what the product is, the three pillars, how state is acquired, pricing and roadmap.
 
