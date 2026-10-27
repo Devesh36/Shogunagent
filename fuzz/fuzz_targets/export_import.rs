@@ -21,6 +21,7 @@ fuzz_target!(|data: &[u8]| {
     match import_v1(&mut conn, &text, &WriteContext::world(actor), 1_760_000_000_000) {
         Ok(report) => assert_eq!(report.entities + report.facts + report.tombstones + report.skipped, records),
         Err(ImportError::NotExportV1) => assert!(!is_export_v1(&text)),
+        Err(ImportError::NotExportV2) => panic!("the v1 importer answered with the v2 refusal"),
         Err(ImportError::TooLarge) => {}
         Err(ImportError::Db(error)) => panic!("database error on a malformed package: {error:?}"),
     }
