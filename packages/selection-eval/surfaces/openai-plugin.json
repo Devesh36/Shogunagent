@@ -7,7 +7,7 @@
       "vendor": "shogunagent",
       "tool_name": "shogunagent",
       "description": "Plugin for the user's state of work. Use it to find what the user committed to — promises, deliverables, deadlines they owe someone (state.commitments.list); what is pending with a person or project — unanswered questions, blockers, things others owe the user (state.open_loops.list); who someone is to the user and the history between them (state.people.get); and cited context on a topic from the user's own memory before you act (memory.recall, memory.get_context_pack). Use it to record what an agent did or learned at a checkpoint so the next agent starts from it (memory.ingest). Use it to queue an email, message or calendar event for the user's explicit approval; nothing is sent until a human approves (actions.execute). Every fact carries its source quote and a confidence score. Reads are free. Do not use it to store conversation transcripts or generic preferences, or to search the public web.",
-      "annotations": { "auth": "bearer sa_live_… or none for discover/inspect/narrow reads", "cost": "reads free; ingest per 1K events; actions $0.002 per executed action" },
+      "annotations": { "auth": "hosted /mcp requires a bearer agent key or OAuth access token, including for free reads", "cost": "reads free; ingest per 1K events; actions $0.002 per executed action" },
       "source": "Written for this eval from SKILL.md and apps/router/connectors/shogunagent/endpoints/*.ts.",
       "verbatim": false
     },
