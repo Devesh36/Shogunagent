@@ -22,9 +22,17 @@ The synthetic conversation starts on Monday, 26 October 2026, in the host timezo
 
 Each stage checks ingest idempotency, the exact source quote and event, confidence
 bands, and isolation from a second principal whose encrypted store uses another key.
-Repeating the same hour must make no further model calls.
+Repeating the same hour must make no further model calls. After each stage, every
+handle for that principal is released and its encrypted store is reopened. Recall
+must be unchanged, and replaying the ingest must still insert nothing.
 
-A second test runs four adversarial model answers through the same parser and
+A snooze scenario uses `state.update` to defer both the commitment and the waiting
+loop. Neither may appear as a current recall item or context fact before its wake
+time, including after the store is reopened. At the exact wake time both must return
+with their source quotes, without another model call. Clearing a snooze must also
+restore the items immediately. Source history remains searchable throughout.
+
+An adversarial test runs four model answers through the same parser and
 persistence path: invented quotes, event IDs not shown to the model, confidence
 below the consolidator threshold, and another principal's source text. None may
 become authoritative state. A malformed-provider-output test also proves that a
@@ -33,6 +41,30 @@ failed live answer cannot silently fall back to the scripted replay.
 The default runner uses **hand-authored model answers**. Passing it verifies the
 engine's contracts and catches regressions; it measures no real model's extraction
 quality. The normal CI `daemon-server` test run includes these tests automatically.
+
+## Full local stack
+
+Use Node 22 from `.nvmrc`, pnpm from `package.json`, the Rust/SQLCipher build
+dependencies, and Python with the `packages/sdk-py` dependencies installed. A local
+PostgreSQL instance must be running, with a role allowed to create databases.
+
+```bash
+nvm use
+pnpm install --frozen-lockfile
+cargo build --locked -p shogun-core --features daemon-server --bin shogun-api
+SHOGUN_E2E_POSTGRES_URL='postgres://localhost:5432/postgres?sslmode=disable' pnpm test:e2e
+```
+
+Add your local database username to the URL if it differs from your OS username.
+The runner accepts only loopback database hosts, creates a randomly named test
+database and encrypted stores, and removes them when finished. It starts the real
+sidecar, gateway and router, then checks both SDKs, tenant isolation, exactly-once
+ingest billing, free reads, pending L3 approvals and a sidecar process restart.
+It makes no provider calls and sends no messages.
+
+On machines with limited disk space, the Rust commands can use
+`CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0` to omit
+debug symbols and incremental compilation artifacts.
 
 ## Opt-in live runner
 
@@ -70,3 +102,7 @@ when reporting a live run.
   receive a private source quote and that an invalid quote falls back to valid proof.
 - Recall still returned completed commitments and closed loops as current state
   items. They are now omitted from those items; dated source evidence remains searchable.
+- Snoozed commitments and loops still appeared as current recall items and inline
+  context facts. Both paths now honor `deferred_until`, using the store's clock and
+  the existing wake-time predicate. The regression failed with both snoozed rows
+  returned at high confidence before the fix.
