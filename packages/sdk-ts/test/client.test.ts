@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AuthenticationError, HOSTED_BASE_URL, LOCAL_BASE_URL, PaymentRequiredError, PermissionDeniedError, RateLimitError,
   ServiceUnavailableError, ShogunAgent, ToolError, TransportError,
 } from "../src/index.js";
-import { FakeFetch, PAYMENT_402, ingestPayload, recallPayload, rpcResult, toolText } from "./fake-fetch.js";
+import { FakeFetch, PAYMENT_402, ingestPayload, recallPayload, response, rpcResult, toolText } from "./fake-fetch.js";
 
 function client(fake: FakeFetch, extra: Record<string, unknown> = {}) {
   return new ShogunAgent({ apiKey: "sa_live_test", fetch: fake.fetch, actor: "agent:test", ...extra });
@@ -45,6 +45,48 @@ describe("transport", () => {
   it("maps a fetch failure to TransportError", async () => {
     const c = new ShogunAgent({ fetch: async () => { throw new Error("ECONNREFUSED"); } });
     await expect(c.recall("x")).rejects.toBeInstanceOf(TransportError);
+  });
+
+  it.each(["MCP", "REST"] as const)("times out a stalled %s response body after headers arrive", async (transport) => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    let finishBody: ((text: string) => void) | undefined;
+    const c = new ShogunAgent({
+      timeoutMs: 25,
+      fetch: async (_url, init) => {
+        signal = init?.signal;
+        return {
+          ...response({ body: {} }),
+          text: () => new Promise<string>((resolve, reject) => {
+            finishBody = resolve;
+            signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+          }),
+        };
+      },
+    });
+    const outcome = (transport === "MCP" ? c.recall("x") : c.rest("/example")).catch((e: unknown) => e);
+    try {
+      await vi.advanceTimersByTimeAsync(25);
+      expect(signal?.aborted).toBe(true);
+      expect(await outcome).toBeInstanceOf(TransportError);
+      expect(await outcome).toMatchObject({ code: "transport_error", nextAction: "retry_after" });
+    } finally {
+      finishBody?.("{}");
+      await outcome;
+      vi.useRealTimers();
+    }
+  });
+
+  it("maps a response body read failure to TransportError", async () => {
+    const c = new ShogunAgent({
+      fetch: async () => ({
+        ...response({ body: {} }),
+        text: async () => { throw new TypeError("terminated"); },
+      }),
+    });
+    const error = await c.recall("x").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).toMatchObject({ code: "transport_error", nextAction: "retry_after" });
   });
 });
 
