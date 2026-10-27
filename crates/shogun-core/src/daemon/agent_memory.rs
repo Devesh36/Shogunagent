@@ -277,8 +277,9 @@ impl Db {
     }
 
     fn recall_in_scope(&self, request: &RecallRequest, scope: ReadScope) -> Result<RecallOutcome, String> {
+        let now = self.now_ms();
         let items = self
-            .with_conn("agent_recall.items", |conn| recall_items(conn, &request.query, scope))
+            .with_conn("agent_recall.items", |conn| recall_items(conn, &request.query, scope, now))
             .map_err(|_| "recall_unavailable".to_string())?;
         let pack = self.assemble_context(&request.query, RECALL_HITS, RECALL_EXCERPT_CHARS);
         Ok(cut_to_budget(items, pack.facts, pack.evidence, request.budget_tokens))
@@ -329,8 +330,8 @@ fn proving_quote(conn: &Connection, table: StateTable, id: i64, scope: ReadScope
 }
 
 /// The state rows a query names, with band and quote (E5-T3). Low rows are never returned;
-/// scratch rows only within `scope`.
-fn recall_items(conn: &Connection, query: &str, scope: ReadScope) -> Result<Vec<RecallItem>, rusqlite::Error> {
+/// scratch rows only within `scope`. Snoozed work returns when its wake time is reached.
+fn recall_items(conn: &Connection, query: &str, scope: ReadScope, now: i64) -> Result<Vec<RecallItem>, rusqlite::Error> {
     let words = match_words(query);
     let mut items = Vec::new();
     if words.is_empty() {
@@ -354,7 +355,7 @@ fn recall_items(conn: &Connection, query: &str, scope: ReadScope) -> Result<Vec<
     };
     for row in state::list_commitments_scoped(conn, scope)?
         .iter()
-        .filter(|row| row.status != "done" && row.status != "cancelled")
+        .filter(|row| row.status != "done" && row.status != "cancelled" && !row.is_deferred(now))
         .filter(|row| matches(&row.description, &words))
         .take(RECALL_ITEMS_PER_KIND)
     {
@@ -362,7 +363,7 @@ fn recall_items(conn: &Connection, query: &str, scope: ReadScope) -> Result<Vec<
     }
     for row in state::list_open_loops_scoped(conn, scope)?
         .iter()
-        .filter(|row| row.status != "closed")
+        .filter(|row| row.status != "closed" && !row.is_deferred(now))
         .filter(|row| matches(&row.description, &words))
         .take(RECALL_ITEMS_PER_KIND)
     {
