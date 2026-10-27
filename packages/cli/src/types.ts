@@ -45,6 +45,8 @@ export type Fetch = (url: string, init?: { headers?: Record<string, string> }) =
 }>;
 
 export interface Platform {
+  /** Running Node.js version; defaults to process.versions.node when omitted. */
+  nodeVersion?: string;
   /** `process.platform`. */
   os: "linux" | "darwin" | "win32" | string;
   /** `process.arch`. */

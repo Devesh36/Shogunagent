@@ -146,7 +146,7 @@ export function fakeFetch(table: FetchTable): { fetch: Fetch; requested: string[
 export const HOME = "/home/alice";
 
 export function linuxPlatform(overrides: Partial<Platform> = {}): Platform {
-  return { os: "linux", arch: "x64", homedir: HOME, env: { PATH: "/usr/bin", HOME }, interactive: false, ...overrides };
+  return { nodeVersion: "22.13.0", os: "linux", arch: "x64", homedir: HOME, env: { PATH: "/usr/bin", HOME }, interactive: false, ...overrides };
 }
 
 export interface Rig {
