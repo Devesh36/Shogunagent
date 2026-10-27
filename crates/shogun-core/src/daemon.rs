@@ -49,6 +49,7 @@ pub use wrap_generation::WrapLines;
 mod activity;
 /// `memory.ingest` / `memory.recall` on the store (E4-T3).
 mod agent_memory;
+pub mod api_entitlements;
 mod chat;
 mod chat_grounding;
 pub use chat_grounding::{ChatGrounding, ChatRetrieval, CHAT_EVIDENCE_CHARS, CHAT_EVIDENCE_HITS};

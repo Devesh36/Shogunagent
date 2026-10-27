@@ -305,10 +305,10 @@ fn main() -> std::io::Result<()> {
     backend = backend
         .with_search_index(shogun_core::db_backend::SearchIndexConfig::for_daemon(&db_path))
         .with_dream_action_facts(shogun_core::db_backend::dream_action_facts_for_daemon);
-    let plan_source = shogun_mcp::plan_source::FilePlanSource::from_env();
+    let plan_source = shogun_core::daemon::api_entitlements::ApiEntitlementSource::for_build();
     // Issue #744: a locked plan still starts the server (tools/list answers), so say why once
     // here, and let every plan_required answer and the handshake carry the same reason.
-    if let Some(lock) = plan_source.diagnose(u64::try_from(now_ms()).unwrap_or(0)).lock {
+    if let Some(lock) = plan_source.lock(u64::try_from(now_ms()).unwrap_or(0)) {
         eprintln!("{}", startup_report::plan_lock_note(FACE, lock));
     }
     let lock_source = plan_source.clone();
@@ -330,7 +330,7 @@ fn main() -> std::io::Result<()> {
     let server = McpServer::new(backend, approvals, now_ms, move || {
         plan_source.resolve(u64::try_from(now_ms()).unwrap_or(0))
     })
-    .with_plan_lock(move || lock_source.diagnose(u64::try_from(now_ms()).unwrap_or(0)).lock)
+    .with_plan_lock(move || lock_source.lock(u64::try_from(now_ms()).unwrap_or(0)))
     // #800: every tool call re-checks the store's schema, so the app upgrading it needs no restart.
     .with_memory_gate(move || store.unavailable())
     .with_approval_store(approval_store)
