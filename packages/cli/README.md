@@ -14,7 +14,7 @@ For a **fresh local evaluation**, the source-built sidecar also supports `shogun
 
 The default OSS server build does not require a ShogunAI desktop subscription. Builds with the `desktop` Cargo feature retain the desktop's signed-plan checks. Authentication, the existing-store requirement and action approvals apply in either build.
 
-The data directory contains `memory.db`, `api.token`, `db.key` and `memory_api.json`. Its defaults are `~/.local/share/shogunagent` on Linux (or `$XDG_DATA_HOME/shogunagent`), `~/Library/Application Support/shogunagent` on macOS, and `%APPDATA%\shogunagent` on Windows; `SHOGUNAGENT_DATA_DIR` overrides it. Choose the directory containing the existing store.
+The data directory contains `memory.db`, `api.token`, `db.key` and `memory_api.json`. Its defaults are `~/.local/share/shogunagent` on Linux (or `$XDG_DATA_HOME/shogunagent`), `~/Library/Application Support/shogunagent` on macOS, and `%APPDATA%\shogunagent` on Windows; `SHOGUNAGENT_DATA_DIR` overrides it. Choose the absolute directory containing the existing store.
 
 `SHOGUN_DB_KEY` and `SHOGUN_API_TOKEN` take precedence over `db.key` and `api.token`. Otherwise the CLI uses those files and generates missing secrets with mode 0600. A newly generated key cannot decrypt an existing store: provide the matching key before starting. Supply secrets through the owner's secure environment or existing protected files, never through chat or MCP configuration. The CLI creates `memory_api.json` with `enabled: true` only when absent; it preserves an existing setting.
 
@@ -30,6 +30,7 @@ cargo build --release --locked -p shogun-core --features daemon-server --bin sho
 export SHOGUNAGENT_BIN_DIR="$(pwd)/target/release"
 export SHOGUNAGENT_DATA_DIR="/absolute/path/to/existing-store-directory"
 node packages/cli/bin/shogunagent.mjs help --json
+node packages/cli/bin/shogunagent.mjs doctor
 node packages/cli/bin/shogunagent.mjs serve
 ```
 
@@ -55,11 +56,20 @@ npx shogunagent@0.1 help --json
 | `connect` | Show proposed MCP configuration changes and ask before writing; `--yes` applies them non-interactively. Does not start HTTP. |
 | `serve --connect` | Apply MCP configuration changes and start HTTP. The flag explicitly authorizes those configuration writes. |
 | `mcp` | Run the stdio MCP server behind the read-only filter. |
+| `doctor --json` | Check local single-store prerequisites without starting a process or changing files. Exit 1 reports a blocker; warnings alone return 0. |
 | `status --json` | Report paths, located binaries, the recorded sidecar port and client configuration status. |
 
 Downloads come from `Torutesu/Shogunagent` release assets named `shogunagent-<tag>-<target>.tar.gz` with a `.sha256` file. The CLI verifies the checksum before extraction and installs under the data directory.
 
 Connecting adds `"shogunagent": { "command": "npx", "args": ["-y", "shogunagent@0.1", "mcp"] }` to detected Claude Code, Cursor, Codex or Claude Desktop configurations. An explicitly set data directory is included as an environment path. Existing unrelated entries are preserved; changed files get a backup and are checked for concurrent edits. Restart the app, then call `profile.whoami` to verify the connection. On a Mac with an existing ShogunAI app connection, use that connection and its granted permissions instead of setting up another store.
+
+## Check local prerequisites
+
+From a built checkout, run `node packages/cli/bin/shogunagent.mjs doctor` (or append `--json` for structured checks). It checks Node.js, trusted binary paths, the existing `memory.db` path, store-key availability and shape, token availability, and `memory_api.json`. Environment overrides follow the same precedence as `serve`. Secret values and configuration contents are never printed.
+
+A missing store, missing or malformed store key, missing binaries, or disabled API settings or malformed settings JSON is a blocker. A missing token or missing settings file is a warning because `serve` normally creates those files; `doctor` does not. Settings with fields beyond `enabled` carry a warning because only that flag and JSON syntax are checked; the sidecar validates the full settings. Unsupported release targets are warnings so source-built binaries remain usable. No release availability or provider requests are made.
+
+A successful report checks only these prerequisites: it does not verify that the key decrypts the store, that the schema is compatible, that all settings fields are valid, that settings seals or plan access permit use, that binaries execute, that directories are writable, or that a server is healthy. Follow the sidecar's startup result for those checks. This command diagnoses the CLI's single-store mode; the separate `--multi` evaluation mode has its own setup in the deployment guide.
 
 ## First authenticated write
 

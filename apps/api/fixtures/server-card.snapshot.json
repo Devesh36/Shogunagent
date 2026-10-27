@@ -19,8 +19,7 @@
   },
   "authentication": {
     "anonymous": {
-      "allowed": true,
-      "scope": "router.discover, router.inspect and narrow reads"
+      "allowed": false
     },
     "schemes": [
       {

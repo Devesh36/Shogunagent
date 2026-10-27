@@ -111,6 +111,53 @@ describe("/.well-known/mcp/server-card.json (E10-T1)", () => {
     expect(body.tools).toHaveLength(FIXTURE_TOOL_TABLE.tools.length);
     expect(rig.logLines.some((l) => l.startsWith("GET /.well-known/mcp/server-card.json 200"))).toBe(true);
   });
+
+  it("advertises the authentication required by the hosted MCP route, including free reads", async () => {
+    const rig = makeAgentRig();
+    const response = await rig.app.request("/.well-known/mcp/server-card.json");
+    expect(response.status).toBe(200); // Discovery metadata itself remains public.
+    const card = await response.json() as { authentication: { anonymous: { allowed: boolean } } };
+    for (const [method, name] of [["initialize", undefined], ["tools/list", undefined], ["tools/call", "state.commitments.list"]] as const) {
+      const denied = await rig.app.request("/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json", "mcp-method": method, ...(name ? { "mcp-name": name } : {}) },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: name ? { name, arguments: {} } : {} }),
+      });
+      expect(denied.status).toBe(401);
+      expect(denied.headers.get("www-authenticate")).toContain("Bearer");
+    }
+    expect(rig.upstreamCalls).toHaveLength(0);
+    expect(card.authentication.anonymous.allowed).toBe(false);
+
+    const { key } = await registerAgent(rig, { scopes: ["read"] });
+    const allowed = await mcp(rig, key, { "mcp-method": "tools/call", "mcp-name": "state.commitments.list" });
+    expect(allowed.status).toBe(200);
+    expect(rig.upstreamCalls).toHaveLength(1);
+    expect(allowed.headers.get("x-usage-cost-micro-usd")).toBe("0");
+  });
+
+  it("requires credentials consistently in hosted connection metadata and registry listings", async () => {
+    const rig = makeAgentRig();
+    const configResponse = await rig.app.request("/.well-known/mcp-config");
+    expect(configResponse.status).toBe(200);
+    const config = await configResponse.json() as { required: string[]; "x-mcp": { authorization: { optional: boolean } } };
+    expect(config.required).toContain("apiKey");
+    expect(config["x-mcp"].authorization.optional).toBe(false);
+
+    const agentResponse = await rig.app.request("/.well-known/agent-card.json");
+    expect(agentResponse.status).toBe(200);
+    const agent = await agentResponse.json() as { security: Record<string, unknown>[] };
+    expect(agent.security.length).toBeGreaterThan(0);
+    expect(agent.security.every((requirement) => Object.keys(requirement).length > 0)).toBe(true);
+
+    const registry = JSON.parse(read("server.json")) as { remotes: Array<{ headers: Array<{ name: string; isRequired: boolean; isSecret: boolean }> }> };
+    for (const remote of registry.remotes) {
+      expect(remote.headers.find((header) => header.name === "Authorization")).toMatchObject({ isRequired: true, isSecret: true });
+    }
+    // Smithery's committed YAML mirrors the served JSON Schema.
+    expect(read("smithery.yaml")).toContain("required: [apiKey]");
+    expect(read("smithery.yaml")).not.toContain("Without it discover");
+  });
 });
 
 describe("/.well-known/agent-card.json (E10-T3)", () => {
@@ -145,7 +192,7 @@ describe("/.well-known/agent-card.json (E10-T3)", () => {
     expect(body).not.toHaveProperty("signatures");
     expect(verifyAgentCard(body)).toEqual({ ok: false, reason: "unsigned" });
     expect((body.skills as unknown[]).length).toBe(AGENT_SKILLS.skills.length);
-    expect((body.security as unknown[])).toEqual([{ agentKey: ["read", "write", "run"] }, {}]);
+    expect((body.security as unknown[])).toEqual([{ agentKey: ["read", "write", "run"] }]);
   });
 
   it("is signed with the configured Ed25519 key and the signature verifies from the card alone", async () => {
@@ -341,14 +388,14 @@ describe("/.well-known/status.json and /health (E10-T7)", () => {
 });
 
 describe("/.well-known/mcp-config (Smithery) and llms.txt", () => {
-  it("serves a JSON Schema with an optional key and the connection facts", async () => {
+  it("serves a JSON Schema with a required key and the connection facts", async () => {
     const rig = makeAgentRig();
     const res = await rig.app.request("/.well-known/mcp-config");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("schema+json");
     const doc = (await res.json()) as Record<string, unknown>;
     expect(doc).toEqual(mcpConfigDocument(ctx));
-    expect(doc.required).toEqual([]);
+    expect(doc.required).toEqual(["apiKey"]);
     expect((doc["x-mcp"] as { url: string }).url).toBe(`${BASE}/mcp`);
   });
 

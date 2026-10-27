@@ -16,17 +16,17 @@ This repository holds the strategy, the research and the code for ShogunAgent: t
 
 For teams running many AI agents, ShogunAgent is the shared state layer that gives every agent one calibrated model of the user's work (people, projects, commitments, open loops) with provenance on every fact and a human gate on every consequential action.
 
-Unlike memory APIs that store free text in a vendor cloud, it is **typed, permission-tiered, local-first, and portable**.
+Its design is **typed, permission-tiered, local-first, and portable**. These capabilities overlap with other memory and context systems; the comparison below names specific products and deployment options rather than treating the category as uniform.
 
-It is not a memory API. "Agent memory" is a saturated category (Mem0, Zep, Letta, supermemory, Cognee, Engram) and the labs now ship personalization memory for free (OpenAI Dreaming, Anthropic Managed Agents memory, Google Memory Bank, AWS AgentCore, Microsoft Copilot). ShogunAgent names a different category: not what an agent remembers, but what is true now.
+ShogunAgent focuses on current work state: people, projects, commitments and open loops. Memory and context systems such as Mem0, Zep / Graphiti and Letta address overlapping needs; evaluate specific capabilities and deployment requirements rather than relying on category names.
 
 ## 2. Value proposition (three pillars, no more)
 
-| Pillar | Claim | Proof in the codebase | What competitors lack |
+| Pillar | Claim | Proof in the codebase | Comparison context |
 |---|---|---|---|
-| **Typed state, not text memory** | Every fact is a typed row with a verbatim quote from its source event and a confidence score. Newer facts supersede older ones, contradictions are explicit, confidence decays over time. | Writes with empty `state_provenance` are rejected at the repository layer. High / Medium / Low bands enforced in one place (`shogun-fusion/confidence.rs`). The loop consolidator stores nothing without an exact quote match and confidence ≥ 0.84. | supermemory states it is "not a system of record: no SQL, no joins, no primary keys." Mem0 and Zep are free-text fact stores. |
-| **Permission tiers on every action** | Reads run immediately (L1). Writes touching user data need one-tap confirmation (L2). External sends and payments need explicit human approval (L3). Enforced by type, the same for every agent. | `SendAction` is L3 by construction in `shogun-agents`. Maps 1:1 onto MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` and MRTR `input_required` / URL elicitation. | 93% of agent permission prompts are approved without reading. Competitors expose binary read/write. |
-| **Local-first, open, portable** | Data stays on the device by default. The cloud path retains no bodies. The engine is open source. State exports in an open format. | Zero-retention relay (traceability log has no body column). Secret redaction: recall 1.0, 0 false positives. User-held keys. | Every funded vendor is cloud-first. supermemory's OSS is clients only; the engine is closed. 7 of 7 memory products tested lock users in. |
+| **Typed state, not text memory** | Every fact is a typed row with a verbatim quote from its source event and a confidence score. Newer facts supersede older ones, contradictions are explicit, confidence decays over time. | Writes with empty `state_provenance` are rejected at the repository layer. High / Medium / Low bands enforced in one place (`shogun-fusion/confidence.rs`). The loop consolidator stores nothing without an exact quote match and confidence ≥ 0.84. | [Graphiti](https://github.com/getzep/graphiti) also supports typed entities and edges, source-episode provenance and temporal invalidation. Typed state and provenance are not exclusive to ShogunAgent. |
+| **Permission tiers on every action** | Reads run immediately (L1). Writes touching user data need one-tap confirmation (L2). External sends and payments need explicit human approval (L3). Enforced by type, the same for every agent. | `SendAction` is L3 by construction in `shogun-agents`. Maps 1:1 onto MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` and MRTR `input_required` / URL elicitation. | Compare the actions each product gates and how approval is enforced. This repository does not establish that competing systems only support binary read/write permissions. |
+| **Local-first, open, portable** | Data stays on the device by default. The cloud path retains no bodies. The engine is open source. State exports in an open format. | Zero-retention relay (traceability log has no body column). Secret redaction: recall 1.0, 0 false positives. User-held keys. | [Mem0](https://github.com/mem0ai/mem0) offers an OSS library and self-hosted server. [Letta](https://docs.letta.com/agent-sdk/memory) supports self-hosted Git memory. Local deployment and portability require product-specific comparison. |
 
 **Delivery line for the router:** one endpoint for your agents: discover tools, run them under permission tiers, and keep what they learned as state you own.
 
@@ -73,7 +73,7 @@ ShogunAgent is model-agnostic. Our own LLM use is extraction and consolidation o
 
 **Where the labs will win and we do not compete:** personalization memory inside their own products, session state inside their own APIs, storage at the cost floor.
 
-**Where they structurally will not go and we stand:** cross-vendor state (no lab becomes the neutral record for another lab's agents), portability (lock-in is their revenue model), human-approval governance across agents from different vendors, device-level truth.
+**Our focus:** cross-vendor work state, portable data, human-approval governance across agents from different vendors, and device-level context. This is a product direction, not a claim that model vendors cannot provide these capabilities.
 
 **How we relate:** customer, supplier, never competitor. Anthropic's memory tool is storage-agnostic, so we are its backend; we list in the Claude Code plugin marketplace, the Anthropic directory, and the MCP Registry. OpenAI: Plugin directory plus an Agents SDK middleware. Google: ADK and Vertex memory interfaces. AWS: the external store behind AgentCore's self-managed memory tier. Microsoft Copilot's communication memory is the closest comparable; we offer the same to agents outside M365.
 
@@ -83,10 +83,20 @@ ShogunAgent is model-agnostic. Our own LLM use is extraction and consolidation o
 
 | Layer | Players | Our difference | Stance |
 |---|---|---|---|
-| Memory APIs | Mem0, Zep, Letta, supermemory, Cognee, Engram | Typed state vs free text; three tiers vs read/write; local-first vs cloud-first; open engine vs closed | Direct competitors; we name a different category |
-| Routers and registries | Monid, Composio, Arcade + Smithery, Glama, Coinbase Agentic Market | No permission tiers, no state | We build our own router as the front door and list on all of them |
-| Enterprise context platforms | Microsoft Copilot, Glean, Jedify, Interloom | Suite-bound or data-platform-bound; not agent-neutral; no human gate | The real comparables; where we must win |
-| Capture layer | Screenpipe, Limitless (Meta), Rewind (stopped) | Capture without state inference | Mostly exited. Lesson: nobody pays for raw recordings |
+| Memory and context systems | Mem0, Zep / Graphiti, Letta, supermemory, Cognee, Engram | Compare work-state schemas, approval enforcement, deployment, provenance and export behavior for each product; capabilities overlap | Overlapping use cases; evaluate the deployed product and edition |
+| Routers and registries | Monid, Composio, Arcade + Smithery, Glama, Coinbase Agentic Market | ShogunAgent combines tool routing with its work-state and permission engine; compare individual integrations | Potential integrations and competing routing workflows |
+| Enterprise context platforms | Microsoft Copilot, Glean, Jedify, Interloom | Compare supported data sources, agent interfaces and governance in the relevant edition | Comparable work-context use cases |
+| Capture layer | Screenpipe, Limitless (Meta), Rewind | Compare capture sources, inference and current availability separately | Possible inputs and overlapping context workflows |
+
+### Primary-source comparison notes
+
+Reviewed on 2026-10-27; these are documented capabilities, not a comparative benchmark or a test of those products:
+
+- **Mem0:** the [official repository](https://github.com/mem0ai/mem0) distinguishes its open-source library, self-hosted server and cloud platform. Its documentation covers [scoped memory addition](https://docs.mem0.ai/core-concepts/memory-operations/add), [OSS metadata filters](https://docs.mem0.ai/open-source/features/metadata-filtering) and [deletion](https://docs.mem0.ai/core-concepts/memory-operations/delete). Check the relevant edition before assuming parity.
+- **Graphiti and Zep:** [Graphiti](https://github.com/getzep/graphiti) is the open-source framework, distinct from Zep's managed platform. It documents Pydantic entity/edge types, source episodes, temporal validity and invalidation, and hybrid retrieval. Calling both free-text stores omits these capabilities.
+- **Letta:** its [memory documentation](https://docs.letta.com/agent-sdk/memory) describes persistent Git memory, in-context and on-demand memory, shared repositories, and a self-hosted Git-remote option. Hosted shared repositories and self-hosted remotes have different operational requirements.
+
+ShogunAgent's proposed advantage is the combination of work-specific state, evidence and action governance. Demonstrate that combination with reproducible examples; do not infer exclusive features, universal lock-in or superiority from category labels.
 
 ## 6. Moat (strongest first, honestly)
 
@@ -143,7 +153,7 @@ A general router competing on price alone; our own payment rails (payments run t
 
 **Who, in order:** (1) power users of coding agents (Claude Code, Codex, Cursor), (2) developers building agent products (Agents SDK, Vercel AI SDK, Mastra, LangGraph), (3) small teams running many agents, (4) enterprises promoted from 2–3. Consumer memory products all exited; we sell to people who run agents daily, not to general consumers. Existing ShogunAI Mac users are the day-one cohort: their agents already have read connections auto-installed.
 
-**Open:** the engine (state tables, confidence, consolidator, Dream Cycle), local MCP / REST / CLI, connector definitions and the router engine, SKILL.md, the export format, all six eval harnesses. License: Apache-2.0. **Closed:** hosted sync, remote approvals, wallet and billing, the hosted router catalog and provider contracts. Funnel: same API locally and hosted, switch `baseURL`. Unlike supermemory, the engine itself is open.
+**Open:** the engine (state tables, confidence, consolidator, Dream Cycle), local MCP / REST / CLI, connector definitions and the router engine, SKILL.md, the export format, all six eval harnesses. License: Apache-2.0. **Closed:** hosted sync, remote approvals, wallet and billing, the hosted router catalog and provider contracts. Funnel: same API locally and hosted, switch `baseURL`. The engine itself is open; licensing and hosted-service availability must be compared per product.
 
 **OSS launch mechanics:** a README GIF that works in ten seconds (`npx shogunagent`, and your coding agent knows your open loops); Show HN built around a reproducible claim (same-harness results, audit-style posts), not a feature list; the benchmark harness published so competitors' numbers can be reproduced; an "open-loop tracking" benchmark offered to the community; connector definitions as the low-friction contribution path.
 
@@ -151,7 +161,7 @@ A general router competing on price alone; our own payment rails (payments run t
 
 **Platform shelves, all in English, from the start:** Claude Code plugin marketplace → Anthropic directory; official MCP Registry; Cursor / Windsurf MCP configs; OpenAI Plugin directory; Glama, Smithery, Composio toolkit, Monid once a memory category exists.
 
-**One-line integrations:** `withShogunAgent()` for Vercel AI SDK, OpenAI Agents SDK, Claude Agent SDK, Mastra, LangGraph, CrewAI. This is what drove Mem0's 5× API growth.
+**One-line integrations:** `withShogunAgent()` for Vercel AI SDK, OpenAI Agents SDK, Claude Agent SDK, Mastra, LangGraph, CrewAI. These adapters reduce the work needed to connect agents to ShogunAgent.
 
 **Not doing:** paid ads, SEO-first, conference booths, enterprise sales first.
 
@@ -220,7 +230,7 @@ Agents can also pay on the user's behalf under a **payment mandate**: a human gr
 
 ### Selection eval: the metric that matters
 
-A harness that runs from CI: given a task description, which tool does Claude, GPT, Gemini and an open model pick when ShogunAgent sits alongside Mem0, supermemory, Zep and the router's own alternatives, across the MCP Registry listing, the Claude Code plugin description, the OpenAI Plugin listing and the router's `discover`? The result is a selection rate per surface per model. Description changes ship only when this number does not fall. This is the agent-era equivalent of conversion-rate optimization, and nobody in the category runs it.
+A harness that runs from CI: given a task description, which tool does Claude, GPT, Gemini and an open model pick when ShogunAgent sits alongside Mem0, supermemory, Zep and the router's own alternatives, across the MCP Registry listing, the Claude Code plugin description, the OpenAI Plugin listing and the router's `discover`? The result is a selection rate per surface per model. Description changes ship only when this number does not fall. This measures discoverability under the stated evaluation conditions; it does not establish that other vendors lack similar evaluations.
 
 ### Being chosen inside our own router
 

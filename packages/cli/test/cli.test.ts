@@ -43,7 +43,7 @@ describe("help --json (for agents)", () => {
     expect(doc.skill_version).toBe(SKILL_VERSION);
     expect(doc.skill_minor).toBe("0.1");
     const commands = (doc.commands as Array<{ name: string }>).map((c) => c.name);
-    expect(commands).toEqual(["serve", "install", "connect", "disconnect", "mcp", "status", "help"]);
+    expect(commands).toEqual(["serve", "install", "connect", "disconnect", "mcp", "doctor", "status", "help"]);
     expect((doc.hosted as { mcp: string }).mcp).toBe("https://api.shogunagent.dev/mcp");
     expect((doc.local as { entry: unknown; scope: string }).entry).toEqual({ command: "npx", args: ["-y", "shogunagent@0.1", "mcp"] });
     expect((doc.local as { scope: string }).scope).toBe("read");

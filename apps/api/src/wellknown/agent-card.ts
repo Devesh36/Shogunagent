@@ -78,8 +78,8 @@ export function agentCard(ctx: WellknownContext, skills: GeneratedSkills = AGENT
         description: `Self-registration at POST ${links.register} (proof-of-work, no email). Scopes: read, write, run.`,
       },
     },
-    // Two acceptable requirement sets: a key, or nothing (discover, inspect and narrow reads).
-    security: [{ agentKey: ["read", "write", "run"] }, {}],
+    // The advertised hosted /mcp endpoint requires a bearer, including for free reads.
+    security: [{ agentKey: ["read", "write", "run"] }],
     defaultInputModes: ["application/json", "text/plain"],
     defaultOutputModes: ["application/json"],
     skills: skills.skills.map((s) => ({ id: s.id, name: s.name, description: s.description, tags: s.tags, inputModes: ["application/json"], outputModes: ["application/json"] })),

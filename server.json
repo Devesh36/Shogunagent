@@ -16,8 +16,8 @@
       "headers": [
         {
           "name": "Authorization",
-          "description": "Optional. Bearer sa_live_… from POST /v1/agents; without it discover, inspect and narrow reads work.",
-          "isRequired": false,
+          "description": "Required. Bearer sa_live_… from POST /v1/agents, or an OAuth access token. Hosted /mcp requires authentication, including for free reads.",
+          "isRequired": true,
           "isSecret": true,
           "format": "string"
         }

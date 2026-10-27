@@ -74,6 +74,13 @@ export const COMMANDS: readonly CommandHelp[] = [
     network: "none",
   },
   {
+    name: "doctor", usage: "shogunagent doctor [--json]",
+    summary: "Check local single-store prerequisites without starting anything: runtime, binary paths, store/key presence and API settings. Does not verify decryption, schema or server health. Exit 1 means a prerequisite failed.",
+    flags: [{ flag: "--json", meaning: "Machine-readable checks, warnings and limitations." }],
+    writes: "none",
+    network: "none",
+  },
+  {
     name: "status", usage: "shogunagent status [--json]",
     summary: "Whether binaries are installed, whether the sidecar is listening, which agent apps are connected.",
     flags: [{ flag: "--json", meaning: "Machine-readable." }],
