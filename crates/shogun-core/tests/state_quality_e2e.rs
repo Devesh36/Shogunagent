@@ -74,12 +74,16 @@ impl Scenario {
         Self { store, root, now }
     }
 
-    fn ingest(&self, db: &Db, stage: usize, messages: &[&str]) -> Vec<i64> {
-        let request = ingest_request(&json!({
+    fn request(stage: usize, messages: &[&str]) -> shogun_mcp::ingest_api::IngestRequest {
+        ingest_request(&json!({
             "events": messages.iter().map(|text| json!({"kind": "message", "title": "Chat with Toru", "content": text})).collect::<Vec<_>>(),
             "source": "synthetic-quality-eval", "actor": "agent:quality-eval", "thread_key": "nebula-with-toru",
             "idempotency_key": format!("stage-{stage}"),
-        })).unwrap();
+        })).unwrap()
+    }
+
+    fn ingest(&self, db: &Db, stage: usize, messages: &[&str]) -> Vec<i64> {
+        let request = Self::request(stage, messages);
         let result = db.agent_ingest(&request).unwrap();
         assert_eq!(result.inserted, messages.len());
         assert_eq!(result.rejected, 0);
@@ -269,7 +273,7 @@ impl BatchLane for EvaluationLane {
 
 fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
     let scenario = Scenario::new();
-    let alice = scenario
+    let mut alice = scenario
         .store
         .open(&PrincipalId::parse("alice").unwrap())
         .unwrap();
@@ -459,8 +463,36 @@ fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
             before,
             "same-hour replay makes no model call"
         );
+        let before_restart = recall(alice.db(), "Nebula");
+        drop(lane);
+        drop(alice);
+        assert!(scenario.store.close(&PrincipalId::parse("alice").unwrap()));
+        assert_eq!(
+            scenario.store.live_handles(),
+            1,
+            "only Bob's store remains open"
+        );
+        alice = scenario
+            .store
+            .open(&PrincipalId::parse("alice").unwrap())
+            .unwrap();
+        assert_eq!(
+            recall(alice.db(), "Nebula"),
+            before_restart,
+            "stage {stage}: state and evidence survive reopening the encrypted store"
+        );
+        let replay = alice
+            .db()
+            .agent_ingest(&Scenario::request(stage, messages))
+            .unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.inserted, 0);
+        assert_eq!(
+            replay.event_ids, sources,
+            "stage {stage}: ingest receipts survive reopening the encrypted store"
+        );
         println!(
-            "PASS stage {stage}: state, grounding, deadline/status, tenant isolation and replay"
+            "PASS stage {stage}: state, grounding, deadline/status, tenant isolation, replay and restart"
         );
     }
     assert_eq!(total_calls, 6);
@@ -473,6 +505,126 @@ fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
 #[test]
 fn commitment_changes_and_completion_preserve_grounded_state() {
     run_scenario(|_| None);
+}
+
+#[test]
+fn snoozed_state_stays_out_of_recall_until_wake_time_across_restarts() {
+    let scenario = Scenario::new();
+    let principal = PrincipalId::parse("alice").unwrap();
+    let alice = scenario.store.open(&principal).unwrap();
+    let sources = scenario.ingest(alice.db(), 0, &[PROMISE, WAITING]);
+    scenario.now.fetch_add(HOUR, Ordering::SeqCst);
+    let now = scenario.now.load(Ordering::SeqCst);
+    let lane = EvaluationLane {
+        db: alice.db().clone(),
+        stage: 0,
+        sources,
+        calls: AtomicUsize::new(0),
+        provider: None,
+        invalid: None,
+    };
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (outcome, _) = rt.block_on(tick_principal_batch(alice.db(), &lane, now));
+    assert_eq!(outcome, TickOutcome::Ran { complete: true });
+    let pack = recall(alice.db(), "Nebula");
+    let commitment = pack
+        .items
+        .iter()
+        .find(|item| item.kind == "commitment")
+        .unwrap()
+        .id;
+    let open_loop = pack
+        .items
+        .iter()
+        .find(|item| item.kind == "open_loop")
+        .unwrap()
+        .id;
+    let wake_at = now + HOUR;
+    for (table, id) in [("commitments", commitment), ("open_loops", open_loop)] {
+        assert!(alice
+            .db()
+            .state_update(
+                &json!({
+                    "table": table, "id": id, "deferred_until": wake_at,
+                })
+                .to_string()
+            )
+            .unwrap());
+    }
+    let assert_snoozed = |db: &Db| {
+        let pack = recall(db, "Nebula");
+        assert!(
+            pack.items
+                .iter()
+                .all(|item| !matches!(item.kind, "commitment" | "open_loop")),
+            "snoozed work must not appear as current state: {:?}",
+            pack.items
+        );
+        assert!(
+            pack.facts
+                .iter()
+                .chain(&pack.possibly)
+                .filter(|fact| !fact.starts_with("summary (unverified):"))
+                .all(|fact| !fact.contains(ACTION) && !fact.contains(QUESTION)),
+            "snoozed work must not return through context facts: {:?}",
+            pack.facts
+        );
+        assert!(
+            pack.evidence.iter().any(|e| e.excerpt.contains(PROMISE)),
+            "snoozing must preserve searchable source history"
+        );
+    };
+    assert_snoozed(alice.db());
+
+    // Release every DB handle, not just the LRU entry, before opening the encrypted store again.
+    drop(lane);
+    drop(alice);
+    assert!(scenario.store.close(&principal));
+    assert_eq!(scenario.store.live_handles(), 0);
+    let alice = scenario.store.open(&principal).unwrap();
+    scenario.now.store(wake_at - 1, Ordering::SeqCst);
+    assert_snoozed(alice.db());
+
+    scenario.now.store(wake_at, Ordering::SeqCst);
+    let pack = recall(alice.db(), "Nebula");
+    for (kind, id, quote) in [
+        ("commitment", commitment, PROMISE),
+        ("open_loop", open_loop, WAITING),
+    ] {
+        let item = pack
+            .items
+            .iter()
+            .find(|item| item.kind == kind && item.id == id)
+            .expect("work returns at the exact wake time without another model call");
+        assert_eq!(item.quote.as_deref(), Some(quote));
+    }
+
+    // Explicitly clearing a later snooze also makes both rows visible immediately.
+    for (table, id) in [("commitments", commitment), ("open_loops", open_loop)] {
+        for deferred_until in [Some(wake_at + HOUR), None] {
+            assert!(alice
+                .db()
+                .state_update(
+                    &json!({
+                        "table": table, "id": id, "deferred_until": deferred_until,
+                    })
+                    .to_string()
+                )
+                .unwrap());
+        }
+    }
+    let pack = recall(alice.db(), "Nebula");
+    assert!(pack
+        .items
+        .iter()
+        .any(|item| item.kind == "commitment" && item.id == commitment));
+    assert!(pack
+        .items
+        .iter()
+        .any(|item| item.kind == "open_loop" && item.id == open_loop));
 }
 
 #[test]
