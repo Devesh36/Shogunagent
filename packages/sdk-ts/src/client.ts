@@ -202,6 +202,7 @@ export class ShogunAgent {
     const controller = typeof AbortController === "function" ? new AbortController() : undefined;
     const timer = controller ? setTimeout(() => controller.abort(), this.timeoutMs) : undefined;
     let res: ResponseLike;
+    let text: string;
     try {
       res = await this.fetchImpl(url, {
         method,
@@ -209,12 +210,12 @@ export class ShogunAgent {
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         ...(controller ? { signal: controller.signal } : {}),
       });
+      text = await res.text();
     } catch (e) {
       throw new TransportError({ status: 0, code: "transport_error", message: `Could not reach ${url}: ${e instanceof Error ? e.message : String(e)}`, nextAction: "retry_after" });
     } finally {
       if (timer) clearTimeout(timer);
     }
-    const text = await res.text();
     const contentType = res.headers.get("content-type") ?? "";
     const parsed = contentType.includes("text/event-stream") ? parseSse(text) : parseJson(text);
     if (!res.ok) throw errorFromResponse(res.status, parsed, res.headers);
