@@ -49,11 +49,12 @@ export function renderLlmsTxt(files) {
   lines.push("");
   lines.push(firstParagraph(readme.split(/^## 1\. /m)[1] ? "## 1. " + readme.split(/^## 1\. /m)[1] : readme));
   lines.push("");
-  lines.push(`Skill version ${fm.version}. Hosted MCP endpoint (Streamable HTTP, 2026-07-28): ${API}/mcp. Local: \`npx shogunagent@${fm.version.split(".").slice(0, 2).join(".")}\`. Reads are free; writes and runs are metered in micro-USD and the first metered call without a wallet answers 402 with a top-up URL.`);
+  lines.push(`Skill version ${fm.version}. Check the repository's release status before relying on npm packages, release downloads or a hosted service. The configured hosted MCP URL is ${API}/mcp (Streamable HTTP, 2026-07-28); use an operator-confirmed endpoint and credentials. Local setup requires binaries, an existing encrypted store and its matching key. Bare \`npx shogunagent@${fm.version.split(".").slice(0, 2).join(".")}\` only serves; installation and MCP connection are explicit steps (see SKILL.md and the CLI guide). Reads of the principal's data are free but require authorization; hosted writes and runs are metered in micro-USD.`);
   lines.push("");
   lines.push("## Start here");
   lines.push("");
   lines.push(`- [SKILL.md](${REPO}/SKILL.md): the skill agents install: when to use it and when not, setup, auth, precedence of facts, cost, what L1 / L2 / L3 mean for the caller, statuses and errors, numbered rules.`);
+  lines.push(`- [CLI guide](${REPO}/packages/cli/README.md): existing-store prerequisites, source builds, explicit install/connect commands, local authentication and a synthetic first ingest.`);
   lines.push(`- [Agent API guide](${REPO}/apps/api/README-agent-api.md): ${truncate(firstParagraph(files["apps/api/README-agent-api.md"]), 200)}`);
   lines.push(`- [README](${REPO}/README.md): what the product is, the three pillars, how state is acquired, pricing and roadmap.`);
   lines.push("");
