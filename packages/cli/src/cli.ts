@@ -4,6 +4,7 @@
  */
 import { installBinaries, locateBinaries, releaseTarget, InstallError } from "./binaries.js";
 import { applyPlan, describePlan, detectClients, entryFor, planFor, PlanRefusal, type FilePlan } from "./clients.js";
+import { doctor } from "./doctor.js";
 import { HOSTED, SKILL_MINOR, VERSION, helpJson, helpText } from "./help.js";
 import { ALL_CLIENTS, CLIENT_LABEL, DATA_DIR_ENV, dataPaths, type ClientId } from "./paths.js";
 import { runReadOnlyProxy } from "./readonly-proxy.js";
@@ -153,6 +154,15 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         return connectCommand(deps, { remove: false, yes: flags.yes === true, clients: clientsFlag(flags) });
       case "disconnect":
         return connectCommand(deps, { remove: true, yes: flags.yes === true, clients: clientsFlag(flags) });
+      case "doctor": {
+        const report = await doctor(deps);
+        if (flags.json) deps.io.out(JSON.stringify(report, null, 2));
+        else {
+          for (const check of report.checks) deps.io.out(`${check.status.toUpperCase()} ${check.id}: ${check.message}`);
+          for (const limitation of report.limitations) deps.io.out(limitation);
+        }
+        return report.ok ? 0 : 1;
+      }
       case "status": {
         const located = await locateBinaries(deps, paths);
         const port = await runningPort(deps, paths);

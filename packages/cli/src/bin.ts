@@ -56,7 +56,7 @@ const deps: Deps = {
   fs,
   spawn,
   fetch: (url, init) => fetch(url, init ? { headers: init.headers ?? {} } : undefined),
-  platform: { os: process.platform, arch: process.arch, homedir: homedir(), env: process.env, interactive },
+  platform: { nodeVersion: process.versions.node, os: process.platform, arch: process.arch, homedir: homedir(), env: process.env, interactive },
   io: {
     out: (line) => console.log(line),
     err: (line) => console.error(line),
