@@ -589,6 +589,7 @@ impl Db {
     ) -> MemoryResult<Vec<(String, shogun_fusion::block::StateTable, i64)>> {
         use shogun_fusion::block::StateTable;
         use shogun_fusion::confidence::{treat_fact, Treatment};
+        let now = self.now_ms();
         let (commitments, open_loops) = self.with_conn("state.for_grounding", |conn| {
             Ok::<_, rusqlite::Error>((
                 state::list_commitments(conn)?,
@@ -598,8 +599,8 @@ impl Db {
 
         let mut out: Vec<(String, StateTable, i64)> = Vec::new();
         for c in commitments {
-            // mirror commitments_due: skip done/cancelled rows
-            if c.status == "done" || c.status == "cancelled" {
+            // Mirror commitments_due: resolved and snoozed work is not current context.
+            if c.status == "done" || c.status == "cancelled" || c.is_deferred(now) {
                 continue;
             }
             let text = format!("you committed: {}", c.description);
@@ -611,8 +612,8 @@ impl Db {
             }
         }
         for l in open_loops {
-            // mirror open_loops: skip closed rows
-            if l.status == "closed" {
+            // Mirror open_loops: closed and snoozed work is not current context.
+            if l.status == "closed" || l.is_deferred(now) {
                 continue;
             }
             let text = format!("open loop: {}", l.description);
