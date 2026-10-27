@@ -23,9 +23,9 @@ export function serverCard(table: ToolTable, ctx: WellknownContext): Record<stri
     description: LONG_DESCRIPTION,
     transport: { type: "streamable-http", url: mcpUrl(ctx), headers: ["Mcp-Method", "Mcp-Name", "Mcp-Quantity", "Mcp-Dry-Run"] },
     authentication: {
-      // README §11 principle 1: discover, inspect and narrow reads need no key; the first write
-      // or metered run answers 402 with everything needed to proceed.
-      anonymous: { allowed: true, scope: "router.discover, router.inspect and narrow reads" },
+      // Hosted /mcp authenticates before forwarding any request, including free reads.
+      // Public discovery documents and the separate router verbs do not make /mcp anonymous.
+      anonymous: { allowed: false },
       schemes: [
         {
           type: "http", scheme: "bearer", bearerFormat: "sa_live_<key>",

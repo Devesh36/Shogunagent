@@ -71,10 +71,9 @@ for (const p of server.packages ?? []) {
 if (server.version !== pkgJson.version) problems.push(`server version ${server.version} is not packages/cli's ${pkgJson.version}`);
 const remote = (server.remotes ?? []).find((r) => r.type === "streamable-http");
 if (!remote || remote.url !== "https://api.shogunagent.dev/mcp") problems.push("remotes must name the Streamable HTTP endpoint https://api.shogunagent.dev/mcp");
-for (const h of remote?.headers ?? []) {
-  if (h.name === "Authorization" && h.isRequired) problems.push("the Authorization header must be optional: discover, inspect and narrow reads need no key (README §11)");
-  if (h.name === "Authorization" && !h.isSecret) problems.push("the Authorization header must be marked secret");
-}
+const authorization = remote?.headers?.find((h) => h.name === "Authorization");
+if (authorization?.isRequired !== true) problems.push("the hosted /mcp endpoint requires an Authorization header, including for free reads");
+if (authorization?.isSecret !== true) problems.push("the Authorization header must be marked secret");
 
 if (problems.length > 0) {
   console.error(`server.json: ${problems.length} problem(s)`);

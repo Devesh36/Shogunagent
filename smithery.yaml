@@ -20,8 +20,8 @@ startCommand:
       apiKey:
         type: string
         title: Agent key
-        description: "Optional. An sa_live_ key from POST https://api.shogunagent.dev/v1/agents (self-registration, no email). Without it discover, inspect and narrow reads work; the first write or metered run answers 402 with a top-up URL."
-    required: []
-  # How the config reaches the server: the key, when given, as the bearer.
+        description: "Required for this key-based connection. An sa_live_ key from POST https://api.shogunagent.dev/v1/agents (self-registration, no email). Hosted /mcp requires authentication, including for free reads."
+    required: [apiKey]
+  # How the config reaches the server: the required key as the bearer.
   exampleConfig:
     apiKey: sa_live_example
