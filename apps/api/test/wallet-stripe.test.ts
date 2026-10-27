@@ -15,7 +15,8 @@ function fakeStripe(status = 200) {
   const calls: Array<{ url: string; auth: boolean; idempotencyKey?: string; form: URLSearchParams }> = [];
   const fetch: StripeFetch = (url, init) => {
     calls.push({ url, auth: init.headers.authorization === "Bearer sk_test_fake", ...(init.headers["idempotency-key"] ? { idempotencyKey: init.headers["idempotency-key"] } : {}), form: new URLSearchParams(init.body) });
-    return Promise.resolve({ status, json: () => Promise.resolve(status === 200 ? { id: `cs_test_${calls.length}`, url: `https://checkout.stripe.test/c/pay/cs_test_${calls.length}` } : { error: { message: "nope" } }) });
+    const responseStatus = (init.headers["idempotency-key"]?.length ?? 0) > 255 ? 400 : status;
+    return Promise.resolve({ status: responseStatus, json: () => Promise.resolve(responseStatus === 200 ? { id: `cs_test_${calls.length}`, url: `https://checkout.stripe.test/c/pay/cs_test_${calls.length}` } : { error: { message: "nope" } }) });
   };
   return { calls, fetch };
 }
@@ -90,6 +91,38 @@ describe("POST /v1/wallet/topup", () => {
     // Nothing is credited until Stripe says so.
     expect(((await (await authed(rig, key, "/v1/wallet")).json()) as { balance_micro_usd: number }).balance_micro_usd).toBe(FREE_ALLOWANCE_MICROS);
     expect(rig.logLines.some((l) => l.includes("POST /v1/wallet/topup 201") && l.includes("event=topup_session_created"))).toBe(true);
+  });
+
+  it("accepts long idempotency keys within Stripe's limit while preserving existing scoped keys", async () => {
+    const { rig, stripe } = rigWithStripe();
+    const { key, principalId } = await registerAgent(rig);
+    const lastUnchangedLength = 255 - principalId.length - 1;
+    for (const length of [lastUnchangedLength, lastUnchangedLength + 1, 255]) {
+      const idem = "x".repeat(length);
+      const res = await authed(rig, key, "/v1/wallet/topup", { method: "POST", body: { amount_micro_usd: MIN_TOPUP_MICROS }, headers: { "idempotency-key": idem } });
+      expect(res.status).toBe(201);
+      const upstreamKey = stripe.calls.at(-1)!.idempotencyKey!;
+      expect(upstreamKey.length).toBeLessThanOrEqual(255);
+      if (length === lastUnchangedLength) expect(upstreamKey).toBe(`${principalId}:${idem}`);
+    }
+    expect(stripe.calls).toHaveLength(3);
+    const invalid = await authed(rig, key, "/v1/wallet/topup", { method: "POST", body: { amount_micro_usd: MIN_TOPUP_MICROS }, headers: { "idempotency-key": "x".repeat(256) } });
+    expect(invalid.status).toBe(400);
+    expect(stripe.calls).toHaveLength(3);
+  });
+
+  it("keeps long idempotency keys stable on retries and distinct across principals and requests", async () => {
+    const { rig, stripe } = rigWithStripe();
+    const first = await registerAgent(rig);
+    const second = await registerAgent(rig);
+    const idem = "x".repeat(255);
+    for (const [key, idempotencyKey] of [[first.key, idem], [first.key, idem], [second.key, idem], [first.key, `${"x".repeat(254)}y`]] as const) {
+      const res = await authed(rig, key, "/v1/wallet/topup", { method: "POST", body: { amount_micro_usd: MIN_TOPUP_MICROS }, headers: { "idempotency-key": idempotencyKey } });
+      expect(res.status).toBe(201);
+    }
+    const keys = stripe.calls.map((call) => call.idempotencyKey);
+    expect(keys[0]).toBe(keys[1]);
+    expect(new Set([keys[0], keys[2], keys[3]]).size).toBe(3);
   });
 
   it("validates the amount, needs the write scope, and answers 503 when Stripe fails or is not configured", async () => {
