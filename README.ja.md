@@ -17,17 +17,17 @@
 
 多くの AI エージェントを動かすチームに対して、ShogunAgent は全エージェントに「ユーザーの仕事の校正済みモデル」（人・プロジェクト・コミットメント・オープンループ）を 1 つ与える共有状態レイヤーです。全ての事実に根拠（provenance）が付き、結果を伴う全ての行動に人間のゲートが掛かります。
 
-自由文をベンダーのクラウドに保存するメモリ API と違い、**型付き・権限階層付き・ローカルファースト・可搬**です。
+設計の柱は **型付き・権限階層付き・ローカルファースト・可搬**です。他のメモリ・コンテキスト製品と重なる機能もあるため、カテゴリ全体ではなく製品と提供形態ごとに比較します。
 
-メモリ API ではありません。「エージェント向けメモリ」は飽和したカテゴリ（Mem0、Zep、Letta、supermemory、Cognee、Engram）で、ラボは個人化記憶を無料で出しています（OpenAI Dreaming、Anthropic Managed Agents memory、Google Memory Bank、AWS AgentCore、Microsoft Copilot）。ShogunAgent は別のカテゴリを名乗ります。エージェントが何を覚えているかではなく、いま何が真実か。
+ShogunAgent は人・プロジェクト・コミットメント・オープンループという現在の仕事の状態に注力します。Mem0、Zep / Graphiti、Letta などのメモリ・コンテキスト製品と重なる用途もあります。カテゴリ名だけでなく、具体的な機能と配置要件で評価します。
 
 ## 2. バリュープロポジション（3 本柱。増やさない）
 
-| 柱 | 主張 | コードベース上の証明 | 競合が持たないもの |
+| 柱 | 主張 | コードベース上の証明 | 比較上の注意 |
 |---|---|---|---|
-| **Typed state, not text memory** | 全ての事実は型付きの行で、元イベントからの逐語 quote と confidence を持つ。新しい事実が古い事実を置き換え、矛盾は明示され、confidence は時間で減衰する | `state_provenance` が空の書き込みはリポジトリ層が拒否。High / Medium / Low のバンドを `shogun-fusion/confidence.rs` の 1 箇所で強制。loop consolidator は quote の完全一致と confidence 0.84 以上が無ければ保存しない | supermemory は自ら「system of record ではない。SQL も join も主キーも無い」と明言。Mem0 と Zep は自由文の fact ストア |
-| **Permission tiers on every action** | 読み取りは即時（L1）。ユーザーデータに触る書き込みは一押し確認（L2）。外部送信と決済は明示的な人間承認（L3）。型で強制され、どのエージェントにも同じ | `shogun-agents` の `SendAction` は型で L3。MCP の `readOnlyHint` / `destructiveHint` / `openWorldHint` と MRTR の `input_required` / URL elicitation に 1 対 1 で写像 | エージェントの権限プロンプトの 93% は読まれずに承認されている。競合の権限は read / write の 2 値 |
-| **Local-first, open, portable** | データは既定で端末を出ない。クラウド経路は本文を保持しない。エンジンは OSS。状態は公開形式でエクスポートできる | ゼロ保持の中継（traceability log に本文カラムが無い）。秘密情報の redaction は recall 1.0、誤検知 0。ユーザー保持鍵 | 資金調達済みベンダーは全てクラウドファースト。supermemory の OSS はクライアントのみでエンジンは非公開。試験された 7 製品中 7 製品がロックイン |
+| **Typed state, not text memory** | 全ての事実は型付きの行で、元イベントからの逐語 quote と confidence を持つ。新しい事実が古い事実を置き換え、矛盾は明示され、confidence は時間で減衰する | `state_provenance` が空の書き込みはリポジトリ層が拒否。High / Medium / Low のバンドを `shogun-fusion/confidence.rs` の 1 箇所で強制。loop consolidator は quote の完全一致と confidence 0.84 以上が無ければ保存しない | [Graphiti](https://github.com/getzep/graphiti) も型付きのエンティティ・エッジ、元エピソードへの provenance、時間に基づく無効化を提供。型付き状態と根拠は ShogunAgent だけの機能ではない |
+| **Permission tiers on every action** | 読み取りは即時（L1）。ユーザーデータに触る書き込みは一押し確認（L2）。外部送信と決済は明示的な人間承認（L3）。型で強制され、どのエージェントにも同じ | `shogun-agents` の `SendAction` は型で L3。MCP の `readOnlyHint` / `destructiveHint` / `openWorldHint` と MRTR の `input_required` / URL elicitation に 1 対 1 で写像 | 製品ごとに承認対象の行動と強制方法を比較する。このリポジトリは競合の権限が read / write の 2 値のみであることを立証していない |
+| **Local-first, open, portable** | データは既定で端末を出ない。クラウド経路は本文を保持しない。エンジンは OSS。状態は公開形式でエクスポートできる | ゼロ保持の中継（traceability log に本文カラムが無い）。秘密情報の redaction は recall 1.0、誤検知 0。ユーザー保持鍵 | [Mem0](https://github.com/mem0ai/mem0) には OSS ライブラリとセルフホストのサーバーがあり、[Letta](https://docs.letta.com/agent-sdk/memory) はセルフホストの Git メモリに対応。配置と可搬性は製品ごとに比較する |
 
 **ルーターの位置づけ（1 行）**：エージェントのための 1 つのエンドポイント。ツールを見つけ、権限階層の下で実行し、学んだことを自分の状態として持つ。
 
@@ -74,7 +74,7 @@ ShogunAgent は model-agnostic です。自社の LLM 利用は抽出と統合�
 
 **各社が確実に取り、我々が争わない領域**：自社製品内の個人化記憶、自社 API 内のセッション状態、保存の単価競争。
 
-**各社が構造的に行かず、我々が立つ領域**：ベンダー横断の状態（どのラボも他社エージェントの中立な記録係にならない）、可搬性（ロックインが彼らの収益構造）、異なるベンダーのエージェントを跨ぐ人間承認の統治、端末レベルの真実。
+**我々が注力する領域**：ベンダー横断の仕事の状態、データの可搬性、異なるベンダーのエージェントを跨ぐ人間承認の統治、端末の文脈。これは製品方針であり、モデル提供者が実現できないという主張ではありません。
 
 **付き合い方**：顧客であり供給者であり、競合しない。Anthropic の memory tool はストレージ非依存なので我々がその裏側になる。Claude Code プラグイン、Anthropic directory、MCP Registry に載る。OpenAI：Plugin directory と Agents SDK ミドルウェア。Google：ADK と Vertex の memory インターフェース。AWS：AgentCore の self-managed memory 枝の外部ストア。Microsoft Copilot の communication memory が最も近い比較対象で、M365 の外のエージェントに同じものを提供する。
 
@@ -84,10 +84,20 @@ ShogunAgent は model-agnostic です。自社の LLM 利用は抽出と統合�
 
 | 層 | プレイヤー | 差 | 立場 |
 |---|---|---|---|
-| メモリ API | Mem0、Zep、Letta、supermemory、Cognee、Engram | 型付き状態 vs 自由文。3 段階 vs read/write。ローカル既定 vs クラウド既定。開いたエンジン vs 閉じたエンジン | 直接競合。別カテゴリを名乗る |
-| ルーター・レジストリ | Monid、Composio、Arcade + Smithery、Glama、Coinbase Agentic Market | 権限階層が無い。状態を持たない | 自前ルーターを入口に建て、全てに載る |
-| 企業コンテキスト基盤 | Microsoft Copilot、Glean、Jedify、Interloom | スイートやデータ基盤に閉じる。エージェント中立でない。人間のゲートが無い | 本当の比較対象。ここで勝つ |
-| 取得層 | Screenpipe、Limitless（Meta）、Rewind（停止） | 取得して保存するだけで状態を推定しない | ほぼ退場。教訓：生の記録には誰も払わない |
+| メモリ・コンテキスト製品 | Mem0、Zep / Graphiti、Letta、supermemory、Cognee、Engram | 仕事の状態スキーマ、承認、配置、根拠、エクスポートを製品ごとに比較。機能は重なる | 用途が重なる。実際の製品と提供形態を評価する |
+| ルーター・レジストリ | Monid、Composio、Arcade + Smithery、Glama、Coinbase Agentic Market | ShogunAgent はルーティングと仕事の状態・権限エンジンを組み合わせる。連携ごとに比較 | 連携候補でありルーティング用途の競合 |
+| 企業コンテキスト基盤 | Microsoft Copilot、Glean、Jedify、Interloom | 対応データ源、エージェントのインターフェース、統治を提供形態ごとに比較 | 仕事の文脈という用途の比較対象 |
+| 取得層 | Screenpipe、Limitless（Meta）、Rewind | 取得元、推定機能、現在の提供状況を個別に比較 | 入力元の候補であり文脈を扱う用途で重なる |
+
+### 一次資料による比較メモ
+
+2026-10-27 に確認。以下は文書に記載された機能であり、比較ベンチマークや各製品の動作検証ではありません。
+
+- **Mem0**：[公式リポジトリ](https://github.com/mem0ai/mem0) は OSS ライブラリ、セルフホストのサーバー、クラウドを区別しています。[スコープ付き追加](https://docs.mem0.ai/core-concepts/memory-operations/add)、[OSS のメタデータフィルター](https://docs.mem0.ai/open-source/features/metadata-filtering)、[削除](https://docs.mem0.ai/core-concepts/memory-operations/delete) の文書があります。提供形態ごとの仕様を確認します。
+- **Graphiti と Zep**：[Graphiti](https://github.com/getzep/graphiti) は OSS フレームワークであり、Zep のマネージド製品とは区別します。Pydantic の型付きエンティティ・エッジ、元エピソード、時間的有効性と無効化、ハイブリッド検索が記載されています。両者を自由文ストアと呼ぶだけではこれらを見落とします。
+- **Letta**：[メモリの文書](https://docs.letta.com/agent-sdk/memory) は永続的な Git メモリ、コンテキスト内・オンデマンドのメモリ、共有リポジトリ、セルフホストの Git remote を説明しています。ホスト型の共有リポジトリとセルフホストでは運用要件が異なります。
+
+ShogunAgent が目指す強みは仕事に特化した状態・根拠・行動統治の組み合わせです。再現可能な例で示し、カテゴリ名だけから独占的な機能、全製品のロックイン、優位性を推定しません。
 
 ## 6. MOAT（強い順、正直に）
 
@@ -144,7 +154,7 @@ ShogunAgent は model-agnostic です。自社の LLM 利用は抽出と統合�
 
 **誰に、どの順で**：(1) コーディングエージェントのパワーユーザー（Claude Code、Codex、Cursor）、(2) エージェント製品を作る開発者（Agents SDK、Vercel AI SDK、Mastra、LangGraph）、(3) 複数エージェントを回す小チーム、(4) 2〜3 から昇格した企業。消費者向け記憶製品は全て退場したので、一般消費者ではなく「毎日エージェントを動かす人」に売る。ShogunAI の既存 Mac ユーザーは初日のコホート。彼らのエージェントには既に read 接続が自動投入されている。
 
-**開く**：エンジン（state tables、confidence、consolidator、Dream Cycle）、ローカル MCP / REST / CLI、コネクタ定義とルーターのエンジン、SKILL.md、エクスポート形式、評価ハーネス 6 種。ライセンスは Apache-2.0。**閉じる**：hosted sync、遠隔承認、ウォレットと課金、hosted ルーターカタログとプロバイダ契約。ファネルは「ローカルとホストで同じ API、`baseURL` を変えるだけ」。supermemory と違い、エンジンそのものを開く。
+**開く**：エンジン（state tables、confidence、consolidator、Dream Cycle）、ローカル MCP / REST / CLI、コネクタ定義とルーターのエンジン、SKILL.md、エクスポート形式、評価ハーネス 6 種。ライセンスは Apache-2.0。**閉じる**：hosted sync、遠隔承認、ウォレットと課金、hosted ルーターカタログとプロバイダ契約。ファネルは「ローカルとホストで同じ API、`baseURL` を変えるだけ」。エンジンそのものを開く。ライセンスとホスト型サービスの提供状況は製品ごとに比較する。
 
 **OSS ローンチの実務**：10 秒で動く README の GIF（`npx shogunagent` で、あなたのコーディングエージェントがオープンループを知っている）。Show HN は機能一覧ではなく再現可能な主張（同一ハーネス結果、監査型の記事）で。ベンチマークのハーネスを公開し、競合の数値を再現可能にする。「open-loop tracking」ベンチをコミュニティに提供する。コネクタ定義を貢献の低摩擦な入口にする。
 
@@ -152,7 +162,7 @@ ShogunAgent は model-agnostic です。自社の LLM 利用は抽出と統合�
 
 **プラットフォームの棚（全部、英語で、最初に）**：Claude Code プラグイン → Anthropic directory。公式 MCP Registry。Cursor / Windsurf の MCP 設定。OpenAI Plugin directory。Glama、Smithery、Composio toolkit、Monid（記憶カテゴリができたら）。
 
-**1 行統合**：`withShogunAgent()` を Vercel AI SDK、OpenAI Agents SDK、Claude Agent SDK、Mastra、LangGraph、CrewAI に。Mem0 の API 利用 5 倍成長の主因。
+**1 行統合**：`withShogunAgent()` を Vercel AI SDK、OpenAI Agents SDK、Claude Agent SDK、Mastra、LangGraph、CrewAI に。これらのアダプターでエージェントと ShogunAgent の連携作業を減らす。
 
 **やらないこと**：有料広告、SEO 先行、カンファレンスのブース、企業営業の先行。
 
@@ -221,7 +231,7 @@ Stripe で精算するプリペイド・ウォレット。`402` レスポンス�
 
 ### 選択 eval：本当に重要な指標
 
-CI から回すハーネス。タスク記述を与えたとき、Claude・GPT・Gemini・オープンモデルは、Mem0・supermemory・Zep・ルーター内の代替と並んだ ShogunAgent を、MCP Registry の掲載文・Claude Code プラグインの説明・OpenAI Plugin の掲載文・ルーターの `discover` のそれぞれでどれだけ選ぶか。結果は面ごと・モデルごとの選択率。説明文の変更はこの数字が落ちないときだけ出す。これはエージェント時代のコンバージョン率最適化で、このカテゴリで誰もやっていない。
+CI から回すハーネス。タスク記述を与えたとき、Claude・GPT・Gemini・オープンモデルは、Mem0・supermemory・Zep・ルーター内の代替と並んだ ShogunAgent を、MCP Registry の掲載文・Claude Code プラグインの説明・OpenAI Plugin の掲載文・ルーターの `discover` のそれぞれでどれだけ選ぶか。結果は面ごと・モデルごとの選択率。説明文の変更はこの数字が落ちないときだけ出す。これは明示した評価条件での発見されやすさを測るものであり、他社が同様の評価をしていないことを立証するものではない。
 
 ### 自前ルーターの中で選ばれること
 
