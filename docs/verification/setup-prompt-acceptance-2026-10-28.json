@@ -1,0 +1,673 @@
+{
+  "date": "2026-10-28",
+  "kind": "website-prompt-onboarding-and-installed-Codex-workflow",
+  "client": "Codex CLI 0.164.0",
+  "scenario": {
+    "project": "Cedar-713816e1",
+    "owner": "Rina Das",
+    "date": "2030-08-14",
+    "new_date": "2030-08-22",
+    "format": "HTML",
+    "phrase": "cobalt-finch-c67365a0b3"
+  },
+  "setup_prompt_hashes": {
+    "website-prompt.txt": "9aa25c9946789b85adcf31786703c29abdb8d224f6bb3826ac270d4eb32b47fd",
+    "website-prompt-fixed.txt": "b1350b0a8a70d14f3dcfa84e9256b7cb292f138ec056bc7300215e5f13aece6a",
+    "website-prompt-final.txt": "1a9300070d67c26cd308f30800d89ca5e622341c9d2b2e6da6314ff713ba78d6"
+  },
+  "setup_runs": {
+    "setup": {
+      "thread_id": "01a18346-afd1-73f3-8bf3-f34fa1b98a89",
+      "transcript_sha256": "a6e88b7527a31d8632ce84b89226964165e7cb39abb6f87359b70261e33bb34c",
+      "final_answer": "Local setup is ready; **model-driven memory verification is pending a Codex restart/MCP reload**. This conversation has no Shogun tools available, so no memory was retrieved or saved.\n\n- **Server:** running on `127.0.0.1:7466`, PID `3170`, using the supplied binary and a separate multi-principal store.\n- **Stop:** `kill 3170`. **Start/restart:** run `./.shogun-eval/start.sh` from this project after stopping the existing process. No startup service installed.\n- **Files changed:** `.codex/config.toml` adds only Shogun; `AGENTS.md` preserves the original instruction and adds the requested memory rules; `.gitignore` excludes private state and machine configuration.\n- **Secrets:** protected files in `.shogun-eval/`; no tokens in configuration or Git.\n- **Checks passed:** bridge initialization, tool discovery, authenticated identity call, TOML validation, and secret permissions. These are not model-driven memory tests.\n- **Source event IDs:** none yet.\n- **Second client:** not selected or configured.\n\nRestart Codex in this project, inspect `/mcp`, and approve Shogun normally if prompted. Then run:\n\n> Use ShogunAgent\u2019s actual tools. Call profile.whoami. Create a clearly labelled synthetic note with a new random project label, verification phrase, and one revisable detail using memory.ingest, the authenticated actor, project/thread, and a stable idempotency key. Verify it with memory.recall and memory.get_events. Show source event IDs. Keep the note and expected answers out of project files.\n\nIn a **fresh conversation**, provide only the generated label:\n\n> Use ShogunAgent to recover the synthetic note for project LABEL. Inspect source evidence and report event IDs. Report missing details as unknown.\n\nRevision and unrecorded-detail checks remain pending afterward. No Batch relay is needed for source saving and recall; extraction and typed handoffs were not verified. No push, deployment, or external send occurred."
+    },
+    "setup-fixed": {
+      "thread_id": "01a1834c-f233-7142-9ad0-5291f5422699",
+      "transcript_sha256": "70be97ea4cb5cd4a9982c32e03d7c9985b99103b862b04740202bc139d1aa636",
+      "final_answer": "Project configuration is ready; actual model-driven verification is pending.\n\n- **Server:** temporary test server stopped; port 7466 is free. Start it in a dedicated terminal and leave it open:\n  ```sh\n  cd /private/tmp/shogun-prompt-acceptance-20261028/project\n  ./.shogun-eval/start.sh\n  ```\n  Stop with Ctrl+C; restart with the same command.\n- **Files:** corrected actor guidance in [AGENTS.md](/private/tmp/shogun-prompt-acceptance-20261028/project/AGENTS.md), preserving existing instructions. Added [SHOGUN-SETUP.md](/private/tmp/shogun-prompt-acceptance-20261028/project/SHOGUN-SETUP.md). Reused `.codex/config.toml`, private keys, and the isolated store. Global settings were untouched.\n- **Checks:** bridge initialization, discovery, and profile read passed. Codex recognized registration. This conversation exposes no Shogun tools; no memory was retrieved or saved, and no source IDs exist for this test.\n- **Next:** restart Codex after starting the dedicated server; inspect `/mcp` and approve if prompted. Then send:\n  > Using actual ShogunAgent tools, recall this project\u2019s context and inspect its source events. Create a clearly labelled synthetic note under project label `eval-9c4b298a79cd4e7092d6ef86de2a2d5d` with a new random verification phrase and one revisable detail. Use actor `agent:codex-project`, thread `shogun-prompt-acceptance-20261028`, and a stable idempotency key. Verify with memory.recall and memory.get_events. Keep test answers out of project files.\n- **Fresh conversation:** provide only:\n  > Recover ShogunAgent context for `eval-9c4b298a79cd4e7092d6ef86de2a2d5d`. Inspect source events and cite their IDs.\n\nRevision recovery and an unrecorded-detail check remain pending. A second client is optional and unselected. No Batch relay is needed for basic recall; extraction and typed handoffs were not verified. No push or deployment occurred."
+    },
+    "instruction-repair": {
+      "thread_id": "01a18356-40af-7e93-93ee-facf1cf3a6d7",
+      "transcript_sha256": "6d311296f9eb527b0fa75ee83a7870091ab84040589eb5bcedb4589d83fb7c7d",
+      "final_answer": "Updated only [AGENTS.md](/private/tmp/shogun-prompt-acceptance-20261028/project/AGENTS.md), adding this bullet after the checkpoint rule:\n\n> Write only when there is new user-provided information, an actual decision or correction, or a new result from work performed. A read-only lookup or an answer that merely restates stored context is not a checkpoint: do not ingest it, a \"verified\" copy, or a summary of the recall. Link new updates to prior source event IDs when relevant instead of treating repeated agent summaries as independent evidence.\n\nVerified the memory block matches the fetched setup prompt. Project conventions, connection metadata, and other settings are unchanged. No store creation, configuration changes, server restart, new scenario, or Shogun writes occurred."
+    }
+  },
+  "workflow_runs": [
+    {
+      "stage": "decision",
+      "thread_id": "01a18353-08f9-7970-96ec-c204c90bcab9",
+      "prompt": "For our synthetic project Cedar-713816e1, we decided that Rina Das is the owner, the launch date is 2030-08-14, and the delivery format is HTML. The verification phrase is cobalt-finch-c67365a0b3. Please acknowledge the latest plan. This is synthetic evaluation data; keep the scenario and expected answers out of project files.",
+      "transcript_sha256": "628777e5ce6f7fc255231edf69a2e6ca883ca63ff709cf41699678eff57e65b8",
+      "tools": [
+        {
+          "name": "memory.recall",
+          "arguments": {
+            "query": "Cedar-713816e1",
+            "budget_tokens": 1200
+          },
+          "result": {
+            "latency_ms": 14,
+            "next_action": null,
+            "result": {
+              "budget_tokens": 1200,
+              "evidence": [],
+              "facts": [],
+              "include_scratch": false,
+              "items": [],
+              "possibly": [],
+              "truncated": false,
+              "used_tokens": 0
+            },
+            "tool": "memory.recall",
+            "usage": {
+              "cost_micro_usd": 0,
+              "quantity": 1,
+              "unit": "read"
+            }
+          }
+        },
+        {
+          "name": "memory.ingest",
+          "arguments": {
+            "actor": "agent:codex-project",
+            "source": "codex-project",
+            "thread_key": "shogun-prompt-acceptance-20261028",
+            "idempotency_key": "shogun-prompt-acceptance-20261028:cedar-713816e1:plan:c67365a0b3",
+            "events": [
+              {
+                "kind": "decision",
+                "title": "Synthetic evaluation data: Cedar-713816e1 latest plan",
+                "content": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project files; no project files changed. Task is acknowledgement only; no unfinished implementation tasks."
+              }
+            ]
+          },
+          "result": {
+            "latency_ms": 24,
+            "next_action": null,
+            "result": {
+              "accepted": 1,
+              "deduplicated": 0,
+              "event_ids": [
+                1
+              ],
+              "idempotency_key": "shogun-prompt-acceptance-20261028:cedar-713816e1:plan:c67365a0b3",
+              "inserted": 1,
+              "metadata": null,
+              "namespace": "world",
+              "near_duplicates": 0,
+              "rejected": 0,
+              "replayed": false,
+              "thread_key": "agent:shogun-prompt-acceptance-20261028"
+            },
+            "tool": "memory.ingest",
+            "usage": {
+              "quantity": 1,
+              "unit": "events"
+            }
+          }
+        }
+      ],
+      "final_answer": "Acknowledged the latest **synthetic** plan for **Cedar-713816e1**:\n\n- Owner: Rina Das\n- Launch date: 2030-08-14\n- Delivery format: HTML\n- Verification phrase: `cobalt-finch-c67365a0b3`\n\nSaved to Shogun shared context; no prior context was found. No project files were changed."
+    },
+    {
+      "stage": "fresh-read",
+      "thread_id": "01a18358-3b0c-7960-8e89-b96b0a704e95",
+      "prompt": "Where did we land on synthetic project Cedar-713816e1? What are its current owner, launch date, delivery format, verification phrase, and approved budget? Please cite the sources for your answer.",
+      "transcript_sha256": "9f32f0995c1eb20324b084e4b03d71f55fd421b5f22778eb6d24fe890579a14e",
+      "tools": [
+        {
+          "name": "memory.recall",
+          "arguments": {
+            "query": "Cedar-713816e1 current owner launch date delivery format verification phrase approved budget",
+            "budget_tokens": 3500
+          },
+          "result": {
+            "latency_ms": 4,
+            "next_action": null,
+            "result": {
+              "budget_tokens": 3500,
+              "evidence": [
+                {
+                  "event_id": 2,
+                  "excerpt": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). That saved agent summary attributes the latest plan to the user's explicit message: owner Rina Das, launch 2030-08-14, delivery HTML, verification phrase cobalt-finch-c67365a0b3. Project search returned only event:1; budget-specific recall yielded no approved budget. Approved budget is unknown from retrieved evidence, not z\u2026",
+                  "source": "agent",
+                  "title": "Synthetic Cedar-713816e1 source verification",
+                  "ts_ms": 1793204702771
+                },
+                {
+                  "event_id": 1,
+                  "excerpt": "\u2026tion data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project files; no project files changed. Task is acknowledgement only; no unfinished implem\u2026",
+                  "source": "agent",
+                  "title": "Synthetic evaluation data: Cedar-713816e1 latest plan",
+                  "ts_ms": 1793204640303
+                }
+              ],
+              "facts": [],
+              "include_scratch": false,
+              "items": [],
+              "possibly": [],
+              "truncated": false,
+              "used_tokens": 329
+            },
+            "tool": "memory.recall",
+            "usage": {
+              "cost_micro_usd": 0,
+              "quantity": 1,
+              "unit": "read"
+            }
+          }
+        },
+        {
+          "name": "memory.search",
+          "arguments": {
+            "query": "Cedar-713816e1",
+            "limit": 20
+          },
+          "result": {
+            "tool": "memory.search",
+            "results": [
+              {
+                "text": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). That saved agent summary attributes the latest plan to the user's explicit message: owner Rina Das, launch 2030-08-14, delivery HTML, verification phrase cobalt-finch-c67365a0b3. Project search returned on\u2026",
+                "source_kind": "event",
+                "source_id": "2",
+                "provenance": [
+                  "event:2"
+                ],
+                "title": "Synthetic Cedar-713816e1 source verification",
+                "excerpt": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). That saved agent summary attributes the latest plan to the user's explicit message: owner Rina Das, launch 2030-08-14, delivery HTML, verification phrase cobalt-finch-c67365a0b3. Project search returned on\u2026",
+                "confidence": 1.0,
+                "possibly": false,
+                "score": 0.018032527335394958,
+                "when": {
+                  "local": "2026-10-28T21:55:02+05:30",
+                  "ms": 1793204702771
+                },
+                "where": {
+                  "window_title": "Synthetic Cedar-713816e1 source verification"
+                },
+                "snippet": "\u2026ead: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). T\u2026",
+                "open": {
+                  "ids": [
+                    2
+                  ],
+                  "tool": "memory.get_events"
+                }
+              },
+              {
+                "text": "\u2026-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project fil\u2026",
+                "source_kind": "event",
+                "source_id": "1",
+                "provenance": [
+                  "event:1"
+                ],
+                "title": "Synthetic evaluation data: Cedar-713816e1 latest plan",
+                "excerpt": "\u2026-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project fil\u2026",
+                "confidence": 1.0,
+                "possibly": false,
+                "score": 0.016965125186989848,
+                "when": {
+                  "local": "2026-10-28T21:54:00+05:30",
+                  "ms": 1793204640303
+                },
+                "where": {
+                  "window_title": "Synthetic evaluation data: Cedar-713816e1 latest plan"
+                },
+                "snippet": "\u2026: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verificat\u2026",
+                "open": {
+                  "ids": [
+                    1
+                  ],
+                  "tool": "memory.get_events"
+                }
+              }
+            ],
+            "answerability": {
+              "answerable": true,
+              "reason": "answerable"
+            },
+            "requested_depth": "warm",
+            "effective_depth": "warm",
+            "requested_range": null,
+            "resolved_range": {
+              "from_ms": 1790612979084,
+              "to_ms": 1793204979084
+            },
+            "lexical_scope": "all_history",
+            "complete": true,
+            "cold_partitions_visited": 0,
+            "cold_vectors_scanned": 0,
+            "elapsed_ms": 2
+          }
+        },
+        {
+          "name": "memory.get_events",
+          "arguments": {
+            "ids": [
+              1,
+              2
+            ],
+            "max_chars": 8000
+          },
+          "result": {
+            "events": [
+              {
+                "id": 1,
+                "source_kind": "agent",
+                "text": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project files; no project files changed. Task is acknowledgement only; no unfinished implementation tasks.",
+                "truncated": false,
+                "when": {
+                  "local": "2026-10-28T21:54:00+05:30",
+                  "ms": 1793204640303
+                },
+                "where": {
+                  "window_title": "Synthetic evaluation data: Cedar-713816e1 latest plan"
+                }
+              },
+              {
+                "id": 2,
+                "source_kind": "agent",
+                "text": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). That saved agent summary attributes the latest plan to the user's explicit message: owner Rina Das, launch 2030-08-14, delivery HTML, verification phrase cobalt-finch-c67365a0b3. Project search returned only event:1; budget-specific recall yielded no approved budget. Approved budget is unknown from retrieved evidence, not zero or rejected. No new project decisions or changes; budget remains unverified. No project files changed.",
+                "truncated": false,
+                "when": {
+                  "local": "2026-10-28T21:55:02+05:30",
+                  "ms": 1793204702771
+                },
+                "where": {
+                  "window_title": "Synthetic Cedar-713816e1 source verification"
+                }
+              }
+            ],
+            "missing": [],
+            "tool": "memory.get_events"
+          }
+        }
+      ],
+      "final_answer": "For **synthetic project Cedar-713816e1**, the latest recorded plan is:\n\n- **Owner:** Rina Das\n- **Launch date:** August 14, 2030\n- **Delivery format:** HTML\n- **Verification phrase:** `cobalt-finch-c67365a0b3`\n\nSource: Shogun **event:1**, \u201cSynthetic evaluation data: Cedar-713816e1 latest plan,\u201d October 28, 2026\u2014a saved agent summary attributing these decisions to your explicit message.\n\n**Approved budget:** Unknown from the available records. No approved amount was found. Shogun **event:2**, \u201cSynthetic Cedar-713816e1 source verification,\u201d also records this gap; it references event:1 and is not independent confirmation."
+    },
+    {
+      "stage": "revision",
+      "thread_id": "01a18358-e252-7902-bca4-3a41a50fac60",
+      "prompt": "For synthetic project Cedar-713816e1, the launch date has changed from 2030-08-14 to 2030-08-22. The new date replaces the old date; all other decisions stay the same. Please acknowledge the revised plan. Keep the scenario and expected answers out of project files.",
+      "transcript_sha256": "c07799e76811df311d4f2fbc35bfeaecd90de9fe71a962a534f21860af9d7805",
+      "tools": [
+        {
+          "name": "memory.recall",
+          "arguments": {
+            "query": "Cedar-713816e1",
+            "budget_tokens": 1800
+          },
+          "result": {
+            "latency_ms": 3,
+            "next_action": null,
+            "result": {
+              "budget_tokens": 1800,
+              "evidence": [
+                {
+                  "event_id": 2,
+                  "excerpt": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). That saved agent summary attributes the latest plan to the user's explicit message: owner Rina Das, launch 2030-08-14, delivery HTML, verification phrase cobalt-finch-c67365a0b3. Project search returned only event:1; budget-specific recall yielded no approved budget. Approved budget is unknown from retrieved evidence, not z\u2026",
+                  "source": "agent",
+                  "title": "Synthetic Cedar-713816e1 source verification",
+                  "ts_ms": 1793204702771
+                },
+                {
+                  "event_id": 1,
+                  "excerpt": "\u2026tion data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project files; no project files changed. Task is acknowledgement only; no unfinished implem\u2026",
+                  "source": "agent",
+                  "title": "Synthetic evaluation data: Cedar-713816e1 latest plan",
+                  "ts_ms": 1793204640303
+                }
+              ],
+              "facts": [],
+              "include_scratch": false,
+              "items": [],
+              "possibly": [],
+              "truncated": false,
+              "used_tokens": 329
+            },
+            "tool": "memory.recall",
+            "usage": {
+              "cost_micro_usd": 0,
+              "quantity": 1,
+              "unit": "read"
+            }
+          }
+        },
+        {
+          "name": "memory.get_events",
+          "arguments": {
+            "ids": [
+              1
+            ],
+            "max_chars": 3000
+          },
+          "result": {
+            "events": [
+              {
+                "id": 1,
+                "source_kind": "agent",
+                "text": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project files; no project files changed. Task is acknowledgement only; no unfinished implementation tasks.",
+                "truncated": false,
+                "when": {
+                  "local": "2026-10-28T21:54:00+05:30",
+                  "ms": 1793204640303
+                },
+                "where": {
+                  "window_title": "Synthetic evaluation data: Cedar-713816e1 latest plan"
+                }
+              }
+            ],
+            "missing": [],
+            "tool": "memory.get_events"
+          }
+        },
+        {
+          "name": "memory.ingest",
+          "arguments": {
+            "actor": "agent:codex-project",
+            "source": "codex-project",
+            "thread_key": "shogun-prompt-acceptance-20261028",
+            "idempotency_key": "shogun-prompt-acceptance-20261028:Cedar-713816e1:launch-revision:2030-08-22",
+            "events": [
+              {
+                "kind": "decision",
+                "title": "Synthetic Cedar-713816e1 launch date correction",
+                "content": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit correction in this conversation. For synthetic project Cedar-713816e1 the current launch date is 2030-08-22, replacing and superseding 2030-08-14 recorded in source event:1. All other decisions remain unchanged; refer to event:1 for prior plan details, which are not independent new evidence. User requires scenario and expected answers to stay out of project files. No project files changed. Task is acknowledgement only; no unfinished implementation tasks."
+              }
+            ],
+            "metadata": {
+              "supersedes_launch_date_in_event_id": 1
+            }
+          },
+          "result": {
+            "latency_ms": 23,
+            "next_action": null,
+            "result": {
+              "accepted": 1,
+              "deduplicated": 0,
+              "event_ids": [
+                3
+              ],
+              "idempotency_key": "shogun-prompt-acceptance-20261028:Cedar-713816e1:launch-revision:2030-08-22",
+              "inserted": 1,
+              "metadata": {
+                "supersedes_launch_date_in_event_id": 1
+              },
+              "namespace": "world",
+              "near_duplicates": 0,
+              "rejected": 0,
+              "replayed": false,
+              "thread_key": "agent:shogun-prompt-acceptance-20261028"
+            },
+            "tool": "memory.ingest",
+            "usage": {
+              "quantity": 1,
+              "unit": "events"
+            }
+          }
+        }
+      ],
+      "final_answer": "Acknowledged: synthetic project Cedar-713816e1 now launches on **2030-08-22**, replacing **2030-08-14**. All other decisions remain unchanged.\n\nSaved the correction in ShogunAgent. No scenario or expected answers were written to project files."
+    },
+    {
+      "stage": "fresh-revised-read",
+      "thread_id": "01a18359-a3d1-7a50-beba-4ea492649c1d",
+      "prompt": "Where did we land on synthetic project Cedar-713816e1? What are its current owner, launch date, delivery format, verification phrase, and approved budget? Please cite the sources for your answer.",
+      "transcript_sha256": "11a2960612f0d9adfb1d6d180694270c32e9e21da2eabf334275642eb4ac24bd",
+      "tools": [
+        {
+          "name": "memory.recall",
+          "arguments": {
+            "query": "Cedar-713816e1 current owner launch date delivery format verification phrase approved budget",
+            "budget_tokens": 4000
+          },
+          "result": {
+            "latency_ms": 5,
+            "next_action": null,
+            "result": {
+              "budget_tokens": 4000,
+              "evidence": [
+                {
+                  "event_id": 2,
+                  "excerpt": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). That saved agent summary attributes the latest plan to the user's explicit message: owner Rina Das, launch 2030-08-14, delivery HTML, verification phrase cobalt-finch-c67365a0b3. Project search returned only event:1; budget-specific recall yielded no approved budget. Approved budget is unknown from retrieved evidence, not z\u2026",
+                  "source": "agent",
+                  "title": "Synthetic Cedar-713816e1 source verification",
+                  "ts_ms": 1793204702771
+                },
+                {
+                  "event_id": 1,
+                  "excerpt": "\u2026tion data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project files; no project files changed. Task is acknowledgement only; no unfinished implem\u2026",
+                  "source": "agent",
+                  "title": "Synthetic evaluation data: Cedar-713816e1 latest plan",
+                  "ts_ms": 1793204640303
+                },
+                {
+                  "event_id": 3,
+                  "excerpt": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit correction in this conversation. For synthetic project Cedar-713816e1 the current launch date is 2030-08-22, replacing and superseding 2030-08-14 recorded in source event:1. All other decisions remain unchanged; refer to event:1 for prior plan details, which are not independent new evidence. User requires scenario and expected answers to stay out of project files. No project files changed. Task is acknowledgement only; no unfinished implementation task\u2026",
+                  "source": "agent",
+                  "title": "Synthetic Cedar-713816e1 launch date correction",
+                  "ts_ms": 1793205031076
+                }
+              ],
+              "facts": [],
+              "include_scratch": false,
+              "items": [],
+              "possibly": [],
+              "truncated": false,
+              "used_tokens": 493
+            },
+            "tool": "memory.recall",
+            "usage": {
+              "cost_micro_usd": 0,
+              "quantity": 1,
+              "unit": "read"
+            }
+          }
+        },
+        {
+          "name": "memory.search",
+          "arguments": {
+            "query": "Cedar-713816e1",
+            "limit": 20
+          },
+          "result": {
+            "tool": "memory.search",
+            "results": [
+              {
+                "text": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). That saved agent summary attributes the latest plan to the user's explicit message: owner Rina Das, launch 2030-08-14, delivery HTML, verification phrase cobalt-finch-c67365a0b3. Project search returned on\u2026",
+                "source_kind": "event",
+                "source_id": "2",
+                "provenance": [
+                  "event:2"
+                ],
+                "title": "Synthetic Cedar-713816e1 source verification",
+                "excerpt": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). That saved agent summary attributes the latest plan to the user's explicit message: owner Rina Das, launch 2030-08-14, delivery HTML, verification phrase cobalt-finch-c67365a0b3. Project search returned on\u2026",
+                "confidence": 1.0,
+                "possibly": false,
+                "score": 0.018032440671375355,
+                "when": {
+                  "local": "2026-10-28T21:55:02+05:30",
+                  "ms": 1793204702771
+                },
+                "where": {
+                  "window_title": "Synthetic Cedar-713816e1 source verification"
+                },
+                "snippet": "\u2026ead: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). T\u2026",
+                "open": {
+                  "ids": [
+                    2
+                  ],
+                  "tool": "memory.get_events"
+                }
+              },
+              {
+                "text": "\u2026ad: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit correction in this conversation. For synthetic project Cedar-713816e1 the current launch date is 2030-08-22, replacing and superseding 2030-08-14 recorded in source event:1. All other decisions remain unchanged; refer to event:1 for prior plan details, which are not independent new evidence. User requires scenario and expected answers to stay out of project files. No proje\u2026",
+                "source_kind": "event",
+                "source_id": "3",
+                "provenance": [
+                  "event:3"
+                ],
+                "title": "Synthetic Cedar-713816e1 launch date correction",
+                "excerpt": "\u2026ad: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit correction in this conversation. For synthetic project Cedar-713816e1 the current launch date is 2030-08-22, replacing and superseding 2030-08-14 recorded in source event:1. All other decisions remain unchanged; refer to event:1 for prior plan details, which are not independent new evidence. User requires scenario and expected answers to stay out of project files. No proje\u2026",
+                "confidence": 1.0,
+                "possibly": false,
+                "score": 0.017100563866306224,
+                "when": {
+                  "local": "2026-10-28T22:00:31+05:30",
+                  "ms": 1793205031076
+                },
+                "where": {
+                  "window_title": "Synthetic Cedar-713816e1 launch date correction"
+                },
+                "snippet": "\u2026thenticated actor: agent:codex-project. Source: user's explicit correction in this conversation. For synthetic project Cedar-713816e1 the current launch date is 2030-08-22, replacing and superseding 2030-08-14 recorded in source event:1.\u2026",
+                "open": {
+                  "ids": [
+                    3
+                  ],
+                  "tool": "memory.get_events"
+                }
+              },
+              {
+                "text": "\u2026-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project fil\u2026",
+                "source_kind": "event",
+                "source_id": "1",
+                "provenance": [
+                  "event:1"
+                ],
+                "title": "Synthetic evaluation data: Cedar-713816e1 latest plan",
+                "excerpt": "\u2026-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project fil\u2026",
+                "confidence": 1.0,
+                "possibly": false,
+                "score": 0.016684262432031395,
+                "when": {
+                  "local": "2026-10-28T21:54:00+05:30",
+                  "ms": 1793204640303
+                },
+                "where": {
+                  "window_title": "Synthetic evaluation data: Cedar-713816e1 latest plan"
+                },
+                "snippet": "\u2026: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verificat\u2026",
+                "open": {
+                  "ids": [
+                    1
+                  ],
+                  "tool": "memory.get_events"
+                }
+              }
+            ],
+            "answerability": {
+              "answerable": true,
+              "reason": "answerable"
+            },
+            "requested_depth": "warm",
+            "effective_depth": "warm",
+            "requested_range": null,
+            "resolved_range": {
+              "from_ms": 1790613071355,
+              "to_ms": 1793205071355
+            },
+            "lexical_scope": "all_history",
+            "complete": true,
+            "cold_partitions_visited": 0,
+            "cold_vectors_scanned": 0,
+            "elapsed_ms": 3
+          }
+        },
+        {
+          "name": "memory.get_events",
+          "arguments": {
+            "ids": [
+              1,
+              3
+            ],
+            "max_chars": 8000
+          },
+          "result": {
+            "events": [
+              {
+                "id": 1,
+                "source_kind": "agent",
+                "text": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit latest-plan message in this thread on 2026-10-28. For synthetic project Cedar-713816e1, the latest decided owner is Rina Das, launch date is 2030-08-14, and delivery format is HTML. Verification phrase: cobalt-finch-c67365a0b3. No prior relevant context was returned by memory.recall, so no previous values are known. User requires the scenario and expected answers to stay out of project files; no project files changed. Task is acknowledgement only; no unfinished implementation tasks.",
+                "truncated": false,
+                "when": {
+                  "local": "2026-10-28T21:54:00+05:30",
+                  "ms": 1793204640303
+                },
+                "where": {
+                  "window_title": "Synthetic evaluation data: Cedar-713816e1 latest plan"
+                }
+              },
+              {
+                "id": 3,
+                "source_kind": "agent",
+                "text": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Source: user's explicit correction in this conversation. For synthetic project Cedar-713816e1 the current launch date is 2030-08-22, replacing and superseding 2030-08-14 recorded in source event:1. All other decisions remain unchanged; refer to event:1 for prior plan details, which are not independent new evidence. User requires scenario and expected answers to stay out of project files. No project files changed. Task is acknowledgement only; no unfinished implementation tasks.",
+                "truncated": false,
+                "when": {
+                  "local": "2026-10-28T22:00:31+05:30",
+                  "ms": 1793205031076
+                },
+                "where": {
+                  "window_title": "Synthetic Cedar-713816e1 launch date correction"
+                }
+              }
+            ],
+            "missing": [],
+            "tool": "memory.get_events"
+          }
+        }
+      ],
+      "final_answer": "For **synthetic project Cedar-713816e1**, the current recorded decisions are:\n\n- **Owner:** Rina Das. [1]\n- **Launch date:** **2030-08-22**, superseding 2030-08-14. [2]\n- **Delivery format:** HTML. [1]\n- **Verification phrase:** `cobalt-finch-c67365a0b3`. [1]\n- **Approved budget:** Unknown\u2014no approval amount appears in the retrieved source evidence.\n\nSources inspected in ShogunAgent, both dated October 28, 2026:\n\n[1] **Event 1**, \u201cSynthetic evaluation data: Cedar-713816e1 latest plan.\u201d Saved agent summary attributing the decisions to your explicit message.  \n[2] **Event 3**, \u201cSynthetic Cedar-713816e1 launch date correction.\u201d Records your correction and states all other decisions remain unchanged."
+    }
+  ],
+  "read_only_regression_before_fix": {
+    "arguments": {
+      "actor": "agent:codex-project",
+      "source": "codex-project",
+      "thread_key": "shogun-prompt-acceptance-20261028",
+      "idempotency_key": "cedar-713816e1-status-source1-20261028",
+      "events": [
+        {
+          "kind": "note",
+          "title": "Synthetic Cedar-713816e1 source verification",
+          "content": "Synthetic evaluation data. Project/thread: shogun-prompt-acceptance-20261028. Authenticated actor: agent:codex-project. Answered status request by recalling Cedar-713816e1 and opening source event:1, titled Synthetic evaluation data: Cedar-713816e1 latest plan (2026-10-28). That saved agent summary attributes the latest plan to the user's explicit message: owner Rina Das, launch 2030-08-14, delivery HTML, verification phrase cobalt-finch-c67365a0b3. Project search returned only event:1; budget-specific recall yielded no approved budget. Approved budget is unknown from retrieved evidence, not zero or rejected. No new project decisions or changes; budget remains unverified. No project files changed."
+        }
+      ]
+    },
+    "result": {
+      "latency_ms": 8,
+      "next_action": null,
+      "result": {
+        "accepted": 1,
+        "deduplicated": 0,
+        "event_ids": [
+          2
+        ],
+        "idempotency_key": "cedar-713816e1-status-source1-20261028",
+        "inserted": 1,
+        "metadata": null,
+        "namespace": "world",
+        "near_duplicates": 0,
+        "rejected": 0,
+        "replayed": false,
+        "thread_key": "agent:shogun-prompt-acceptance-20261028"
+      },
+      "tool": "memory.ingest",
+      "usage": {
+        "quantity": 1,
+        "unit": "events"
+      }
+    }
+  },
+  "boundaries": [
+    "Existing source checkout and previously built engine supplied due low disk; no fresh compilation",
+    "Project MCP config authored by the setup agent; no MCP definition injected into successful workflow calls",
+    "Dedicated terminal started separately following the setup handoff",
+    "Final no-reingest instruction installed by Codex in a targeted repair, then actual reads and revision retested",
+    "Unrelated global MCP servers disabled per invocation; actual generated project config loaded",
+    "No Batch relay, automatic extraction, typed handoff, or second product tested"
+  ],
+  "cleanup": {
+    "test_server_stopped": true,
+    "global_config_restored_byte_for_byte": true,
+    "test_store_preserved": true
+  }
+}

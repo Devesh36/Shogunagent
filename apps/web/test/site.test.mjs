@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,readdir,stat} from 'node:fs/promises';
+import {readFile,readdir,stat,writeFile} from 'node:fs/promises';
 import {resolve,dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
@@ -23,4 +23,21 @@ test('onboarding links the runnable source path and labels replay limitations',a
   const home=await readFile(join(root,'dist/index.html'),'utf8');
   assert.ok(home.includes('href="/docs/state-walkthrough/"'));
 });
-test('preview serves pages, agent negotiation, and real 404s',async()=>{const child=spawn(process.execPath,['scripts/serve.mjs'],{cwd:root,env:{...process.env,PORT:'3198'},stdio:['ignore','pipe','pipe']});try{await new Promise((res,rej)=>{child.once('error',rej);child.once('exit',code=>rej(new Error('server exited '+code)));child.stdout.once('data',res)});for(const path of ['/','/product/','/docs/quickstart/','/playground/','/assets/manrope-latin.woff2'])assert.equal((await fetch('http://127.0.0.1:3198'+path)).status,200,path);const agent=await fetch('http://127.0.0.1:3198/',{headers:{Accept:'text/markdown'}});assert.match(await agent.text(),/^# ShogunAgent/);assert.equal((await fetch('http://127.0.0.1:3198/missing-page')).status,404);assert.equal((await fetch('http://127.0.0.1:3198/',{method:'POST'})).status,405)}finally{child.kill();}});
+test('preview serves pages, agent negotiation, and real 404s',async()=>{const child=spawn(process.execPath,['scripts/serve.mjs'],{cwd:root,env:{...process.env,PORT:'3198'},stdio:['ignore','pipe','pipe']});try{await new Promise((res,rej)=>{child.once('error',rej);child.once('exit',code=>rej(new Error('server exited '+code)));child.stdout.once('data',res)});for(const path of ['/','/product/','/docs/quickstart/','/playground/','/assets/manrope-latin.woff2'])assert.equal((await fetch('http://127.0.0.1:3198'+path)).status,200,path);const prompt=await fetch('http://127.0.0.1:3198/setup-prompt.txt');
+assert.equal(prompt.status,200);
+const text=await prompt.text();
+assert.ok(text.includes('Do not assume a particular agent product.'));
+assert.ok(!text.includes('https://shogunagent.com/'),'preview setup must not send users to undeployed production docs');
+const references=[...text.matchAll(/http:\/\/127\.0\.0\.1:3198\/[^\s]+/g)].map(match=>match[0]);
+assert.equal(references.length,4);
+for(const url of references)assert.equal((await fetch(url)).status,200,url);
+const module=await fetch('http://127.0.0.1:3198/setup-prompt.mjs');
+assert.equal(module.status,200);
+assert.match(module.headers.get('content-type'),/javascript/,'browser modules require a JavaScript MIME type');
+const canonical=await readFile(join(root,'dist/setup-prompt.txt'),'utf8');
+assert.ok(canonical.includes('https://shogunagent.com/docs/mcp/'),'production build retains canonical setup references');
+try {
+  await writeFile(join(root,'dist/setup-prompt.txt'),canonical+'\nPreview rebuild regression marker\n');
+  assert.ok((await (await fetch('http://127.0.0.1:3198/setup-prompt.txt')).text()).includes('Preview rebuild regression marker'),'a running preview must serve the latest built prompt');
+} finally {await writeFile(join(root,'dist/setup-prompt.txt'),canonical)}
+const agent=await fetch('http://127.0.0.1:3198/',{headers:{Accept:'text/markdown'}});assert.match(await agent.text(),/^# ShogunAgent/);assert.equal((await fetch('http://127.0.0.1:3198/missing-page')).status,404);assert.equal((await fetch('http://127.0.0.1:3198/',{method:'POST'})).status,405)}finally{child.kill();}});

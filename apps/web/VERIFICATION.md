@@ -117,6 +117,54 @@ Codex tool runtime, a Claude Desktop run, and the credentialed production relay
 walkthrough. A test relay credential and Claude Desktop were explicitly unavailable.
 Full workspace tests and the complete feature matrix were not rerun in this follow-up.
 
+## Agent-neutral setup prompt follow-up (28 October 2026)
+
+The subsequent [Codex context verification](../../docs/codex-context-verification.md)
+completed real model-driven save, recall, and source-event calls using isolated
+configuration. Fresh sessions retrieved a random phrase and interpreted an
+explicit deadline revision; the original source survived a server restart. This
+updates the earlier Codex result above without claiming the ordinary client
+configuration, automatic extraction, or other clients were verified.
+
+The website setup prompt now detects the current client rather than selecting a
+particular product. It covers project-scoped memory instructions, actual client
+tool calls, fresh-session validation, and optional second-client setup. It keeps
+unavailable login/restart/session steps explicitly pending. It does not claim
+universal agent support or automatic whole-chat capture.
+
+The local preview's Copy button and full-prompt endpoint use the preview origin;
+static production output retains the public domain. Browser verification confirmed
+the 5,056-character clipboard text matched the full prompt and used local guide
+URLs, with no agent product names in the prompt. The connection guide now includes
+the persistent instruction block and the separate-client connection step. Website
+syntax checks and all four tests passed, including local setup references and the
+browser module's JavaScript content type. This validates the website/prompt
+delivery, not a new end-to-end installation run in every client. Nothing was deployed.
+
+## Actual setup-prompt acceptance follow-up (28 October 2026)
+
+The [full acceptance report](../../docs/setup-prompt-acceptance.md) and
+[synthetic tool evidence](../../docs/verification/setup-prompt-acceptance-2026-10-28.json)
+record the real website-prompt test in Codex CLI. The setup agent generated the
+project's MCP configuration and instructions. Tests exposed a server tied to a
+temporary session, mistaken profile/actor guidance, and unnecessary ingest after
+a read-only lookup. The prompt and guide were corrected. A stale full-prompt
+response after preview rebuilds was also fixed and regression-tested.
+
+After the documented separate-terminal start and client restart, ordinary project
+messages triggered actual save/recall through the installed configuration. Four
+accepted work sessions made 11 successful MCP calls: initial decision, fresh read,
+explicit revision, and another fresh read. Final reads made no writes and reported
+an unrecorded budget as unknown. Configuration and private keys survived setup
+reruns; the user's temporary trust entry was removed and the original configuration
+restored byte-for-byte. The dedicated test server was stopped.
+
+This used an existing engine binary because of limited disk space. The final
+read-only instruction correction was installed and retested separately, not by
+repeating a clean-machine build. Other clients and automatic extraction remain
+unverified. The four website tests and six bridge tests passed; nothing was pushed
+or deployed.
+
 ## Visual review
 
 These screenshots show illustrative browser UI, not a live connection to the engine.
