@@ -57,7 +57,16 @@ jobs:
             shogunagent-*.tar.gz.sha256
 
   image:
-    runs-on: ubuntu-latest
+    # Compile on the matching native CPU; Rust release linking under QEMU exceeded two hours.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -66,29 +75,89 @@ jobs:
         shell: bash
         run: |
           echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/shogunagent" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
-          tags: |
-            ${{ steps.image-name.outputs.name }}:${{ github.ref_name }}
-            ${{ steps.image-name.outputs.name }}:latest
+          platforms: linux/${{ matrix.arch }}
+          cache-from: type=gha,scope=shogunagent-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=shogunagent-image-${{ matrix.arch }}
+          # Per-architecture builds publish only immutable digests. The index job owns tags.
+          outputs: type=image,name=${{ steps.image-name.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+      - name: record the platform digest
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          mkdir -p digests
+          printf '%s\n' "$IMAGE_DIGEST" > "digests/$IMAGE_ARCH.digest"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}.digest
+          if-no-files-found: error
+
+  image-index:
+    needs: [image]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: normalize the container repository name
+        id: image-name
+        shell: bash
+        run: |
+          echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/shogunagent" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-digest-*
+          path: digests
+          merge-multiple: true
+      - name: publish and inspect the multi-platform index
+        id: publish-index
+        env:
+          IMAGE_NAME: ${{ steps.image-name.outputs.name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          references=()
+          for arch in amd64 arm64; do
+            digest="$(cat "digests/$arch.digest")"
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+            references+=("$IMAGE_NAME@$digest")
+          done
+          docker buildx imagetools create --tag "$IMAGE_NAME:$RELEASE_TAG" --tag "$IMAGE_NAME:latest" "${references[@]}"
+          docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_TAG"
+          docker buildx imagetools inspect "$IMAGE_NAME:latest"
 
   github-release:
     needs: [binaries]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: '*-unknown-linux-gnu'
           path: dist
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
