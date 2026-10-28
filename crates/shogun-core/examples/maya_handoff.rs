@@ -142,7 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let request = ingest_request(&json!({
         "source":"maya-walkthrough", "actor":"agent:researcher", "thread_key":"kestrel-launch",
-        "idempotency_key":"maya-walkthrough-v1", "events":events
+        "idempotency_key":"example-maya-handoff-v1", "events":events
     }))?;
     let ingested = db.agent_ingest(&request)?;
     assert_eq!(ingested.inserted, 3);
