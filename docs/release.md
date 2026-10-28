@@ -11,7 +11,9 @@ owner has confirmed it.
 | `shogunagent` | PyPI | `packages/sdk-py` | `.github/workflows/publish-pypi.yml` |
 
 The Rust binaries and the container image have their own tag-driven workflow (`release.yml`); this
-document does not cover them, except where the CLI depends on them (below).
+document does not cover them, except where the CLI depends on them (below). Native container
+builds and the proposed image-only recovery procedure are documented in
+[container release recovery](container-release-recovery.md).
 
 ## Guard rails
 
