@@ -43,7 +43,7 @@ The local landing page's quickstart was followed using a fresh public clone of `
 
 The execution sandbox initially prohibited binding/accessing localhost; the authorized local tests outside that sandbox succeeded. This was an execution-environment restriction, not an engine failure. Low disk space was resolved by removing only the explicitly approved, regenerable build cache before compiling.
 
-## Known gaps for follow-up
+## Initial gaps found before the onboarding follow-up
 
 1. **Publication:** The copied setup prompt points to `shogunagent.com`. The new `/docs/quickstart/` route returned HTTP 404 on the public domain during verification; the local preview serves it. Publish the complete docs alongside the homepage, or supply a usable preview-specific entry point.
 2. **Client setup:** The MCP page names the endpoint and bearer header but does not explain required protocol/header behavior. A request containing only those documented headers returned HTTP 400 with `missing_header: Mcp-Method`. Adding `Mcp-Method`, plus `Mcp-Name` for `tools/call`, succeeded. Exact, tested client-specific instructions are still needed. Direct protocol tests do not establish that Claude Code, Codex, Cursor, or Claude Desktop have been connected successfully.
@@ -51,6 +51,71 @@ The execution sandbox initially prohibited binding/accessing localhost; the auth
 4. **Engine onboarding copy:** The MCP initialization instructions still describe “ShogunAI” and screen/meeting memory on a Mac. That wording is confusing for the separate ShogunAgent server product.
 
 Actual client integration, model extraction, live provider calls, connector OAuth, external sends, hosted deployment/billing, Windows, and the complete Rust workspace test suite were not validated in this website audit. No external messages or model calls were made, and no deployment was performed.
+
+## Onboarding follow-up (28 October 2026)
+
+Changes were developed on `codex/agent-onboarding`. Production deployment is
+separate from this source update. The earlier results above describe the initial audit.
+
+- Added `scripts/mcp-local-bridge.py`: authenticated stdio-to-loopback HTTP with
+  per-message `Mcp-Method` / `Mcp-Name`, private token-file loading, no proxy or
+  redirects, bounded messages, timeouts, and JSON-RPC errors on transport failures.
+  It retains the bearer's permissions; it is not the legacy read-only CLI adapter.
+- Added configuration generation for Claude Code, Cursor, Codex, and Claude Desktop,
+  exact installation instructions, a no-model protocol check, and a tool-use prompt.
+- Added `/docs/state-walkthrough/`, the source processing guide, and the runnable
+  `maya_handoff` engine example. The laptop demo now links to this walkthrough.
+- Server initialization and discovery now describe ShogunAgent and processing
+  prerequisites. The desktop-feature build retains the separate desktop guide.
+
+### Observed client results
+
+| Surface | Observed result | Limit |
+| --- | --- | --- |
+| Bridge against the running local API | Initialization, tools/list, profile.whoami passed; memory.recall returned the real Kestrel/violet evidence | Direct protocol test, not a model-driven client conversation |
+| Claude Code 2.1.220 | `claude mcp list` reported Connected using a temporary config | The conversation test returned “Not logged in”; model-driven tool use is unverified |
+| Cursor CLI 2026.09.02-c22c1a3 | Approved the server in an isolated test workspace; discovered 68 tools | Agent conversation required login; this does not verify Cursor's GUI or model-driven tool use |
+| Codex CLI 0.164.0 | Generated source configuration loaded in an isolated invocation | Tool dispatch failed in Codex's code-mode host before the requested tools ran; no ShogunAgent tool result was claimed |
+| Claude Desktop | Generated the stdio configuration | Application unavailable; not tested in the actual client |
+
+The Codex attempts used its existing sign-in and produced model responses, but
+did not execute the requested MCP calls. No client login was fabricated. Normal
+user client settings were not overwritten; test registrations stayed in temporary
+configuration/workspace directories.
+
+### Engine replay and focused checks
+
+- Maya replay: passed with **scripted Batch answers**, using real ingestion,
+  hourly review, source-anchor validation, consolidation, recall, knowledge
+  neighbors, and handoff creation/acceptance. There were 2 source sessions,
+  3 events, 8 resolved anchors, and no unresolved anchors. Recall returned a
+  person, project, commitment, and open loop; handoff included 2 entities and
+  2 facts. Writer-scratch recall, exclusion from world-only recall, and duplicate
+  acceptance were asserted successfully. No model or relay call occurred in it.
+- This exposed an onboarding prerequisite: extracted people/projects mentioned in
+  only one hourly source session are hidden from normal recall. The guide now
+  explains the two-session visibility rule and completed-hour review window.
+- Six bridge regression tests passed, including dynamic headers, notifications,
+  token rotation/permissions, remote URL refusal, no redirects, and malformed
+  responses. The website build and four tests passed (19 content pages plus 404).
+- The focused Rust handshake regression passed, as did 13 existing HTTP MCP
+  transport tests and two legacy generated-client-config checks. The new Maya
+  example and the working branch’s MCP library also passed Clippy with warnings denied. Workflow YAML, HTTP egress, desktop feature gates, secret
+  exposure, and log-hygiene checks passed.
+- The exact new example was compiled and run in the prior fresh-build checkout to
+  reuse artifacts under disk pressure. Its engine source matches merged main;
+  the example file was compared byte-for-byte with the working branch. Server
+  onboarding copy was tested separately in the working branch's MCP test build.
+  The existing API process used for bridge checks was not replaced; rebuild and
+  restart it to see the new initialization wording in a live client.
+- Browser verification opened both updated docs pages, checked the sidebar, filtered the new guide, verified command copying by pasting
+  it into an input, and observed no desktop horizontal overflow. An initially
+  missing sidebar label was fixed and covered by a regression assertion.
+
+**Still needed:** actual model-driven calls after Claude/Cursor login, a working
+Codex tool runtime, a Claude Desktop run, and the credentialed production relay
+walkthrough. A test relay credential and Claude Desktop were explicitly unavailable.
+Full workspace tests and the complete feature matrix were not rerun in this follow-up.
 
 ## Visual review
 

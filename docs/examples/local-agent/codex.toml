@@ -1,0 +1,3 @@
+[mcp_servers.shogunagent]
+command = "/ABS/PATH/TO/python3"
+args = ["/ABS/PATH/TO/Shogunagent/scripts/mcp-local-bridge.py", "--token-file", "/ABS/PATH/TO/Shogunagent/.shogun-demo/api.token"]

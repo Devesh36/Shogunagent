@@ -179,6 +179,11 @@ name = "conformance_store"
 path = "examples/conformance_store.rs"
 required-features = ["db"]
 
+[[example]]
+name = "maya_handoff"
+path = "examples/maya_handoff.rs"
+required-features = ["daemon-server"]
+
 # The MCP server face — a stdio JSON-RPC loop (no axum; only the storage layer).
 [[bin]]
 name = "shogun-mcp"
