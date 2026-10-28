@@ -1,6 +1,6 @@
 # Connect an agent to your local ShogunAgent server
 
-Complete the [website quickstart](https://shogunagent.com/docs/quickstart/) first.
+Complete the [repository quickstart](../README.md#quickstart-save-and-recall-a-source) first.
 Keep `shogun-api` running. These instructions use its multi-principal demo store,
 not a ShogunAI desktop database. Python 3 is the only bridge dependency.
 
