@@ -2163,6 +2163,12 @@ fn error_with_data(id: Value, code: i64, message: &str, data: Option<Value>) -> 
 
 /// Handshake `instructions` (issue #1066): which tool answers which question. Keep under ~1.5 KB.
 /// The meetings line is dropped when this build does not serve the meeting tools (E4-T6).
+#[cfg(not(feature = "desktop"))]
+fn routing_guide() -> String {
+    SERVER_ROUTING_GUIDE.to_string()
+}
+
+#[cfg(feature = "desktop")]
 fn routing_guide() -> String {
     let meetings = crate::memory_api::tool_is_served(Tool::MeetingList);
     ROUTING_GUIDE
@@ -2179,6 +2185,18 @@ fn routing_guide() -> String {
         .join("\n")
 }
 
+#[cfg(not(feature = "desktop"))]
+const SERVER_ROUTING_GUIDE: &str = "ShogunAgent is a local-first state layer shared by AI agents: source events, people, projects, commitments and open loops, with provenance and permission checks. It is a server, not a Mac screen or meeting recorder. If no relevant source exists, say so; do not guess.
+
+Routing:
+- Before acting: memory.recall (query, budget_tokens). At a checkpoint: memory.ingest (events/turns, actor, idempotency_key).
+- Find evidence: memory.search, then memory.get_events. Entity context: memory.get_context_pack, state.people.get, state.projects.get, wiki.evidence.
+- Track work: state.commitments.list and state.open_loops.list.
+- Transfer context: handoff.create, then handoff.accept into the receiving agent's scratch namespace. A handoff grants no new authority.
+
+Ingest stores source events and runs low-confidence local rules. Reviewed facts and entities require configured processing; an empty facts list is not proof that ingestion failed. Preserve uncertainty and source quotes. Read calls still require authentication. L3 actions require human approval through the configured approval surface. tools/list describes this build's tools.";
+
+#[cfg(feature = "desktop")]
 const ROUTING_GUIDE: &str = "ShogunAI is the user's local memory of their work on this Mac: screen text, meetings, people, projects, commitments. Check it when they refer to their own past, a person, project or meeting; if it holds nothing relevant, say so, do not guess.
 
 Routing:
@@ -4528,6 +4546,15 @@ mod tests {
     #[test]
     fn every_handshake_carries_a_short_routing_guide_naming_real_tools() {
         let text = call(&server(), INITIALIZE)["result"]["instructions"].as_str().unwrap().to_string();
+        #[cfg(not(feature = "desktop"))]
+        {
+            assert!(text.starts_with("ShogunAgent is a local-first state layer"));
+            assert!(!text.contains("ShogunAI"));
+            assert!(text.contains("require configured processing"));
+            let discovery = server().handle_line(r#"{"jsonrpc":"2.0","id":2,"method":"server/discover"}"#).unwrap();
+            let discovery: Value = serde_json::from_str(&discovery).unwrap();
+            assert_eq!(discovery["result"]["instructions"], text);
+        }
         assert!(text.len() <= 1536, "guide is {} bytes", text.len());
         assert!(!text.contains("plan_required"));
         // Every tool the guide names exists, so a rename cannot leave it pointing nowhere.

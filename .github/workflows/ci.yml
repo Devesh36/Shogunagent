@@ -33,6 +33,11 @@ jobs:
           node-version-file: .nvmrc
       - run: npm run typecheck --prefix apps/web
       - run: npm test --prefix apps/web
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: local MCP bridge protocol and token safeguards
+        run: python3 -m unittest discover -s scripts -p test_mcp_local_bridge.py
 
   rust:
     name: rust (clippy, test, feature matrix)
@@ -51,6 +56,8 @@ jobs:
         run: cargo test --locked -p shogun-core --features daemon-server --lib calendar_regression_tests
         env:
           TZ: Asia/Kolkata
+      - name: Maya source-to-handoff replay (synthetic model answers, no network)
+        run: cargo run --locked -p shogun-core --features daemon-server --example maya_handoff
 
   guards:
     name: invariant guards

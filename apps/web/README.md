@@ -20,6 +20,7 @@ Or `pnpm --filter @shogun-ai/web dev` (default port 3001).
 - `laptop.html`, `laptop.css`, `laptop.js`: responsive local-workflow animation with manual chapters, pause/replay, visibility-aware playback, and reduced-motion support.
 - `content.mjs`: documentation, canonical local setup snippets.
 - `app.js`: synthetic handoff demos, navigation, docs filtering, clipboard.
+- `onboarding.mjs`: source-only agent connection and state walkthrough pages.
 - `styles.css`: responsive design and reduced-motion support.
 - `laptop.html`, `laptop.css`, `laptop.js`: photographic MacBook with a four-part, plain-language launch-review story.
 - `visuals.html`, `visuals.css`, `visuals.js`: interactive relationship graph and task timeline, with sample evidence, pause controls and reduced-motion support.
@@ -33,6 +34,19 @@ node --test apps/web/test/*.test.mjs
 ```
 
 Tests cover broken internal destinations, setup safety invariants, HTTP routes, content negotiation and 404 handling. Browser QA must cover the demo stages, scenario changes, empty source selection, JSON views, clipboard, responsive navigation and docs filtering.
+
+## Local onboarding beyond the website
+
+- [Agent setup](../../docs/local-agent-setup.md): a dependency-free Python stdio
+  bridge supplies the HTTP endpoint's dynamic MCP headers and generates configs
+  without embedding tokens. The running server still owns authentication and permissions.
+- [State walkthrough](../../docs/local-state-walkthrough.md): run the Maya engine
+  replay, then follow the separately labeled credentialed processing path. The
+  replay's model answers are fixtures; the website animation remains illustrative.
+
+From the repository root, test the bridge with
+`python3 -m unittest discover -s scripts -p test_mcp_local_bridge.py`.
+Client connection and live-model limitations are recorded in [VERIFICATION.md](VERIFICATION.md).
 
 See [VERIFICATION.md](VERIFICATION.md) for the completed browser/fresh-user audit, screenshots, and known launch gaps. The CI website job builds and checks this app independently of the Rust engine.
 
