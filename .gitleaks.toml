@@ -57,5 +57,27 @@ regexes = ['''^dev-token$''']
 
 [[rules]]
 id = "generic-api-key"
-[rules.allowlist]
+[[rules.allowlists]]
 regexes = ['''^NFR-SLO-03-final$''']
+
+# Recorded MCP evidence: retain original identifiers and answers verbatim.
+# Each exception requires BOTH its exact evidence path and exact detected value.
+# Do not widen this to a directory, line match, or a credential-shaped pattern.
+
+[[rules.allowlists]]
+description = "Recorded synthetic MCP identifiers; not authentication credentials"
+condition = "AND"
+paths = ['''^docs/verification/codex-context-2026-10-28\.json$''']
+regexes = [
+  '''^Juniper-e908c924$''',
+  '''^Juniper-e908c924-v1$''',
+  '''^Juniper-e908c924-v2$''',
+]
+
+[[rules.allowlists]]
+description = "Recorded synthetic MCP identifiers; not authentication credentials"
+condition = "AND"
+paths = ['''^docs/verification/setup-prompt-acceptance-2026-10-28\.json$''']
+regexes = [
+  '''^shogun-prompt-acceptance-20261028$''',
+]
