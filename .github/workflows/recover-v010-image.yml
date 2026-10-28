@@ -1,0 +1,165 @@
+name: recover v0.1.0 container only
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish exact v0.1.0 images after native build and smoke checks'
+        type: boolean
+        default: false
+
+# No release/tag/asset writes. Registry publication uses the existing release permission.
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: recover-v010-container
+  cancel-in-progress: false
+
+env:
+  RELEASE_SOURCE: f4b7c3794125ae8169ff4ab65c2f378267f5ca5c
+  IMAGE_NAME: ghcr.io/torutesu/shogunagent
+
+jobs:
+  preflight:
+    if: github.repository == 'Torutesu/Shogunagent' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: verify immutable release tag
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin refs/tags/v0.1.0
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$RELEASE_SOURCE"
+      - name: inspect existing image tags without overwriting
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/recover-v010-registry.py preflight
+
+  native:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f4b7c3794125ae8169ff4ab65c2f378267f5ca5c
+      - name: verify exact build source and release tag
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE"
+          git fetch --no-tags origin refs/tags/v0.1.0
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$RELEASE_SOURCE"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: inputs.publish
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: local-build
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=shogunagent-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=shogunagent-image-${{ matrix.arch }}
+          outputs: type=docker,name=shogunagent-recovery:local
+          labels: |
+            org.opencontainers.image.revision=f4b7c3794125ae8169ff4ab65c2f378267f5ca5c
+            org.opencontainers.image.source=https://github.com/Torutesu/Shogunagent
+      - name: smoke the native image without network access
+        env:
+          IMAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          image=shogunagent-recovery:local
+          test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$IMAGE_ARCH"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")" = "$RELEASE_SOURCE"
+          docker run --rm --network none --read-only --entrypoint /usr/local/bin/shogun "$image" --help
+          docker image inspect --format '{{.Id}}' "$image" > "$RUNNER_TEMP/tested-config.digest"
+      - uses: docker/build-push-action@v6
+        id: publish
+        if: inputs.publish
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          sbom: false
+          # Same builder, source, platform and labels reuse the tested build cache.
+          outputs: type=image,name=ghcr.io/torutesu/shogunagent,push-by-digest=true,name-canonical=true,push=true
+          labels: |
+            org.opencontainers.image.revision=f4b7c3794125ae8169ff4ab65c2f378267f5ca5c
+            org.opencontainers.image.source=https://github.com/Torutesu/Shogunagent
+      - name: compare pushed digest with the tested image before recording it
+        if: inputs.publish
+        env:
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+          IMAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          image="$IMAGE_NAME@$IMAGE_DIGEST"
+          docker pull "$image"
+          test "$(docker image inspect --format '{{.Id}}' "$image")" = "$(cat "$RUNNER_TEMP/tested-config.digest")"
+          docker run --rm --network none --read-only --entrypoint /usr/local/bin/shogun "$image" --help
+          mkdir -p digests
+          printf '%s\n' "$IMAGE_DIGEST" > "digests/$IMAGE_ARCH.digest"
+      - uses: actions/upload-artifact@v4
+        if: inputs.publish
+        with:
+          name: recovery-digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}.digest
+          if-no-files-found: error
+
+  publish-index:
+    needs: native
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: recovery-digest-*
+          path: digests
+          merge-multiple: true
+      - name: check tag and registry again immediately before publication
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin refs/tags/v0.1.0
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$RELEASE_SOURCE"
+          python3 scripts/recover-v010-registry.py preflight
+      - name: publish the two verified native images
+        run: |
+          set -euo pipefail
+          references=()
+          for arch in amd64 arm64; do
+            digest="$(cat "digests/$arch.digest")"
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+            references+=("$IMAGE_NAME@$digest")
+          done
+          docker buildx imagetools create --tag "$IMAGE_NAME:v0.1.0" --tag "$IMAGE_NAME:latest" "${references[@]}"
+      - name: verify both tags, platforms and source revision
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/recover-v010-registry.py verify

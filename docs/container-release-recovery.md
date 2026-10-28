@@ -14,53 +14,68 @@ references, then inspects both tags. A failed platform cannot publish a partial
 index. Registry operations are not transactional: inspection failure after
 creation requires checking registry state before attempting recovery.
 
-Every manual `workflow_dispatch` run is build-only, including one selecting a
-version tag. It does not log in to GHCR, push images, publish an index, or create a
+Every manual `workflow_dispatch` run of `release.yml` is build-only, including
+one selecting a version tag. It does not log in to GHCR, push images, publish an index, or create a
 GitHub release. Binary build artifacts may still be uploaded to the workflow
 run. This corrects the old ref-only guard, which allowed a manual run on a version
 tag to publish. Existing workflow token permissions are unchanged.
 
 ## Recover the existing v0.1.0 image separately
 
-This is a proposed recovery procedure, not a publication performed by this
-change. The existing release source is
-`f4b7c3794125ae8169ff4ab65c2f378267f5ca5c`. Keep the `v0.1.0` Git tag and existing
-GitHub release binary assets unchanged. Re-running the original release run
-uses its original workflow revision, so it does not pick up this native-build
-fix. A manual run of the updated workflow intentionally cannot publish.
+`.github/workflows/recover-v010-image.yml` is a separate, manual, image-only
+recovery entry point. Its application source is fixed to
+`f4b7c3794125ae8169ff4ab65c2f378267f5ca5c`; the workflow checks that the existing
+`v0.1.0` Git tag still resolves to that commit. The workflow revision and
+application source revision are distinct and must both appear in the recovery
+record. The `v0.1.0` Git tag and existing GitHub release binary assets stay
+unchanged. Re-running the original release run uses its original workflow
+revision and does not pick up the native-build fix.
 
-1. Review and merge the native-build fix. Run the updated workflow manually on
-   its reviewed commit to validate native runner availability, Docker builds,
-   cache behavior and build duration. Record the source SHA and run ID. This
-   dry run validates that commit; it is not evidence that the older release
-   source was rebuilt.
-2. Prepare a separately reviewed **image-only** recovery workflow or operator
-   procedure that checks out the full source SHA above on both native runners.
-   The workflow revision and application source revision must be recorded
-   separately. It must use that source tree's Dockerfile and build context,
-   preserve the per-architecture cache separation, and label the image revision
-   with the application source SHA. Do not create a replacement Git tag, rerun
-   binary publication, or upload/delete release assets.
-3. First build both platforms without pushing. Record successful builds and
-   platform identity. Before any registry write, obtain explicit recovery
-   authorization and verify normal GHCR access. Previous manifest inspection
-   was denied; that is unresolved access evidence, not proof that a tag is
-   absent. Stop if access is still denied; do not change credentials or bypass
-   permissions as part of this procedure.
-4. After approval, publish both images by digest and retain the two digest
-   receipts. Validate both references before creating the `v0.1.0` index. Inspect
-   any existing version tag first: do not overwrite an unexpected existing
-   digest without a separate maintainer decision. Decide explicitly whether
-   `latest` should also point to this release; recovery must not implicitly
-   replace a newer release's `latest` tag.
-5. Inspect the published index and confirm both `linux/amd64` and `linux/arm64`
-   manifests and their revision labels. Record the index digest and run/source
-   revisions, then perform image startup checks by digest on each architecture.
-   Compare the Git tag target and existing release asset checksums with the
-   pre-recovery record to confirm they were untouched.
+The recovery workflow runs only from `main` in `Torutesu/Shogunagent`. Its
+`publish` boolean defaults to `false`. A dry run builds the fixed source on both
+native runners, loads each image locally, and runs the CLI's `--help` with
+networking disabled. This establishes native executable startup, not a full
+memory API or persistence test. Inspect both platform jobs and record their
+source revisions, results, build durations, and cache behavior before approving
+publication. The separate dry run is an operator prerequisite; the workflow does
+not query or enforce a prior run receipt.
 
-The image-only recovery entry point is not implemented here. No tag movement,
-registry publication, workflow rerun or release-asset replacement is needed to
-review this change. Local fake-Docker tests check command construction, digest
-validation and publication gates; they do not establish registry access, actual
-image architecture, build speed or container runtime correctness.
+A publishing run repeats the local build and network-disabled smoke, then
+pushes a second cached build by immutable digest. It pulls that exact digest,
+requires its image configuration digest to equal the locally tested image,
+and repeats the CLI smoke before recording the platform digest. A mismatch or
+failure can leave an untagged registry digest, but cannot advance to version-tag
+publication. Provenance/SBOM attestations are disabled here so the final index
+has exactly the two runnable platform manifests.
+
+The run uses the existing GitHub Actions package grant; it does not request
+repository contents write access or additional Actions permissions. It must establish authenticated GHCR
+read access and refuse publication if either `v0.1.0` or `latest` already exists.
+Denied or uncertain responses stop the run; they are not evidence that a tag is
+absent. Previous manifest inspection was denied. This workflow does not bypass
+that denial or provision credentials or permissions.
+
+Both native builds must succeed before the combined index is published. Preserve
+the platform digest receipts and final registry evidence. The completed check
+must show the same index digest for `v0.1.0` and `latest`, exactly `linux/amd64`
+and `linux/arm64`, and the fixed application source revision on both images.
+No binaries are rebuilt for GitHub release upload, and no release assets are
+created, replaced or deleted by this recovery.
+
+Before dispatching with `publish: true`, a maintainer must review the dry-run
+results and authorize the registry writes. Record the pre-existing Git tag
+target and release asset checksums, then compare them after recovery. If either
+registry tag already exists, inspect the reported metadata and stop: this
+workflow deliberately does not overwrite it, even if its digest appears to
+match the intended release. A partial publication or an inspection failure
+needs a separate recovery decision rather than an automatic retry.
+
+Registry writes are not transactional. Serializing this recovery workflow does
+not lock out other publishers; maintainers must avoid concurrent publication
+through the normal release workflow or another client. A last-moment preflight
+reduces the race but cannot supply registry compare-and-set semantics.
+
+Local tests use fake Docker and registry responses. They verify refusal paths,
+command construction, source checks and publication gates without accessing
+GHCR. They do not establish real registry access, native build speed, cache
+performance, or completed publication.

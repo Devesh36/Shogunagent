@@ -243,6 +243,7 @@ jobs:
           python scripts/check-workflow-yaml.py --self-test
           python scripts/check-workflow-yaml.py
           python scripts/test-release-image.py
+          python scripts/test-recover-v010-image.py
       - name: release versions agree (manifests, code constants, CHANGELOG sections)
         run: node scripts/check-release-versions.mjs
       - run: pnpm install --frozen-lockfile
