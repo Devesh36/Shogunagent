@@ -21,6 +21,10 @@ Or `pnpm --filter @shogun-ai/web dev` (default port 3001).
 - `content.mjs`: documentation, canonical local setup snippets.
 - `app.js`: synthetic handoff demos, navigation, docs filtering, clipboard.
 - `onboarding.mjs`: source-only agent connection and state walkthrough pages.
+- `setup-prompt.mjs`: agent-neutral setup prompt and reusable project memory
+  instructions. The homepage copy button uses the current browser origin. The
+  preview server serves matching local links in `setup-prompt.txt` and the agent
+  references; the static production build retains the public domain.
 - `styles.css`: responsive design and reduced-motion support.
 - `laptop.html`, `laptop.css`, `laptop.js`: photographic MacBook with a four-part, plain-language launch-review story.
 - `visuals.html`, `visuals.css`, `visuals.js`: interactive relationship graph and task timeline, with sample evidence, pause controls and reduced-motion support.

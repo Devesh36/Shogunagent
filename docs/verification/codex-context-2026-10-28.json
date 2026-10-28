@@ -1,0 +1,317 @@
+{
+  "date": "2026-10-28",
+  "kind": "actual-model-driven-codex-mcp-test",
+  "scenario": {
+    "project": "Juniper-e908c924",
+    "owner": "Mira Sen",
+    "initial_date": "2030-06-18",
+    "updated_date": "2030-06-24",
+    "format": "PDF",
+    "phrase": "saffron-orbit-16a5a2f589"
+  },
+  "codex_version": "0.164.0",
+  "principal": "codex-eval",
+  "agents": [
+    "writer",
+    "reader"
+  ],
+  "server_restarted_between_initial_write_and_read": true,
+  "server_binary_sha256": "2eb8b48f1a9978c5bc4adfeee18d8d92519c71d7be98c9dbee46a8da8234f1d4",
+  "server_build_checkout": "4e8210fdc16fbd13a04d7b94d7dfbe8fbce4a246",
+  "runs": [
+    {
+      "stage": "writer-initial",
+      "thread_id": "01a1831f-b2d1-7c63-8b9c-ef91d76d2a57",
+      "prompt": "Use only the shogunagent MCP tools. This is an authorized synthetic local-memory acceptance test. Do not use shell, files, web, other servers, previous conversations, or personal memory. If a tool fails, report its actual error and stop. First call memory.recall for Juniper-e908c924 with budget_tokens 2000 and verify it is absent. Then save this note verbatim with memory.ingest: 'Synthetic acceptance test. Project Juniper-e908c924: owner Mira Sen; launch date 2030-06-18; delivery format PDF; verification phrase saffron-orbit-16a5a2f589.'. Use source codex-context-test, actor agent:writer, thread_key Juniper-e908c924, namespace world, and idempotency_key Juniper-e908c924-v1. Report the actual receipt and event IDs. Do not claim automatic extraction.",
+      "raw_transcript_sha256": "d541944c6df12592f5645987088183552e5aca25db7275f4a61bf2fd83c54978",
+      "tools": [
+        {
+          "name": "memory.recall",
+          "arguments": {
+            "query": "Juniper-e908c924",
+            "budget_tokens": 2000
+          },
+          "status": "completed",
+          "result": {
+            "latency_ms": 39,
+            "next_action": null,
+            "result": {
+              "budget_tokens": 2000,
+              "evidence": [],
+              "facts": [],
+              "include_scratch": false,
+              "items": [],
+              "possibly": [],
+              "truncated": false,
+              "used_tokens": 0
+            },
+            "tool": "memory.recall",
+            "usage": {
+              "cost_micro_usd": 0,
+              "quantity": 1,
+              "unit": "read"
+            }
+          }
+        },
+        {
+          "name": "memory.ingest",
+          "arguments": {
+            "source": "codex-context-test",
+            "actor": "agent:writer",
+            "thread_key": "Juniper-e908c924",
+            "namespace": "world",
+            "idempotency_key": "Juniper-e908c924-v1",
+            "events": [
+              {
+                "content": "Synthetic acceptance test. Project Juniper-e908c924: owner Mira Sen; launch date 2030-06-18; delivery format PDF; verification phrase saffron-orbit-16a5a2f589."
+              }
+            ]
+          },
+          "status": "completed",
+          "result": {
+            "latency_ms": 29,
+            "next_action": null,
+            "result": {
+              "accepted": 1,
+              "deduplicated": 0,
+              "event_ids": [
+                1
+              ],
+              "idempotency_key": "Juniper-e908c924-v1",
+              "inserted": 1,
+              "metadata": null,
+              "namespace": "world",
+              "near_duplicates": 0,
+              "rejected": 0,
+              "replayed": false,
+              "thread_key": "agent:Juniper-e908c924"
+            },
+            "tool": "memory.ingest",
+            "usage": {
+              "quantity": 1,
+              "unit": "events"
+            }
+          }
+        }
+      ],
+      "final_answer": "Recall found no facts, evidence, or items for `Juniper-e908c924`.\n\nSaved the note verbatim. Actual receipt:\n\n- Accepted: 1; inserted: 1; rejected: 0\n- Event IDs: `[1]`\n- Idempotency key: `Juniper-e908c924-v1`\n- Namespace: `world`\n- Returned thread key: `agent:Juniper-e908c924`\n- Replayed: `false`\n- Receipt ID: not provided by the tool"
+    },
+    {
+      "stage": "reader-initial",
+      "thread_id": "01a18320-f30f-7472-8fb7-1f90073aba72",
+      "prompt": "Use only the shogunagent MCP tools. This is an authorized synthetic local-memory acceptance test. Do not use shell, files, web, other servers, previous conversations, or personal memory. If a tool fails, report its actual error and stop. You are a new agent session with no previous conversation. Using Shogun memory.recall, find project Juniper-e908c924. What are its current owner, launch date, delivery format, verification phrase, and approved budget? Open the supporting events with memory.get_events and cite their event IDs and exact quotes. If sources contain a revision, explain which value is current and why. If a requested field is not supported, say unknown. Do not invent missing values.",
+      "raw_transcript_sha256": "3139e8b08344d7be4b3ba996e1d66083dc81e32daa39e9b065761a85d15a0fb2",
+      "tools": [
+        {
+          "name": "memory.recall",
+          "arguments": {
+            "query": "project Juniper-e908c924 current owner launch date delivery format verification phrase approved budget revisions",
+            "budget_tokens": 4000
+          },
+          "status": "completed",
+          "result": {
+            "latency_ms": 18,
+            "next_action": null,
+            "result": {
+              "budget_tokens": 4000,
+              "evidence": [
+                {
+                  "event_id": 1,
+                  "excerpt": "Synthetic acceptance test. Project Juniper-e908c924: owner Mira Sen; launch date 2030-06-18; delivery format PDF; verification phrase saffron-orbit-16a5a2f589.",
+                  "source": "agent",
+                  "title": "codex-context-test",
+                  "ts_ms": 1793201282671
+                }
+              ],
+              "facts": [],
+              "include_scratch": false,
+              "items": [],
+              "possibly": [],
+              "truncated": false,
+              "used_tokens": 46
+            },
+            "tool": "memory.recall",
+            "usage": {
+              "cost_micro_usd": 0,
+              "quantity": 1,
+              "unit": "read"
+            }
+          }
+        },
+        {
+          "name": "memory.get_events",
+          "arguments": {
+            "ids": [
+              1
+            ]
+          },
+          "status": "completed",
+          "result": {
+            "events": [
+              {
+                "id": 1,
+                "source_kind": "agent",
+                "text": "Synthetic acceptance test. Project Juniper-e908c924: owner Mira Sen; launch date 2030-06-18; delivery format PDF; verification phrase saffron-orbit-16a5a2f589.",
+                "truncated": false,
+                "when": {
+                  "local": "2026-10-28T20:58:02+05:30",
+                  "ms": 1793201282671
+                },
+                "where": {
+                  "window_title": "codex-context-test"
+                }
+              }
+            ],
+            "missing": [],
+            "tool": "memory.get_events"
+          }
+        }
+      ],
+      "final_answer": "Project **Juniper-e908c924**:\n\n- **Current owner:** Mira Sen\n- **Launch date:** 2030-06-18\n- **Delivery format:** PDF\n- **Verification phrase:** `saffron-orbit-16a5a2f589`\n- **Approved budget:** Unknown; the retrieved source does not mention it.\n\nSupporting source: **Event ID 1**, opened with `memory.get_events`. Exact quote:\n\n> Synthetic acceptance test. Project Juniper-e908c924: owner Mira Sen; launch date 2030-06-18; delivery format PDF; verification phrase saffron-orbit-16a5a2f589.\n\nNo revision was found in the recalled evidence, so these are the current supported values."
+    },
+    {
+      "stage": "writer-update",
+      "thread_id": "01a18321-b938-7091-b2bf-74ef984f4a79",
+      "prompt": "Use only the shogunagent MCP tools. This is an authorized synthetic local-memory acceptance test. Do not use shell, files, web, other servers, previous conversations, or personal memory. If a tool fails, report its actual error and stop. Save this new update verbatim with memory.ingest: 'Project Juniper-e908c924 update: the launch date is now 2030-06-24. This replaces the previous launch date 2030-06-18. The owner, delivery format, and verification phrase are unchanged.'. Use source codex-context-test, actor agent:writer, thread_key Juniper-e908c924, namespace world, and idempotency_key Juniper-e908c924-v2. Report the actual receipt and event IDs.",
+      "raw_transcript_sha256": "a85d5f5889dc87de738655a86b40b688b2c73ea60126da60357193af0c9c8578",
+      "tools": [
+        {
+          "name": "memory.ingest",
+          "arguments": {
+            "actor": "agent:writer",
+            "events": [
+              {
+                "content": "Project Juniper-e908c924 update: the launch date is now 2030-06-24. This replaces the previous launch date 2030-06-18. The owner, delivery format, and verification phrase are unchanged."
+              }
+            ],
+            "idempotency_key": "Juniper-e908c924-v2",
+            "namespace": "world",
+            "source": "codex-context-test",
+            "thread_key": "Juniper-e908c924"
+          },
+          "status": "completed",
+          "result": {
+            "latency_ms": 11,
+            "next_action": null,
+            "result": {
+              "accepted": 1,
+              "deduplicated": 0,
+              "event_ids": [
+                2
+              ],
+              "idempotency_key": "Juniper-e908c924-v2",
+              "inserted": 1,
+              "metadata": null,
+              "namespace": "world",
+              "near_duplicates": 0,
+              "rejected": 0,
+              "replayed": false,
+              "thread_key": "agent:Juniper-e908c924"
+            },
+            "tool": "memory.ingest",
+            "usage": {
+              "quantity": 1,
+              "unit": "events"
+            }
+          }
+        }
+      ],
+      "final_answer": "Saved verbatim successfully.\n\n- Event ID: `2`\n- Receipt ID: not returned by the tool\n- Idempotency key: `Juniper-e908c924-v2`\n- Accepted: `1`; inserted: `1`; replayed: `false`\n- Returned thread key: `agent:Juniper-e908c924`"
+    },
+    {
+      "stage": "reader-updated",
+      "thread_id": "01a18322-763a-7d70-a4e7-3c16dc6f5479",
+      "prompt": "Use only the shogunagent MCP tools. This is an authorized synthetic local-memory acceptance test. Do not use shell, files, web, other servers, previous conversations, or personal memory. If a tool fails, report its actual error and stop. You are a new agent session with no previous conversation. Using Shogun memory.recall, find project Juniper-e908c924. What are its current owner, launch date, delivery format, verification phrase, and approved budget? Open the supporting events with memory.get_events and cite their event IDs and exact quotes. If sources contain a revision, explain which value is current and why. If a requested field is not supported, say unknown. Do not invent missing values.",
+      "raw_transcript_sha256": "060d22fbedbbbf9f11d7461a3371f0c439ca0d3520b694b73eb46e6ba4efa80f",
+      "tools": [
+        {
+          "name": "memory.recall",
+          "arguments": {
+            "query": "project Juniper-e908c924 current owner launch date delivery format verification phrase approved budget revisions",
+            "budget_tokens": 4000
+          },
+          "status": "completed",
+          "result": {
+            "latency_ms": 18,
+            "next_action": null,
+            "result": {
+              "budget_tokens": 4000,
+              "evidence": [
+                {
+                  "event_id": 2,
+                  "excerpt": "Project Juniper-e908c924 update: the launch date is now 2030-06-24. This replaces the previous launch date 2030-06-18. The owner, delivery format, and verification phrase are unchanged.",
+                  "source": "agent",
+                  "title": "codex-context-test",
+                  "ts_ms": 1793201398567
+                },
+                {
+                  "event_id": 1,
+                  "excerpt": "Synthetic acceptance test. Project Juniper-e908c924: owner Mira Sen; launch date 2030-06-18; delivery format PDF; verification phrase saffron-orbit-16a5a2f589.",
+                  "source": "agent",
+                  "title": "codex-context-test",
+                  "ts_ms": 1793201282671
+                }
+              ],
+              "facts": [],
+              "include_scratch": false,
+              "items": [],
+              "possibly": [],
+              "truncated": false,
+              "used_tokens": 99
+            },
+            "tool": "memory.recall",
+            "usage": {
+              "cost_micro_usd": 0,
+              "quantity": 1,
+              "unit": "read"
+            }
+          }
+        },
+        {
+          "name": "memory.get_events",
+          "arguments": {
+            "ids": [
+              1,
+              2
+            ],
+            "max_chars": 8000
+          },
+          "status": "completed",
+          "result": {
+            "events": [
+              {
+                "id": 1,
+                "source_kind": "agent",
+                "text": "Synthetic acceptance test. Project Juniper-e908c924: owner Mira Sen; launch date 2030-06-18; delivery format PDF; verification phrase saffron-orbit-16a5a2f589.",
+                "truncated": false,
+                "when": {
+                  "local": "2026-10-28T20:58:02+05:30",
+                  "ms": 1793201282671
+                },
+                "where": {
+                  "window_title": "codex-context-test"
+                }
+              },
+              {
+                "id": 2,
+                "source_kind": "agent",
+                "text": "Project Juniper-e908c924 update: the launch date is now 2030-06-24. This replaces the previous launch date 2030-06-18. The owner, delivery format, and verification phrase are unchanged.",
+                "truncated": false,
+                "when": {
+                  "local": "2026-10-28T20:59:58+05:30",
+                  "ms": 1793201398567
+                },
+                "where": {
+                  "window_title": "codex-context-test"
+                }
+              }
+            ],
+            "missing": [],
+            "tool": "memory.get_events"
+          }
+        }
+      ],
+      "final_answer": "Project **Juniper-e908c924** currently has:\n\n- **Owner:** Mira Sen\n- **Launch date:** 2030-06-24\n- **Delivery format:** PDF\n- **Verification phrase:** `saffron-orbit-16a5a2f589`\n- **Approved budget:** unknown; neither supporting event specifies one.\n\n**Event 1 \u2014 exact quote:**\n> Synthetic acceptance test. Project Juniper-e908c924: owner Mira Sen; launch date 2030-06-18; delivery format PDF; verification phrase saffron-orbit-16a5a2f589.\n\n**Event 2 \u2014 exact quote:**\n> Project Juniper-e908c924 update: the launch date is now 2030-06-24. This replaces the previous launch date 2030-06-18. The owner, delivery format, and verification phrase are unchanged.\n\nThe current launch date is **2030-06-24** because event 2 explicitly replaces the earlier date and confirms that the other three values remain unchanged."
+    }
+  ]
+}

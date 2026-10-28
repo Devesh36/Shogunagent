@@ -13,7 +13,7 @@ python3 scripts/mcp-local-bridge.py \
   --token-file "$PWD/.shogun-demo/api.token" --check
 ```
 
-Expect three PASS lines: `initialize`, `tools/list`, and `tools/call` (identity).
+Expect three PASS lines: `initialize`, `tools/list`, and `tools/call` (profile read).
 This checks the actual authenticated endpoint without making a model call. Use
 `--url http://127.0.0.1:YOUR_PORT/mcp` if you changed `SHOGUN_API_PORT`.
 
@@ -28,6 +28,20 @@ The connection has the permissions of the supplied bearer. The quickstart's
 evaluation token permits writes; the bridge is not a read-only permission filter.
 ShogunAgent still enforces the token's scope and approval rules. Keep normal client
 tool approvals enabled and start by testing the read tools below.
+
+Keep the engine running in a separate terminal while restarting or switching
+clients. A server launched inside an agent's temporary command session can stop
+when that session ends. A successful connection check does not prove it will
+survive the restart; check again from the new session. If the agent cannot keep
+the engine alive independently, it should give you the foreground start command
+and mark that action pending, rather than claim setup is fully verified.
+
+Record the connection's non-secret actor from the server's bearer mapping:
+`principal:token:agent_id` authenticates writes as `agent:agent_id`; without an
+explicit agent ID, the actor is `agent:principal`. **`profile.whoami` reads the
+saved user profile, not the authenticated agent identity.** It can legitimately
+return an empty profile. Do not require a profile name or identity before writing
+with the configured actor, and never copy the token into project instructions.
 
 ## 2. Generate the configuration for your client
 
@@ -106,6 +120,13 @@ After signing into your chosen client, send:
 If you ingested the quickstart sample, the source evidence should include
 `The Kestrel demo codeword is violet.` Check the client's tool trace, not just a
 prose assertion. A connected status or tool listing alone does not prove this step.
+
+Persistent memory instructions should distinguish new information from a lookup.
+Save new decisions, explicit corrections, or actual work results with source
+references. Do not ingest an answer that only repeats retrieved context, a
+"verified" copy of that answer, or a summary of the retrieval itself. Such writes
+add duplicate evidence even when no project fact has changed. Verify this with a
+fresh-session status question whose tool trace contains reads but no ingest.
 
 ## Direct HTTP clients
 
