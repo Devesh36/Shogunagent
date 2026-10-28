@@ -21,6 +21,19 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  web:
+    name: apps/web (build, syntax, links, HTTP)
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - run: npm run typecheck --prefix apps/web
+      - run: npm test --prefix apps/web
+
   rust:
     name: rust (clippy, test, feature matrix)
     if: github.event.pull_request.draft != true
