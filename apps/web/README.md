@@ -1,0 +1,55 @@
+# ShogunAgent website
+
+A dependency-free static launch website. Source in this directory, generated pages in `dist/`. Uses the existing ShogunAgent mark and self-hosted Manrope font.
+
+## Local preview
+
+Requires Node.js 22 or later. From the repository root:
+
+```sh
+node apps/web/build.mjs
+PORT=3000 node apps/web/scripts/serve.mjs
+```
+
+Or `pnpm --filter @shogun-ai/web dev` (default port 3001).
+
+## Edit and verify
+
+- `home.html`: preserved original shogunagent.com HTML, CSS and interactions, captured from the public site on 2026-10-28.
+- `build.mjs`: shared layout, supporting pages, and homepage additions.
+- `laptop.html`, `laptop.css`, `laptop.js`: responsive local-workflow animation with manual chapters, pause/replay, visibility-aware playback, and reduced-motion support.
+- `content.mjs`: documentation, canonical local setup snippets.
+- `app.js`: synthetic handoff demos, navigation, docs filtering, clipboard.
+- `styles.css`: responsive design and reduced-motion support.
+- `laptop.html`, `laptop.css`, `laptop.js`: photographic MacBook with a four-part, plain-language launch-review story.
+- `visuals.html`, `visuals.css`, `visuals.js`: interactive relationship graph and task timeline, with sample evidence, pause controls and reduced-motion support.
+- `assets/`: locally served brand and font assets.
+
+```sh
+node apps/web/build.mjs
+node --check apps/web/app.js
+node --check apps/web/content.mjs
+node --test apps/web/test/*.test.mjs
+```
+
+Tests cover broken internal destinations, setup safety invariants, HTTP routes, content negotiation and 404 handling. Browser QA must cover the demo stages, scenario changes, empty source selection, JSON views, clipboard, responsive navigation and docs filtering.
+
+See [VERIFICATION.md](VERIFICATION.md) for the completed browser/fresh-user audit, screenshots, and known launch gaps. The CI website job builds and checks this app independently of the Rust engine.
+
+## Product truth and launch boundaries
+
+The original homepage identity is retained: white background, blue accents, Manrope, and the original black folded mark. Supporting pages use the same identity. The laptop uses the photographic MacBook frame from the user-provided ShogunAI reference. Its animated HTML screen illustrates remembering a launch note, answering a question, continuing with another agent and requesting approval. It is a conceptual interface, not a shipped desktop application.
+
+The browser workspace is an illustrative product view, not a shipped dashboard or a connection to the engine. All demos are synthetic browser-only simulations; approvals never send externally. Sample downloads explicitly declare themselves illustrative subsets, not exact schema responses.
+
+Quickstart commands are based on the current source contracts. Building this website does not execute the engine, verify release archives, or validate OAuth integrations. Source-based local evaluation uses multi-principal mode; default single-store CLI needs an existing store and its original key. Hosted availability and npm availability must be verified separately.
+
+The supporting pages cover product, demos, integrations, documentation, pricing, security, comparison, research, changelog, and website privacy. Supermemory was researched as a website/content benchmark on 2026-10-28. This does not imply engine feature parity. No fabricated customers, certifications, benchmark wins, or signup flow.
+
+## Publication handoff
+
+This task prepares a local build; production has not been changed. Before replacing shogunagent.com, identify its existing hosting project and source, preserve its rollback deployment, review hosted pricing/availability and operator privacy terms, and serve `dist/` with directory-index routes and a proper 404. The included preview server supports HTML/Markdown negotiation at `/`; static hosting needs the equivalent route rule to preserve that behavior. No host identity or deployment credentials are added here.
+
+### MacBook asset provenance
+
+`assets/macbook-real.webp` is the unmodified 1040px MacBook frame from `https://shogunai.si/reference-macbook/assets/img/hero-macbook-1040.webp`, reused from the reference explicitly supplied for this project. Screen content is original HTML/CSS. Playback uses a visibility-aware animation clock, typed requests, staged results, a moving context packet, pause/replay and reduced-motion support.

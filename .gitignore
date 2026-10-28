@@ -31,3 +31,6 @@ apps/router/listing-report.json
 .venv/
 .pytest_cache/
 *.egg-info/
+
+# Private evaluation stores from the website quickstart
+.shogun-demo/
