@@ -2,7 +2,7 @@
 
 > The state layer for AI agents. Read what is true about the user's work right now (people, projects, commitments, open loops) with a quote and a confidence score on every fact; write what you learned so the next agent starts from it; run tools through a router that enforces permission tiers. Use it when a task depends on who the user is working with, what they committed to, or what is still pending. Not a transcript store and not a general web-search tool.
 
-For teams running many AI agents, ShogunAgent is the shared state layer that gives every agent one calibrated model of the user's work (people, projects, commitments, open loops) with provenance on every fact and a human gate on every consequential action.
+The state layer for AI agents: shared people, projects, commitments and open work, with source evidence and approval controls.
 
 Skill version 0.1.0. Check the repository's release status before relying on npm packages, release downloads or a hosted service. The configured hosted MCP URL is https://api.shogunagent.dev/mcp (Streamable HTTP, 2026-07-28); use an operator-confirmed endpoint and credentials. Local setup requires binaries, an existing encrypted store and its matching key. Bare `npx shogunagent@0.1` only serves; installation and MCP connection are explicit steps (see SKILL.md and the CLI guide). Reads of the principal's data are free but require authorization; hosted writes and runs are metered in micro-USD.
 

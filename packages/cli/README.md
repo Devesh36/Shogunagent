@@ -2,7 +2,7 @@
 
 The CLI starts a local ShogunAgent sidecar and can connect AI apps to its read-only MCP face (plan E10-T10). ShogunAgent is the state layer for AI agents: people, projects, commitments and open loops, with a quote and a confidence on every fact.
 
-The [repository status](../../README.md) describes the packages and hosted service as unreleased. The commands below distinguish using a checkout from using published packages and release assets. A configured URL such as `https://api.shogunagent.dev/mcp` is not evidence that the service is deployed; use an operator-confirmed endpoint and credentials for hosted access.
+The [repository status](../../README.md#what-is-available) distinguishes published Linux binaries/container images from the unpublished npm/PyPI packages and unverified public hosted service. The commands below distinguish using a checkout from using published packages and release assets. A configured URL such as `https://api.shogunagent.dev/mcp` is not evidence that the service is deployed; use an operator-confirmed endpoint and credentials for hosted access.
 
 ## Prerequisites
 
