@@ -1625,3 +1625,198 @@ fn the_multilingual_models_cutoff_applies_when_its_space_is_active() {
         assert_eq!(found.contains(&mid), expect_mid, "{} (cutoff {}): {found:?}", spec.name, max_l2_distance_for(spec.space_id));
     }
 }
+
+
+#[test]
+fn upper_bound_only_event_search_is_exclusive_and_preserves_unbounded_and_widened_search() {
+    let conn = crate::open_in_memory().unwrap();
+    let old = event(&conn, -10, "quarry vendor Dublin", "upper-old");
+    let middle = event(&conn, 1_000, "quarry vendor Lisbon", "upper-middle");
+    let future = event(&conn, 5_000, "quarry vendor Tokyo", "upper-future");
+    for (to_ts, expected) in [
+        (None, vec![old, middle, future]),
+        (Some(i64::MIN), vec![]),
+        (Some(0), vec![old]),
+        (Some(1_000), vec![old]),
+        (Some(5_000), vec![old, middle]),
+        // Even an upper bound beyond now must stop at now.
+        (Some(9_000), vec![old, middle]),
+    ] {
+        let result = search_federated(
+            &conn,
+            "quarry vendor",
+            None,
+            4_000,
+            &FederatedSearchOptions {
+                to_ts,
+                ..FederatedSearchOptions::default()
+            },
+            10,
+        )
+        .unwrap();
+        let mut ids: Vec<_> = result.raw_event_ranks.iter().map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, expected, "to_ts={to_ts:?}");
+        assert!(result
+            .hits
+            .iter()
+            .all(|hit| hit.component_ranks.event_fts.is_some()));
+    }
+    // Explicit lexical widening keeps its documented all-history behavior.
+    let widened = search_federated(
+        &conn,
+        "quarry vendor",
+        None,
+        4_000,
+        &FederatedSearchOptions {
+            to_ts: Some(0),
+            widen_event_lexical: true,
+            ..FederatedSearchOptions::default()
+        },
+        10,
+    )
+    .unwrap();
+    assert_eq!(widened.raw_event_ranks.len(), 3);
+    assert!(widened.event_lexical_all_history);
+}
+
+#[test]
+fn upper_bound_only_vector_lanes_filter_before_the_candidate_limit() {
+    // Synthetic equal-dimensional vectors test filtering plumbing, not model quality.
+    for cold in [false, true] {
+        let mut conn = crate::open_in_memory().unwrap();
+        let old = event(&conn, -10, "archived invoice", "vector-upper-old");
+        let boundary = event(&conn, 1_000, "new invoice", "vector-upper-edge");
+        let future = event(&conn, 2_000, "future invoice", "vector-upper-future");
+        let query = vec![0.0_f32; crate::embed::E5_SMALL_DIM];
+        let older_vector = vec![0.01_f32; crate::embed::E5_SMALL_DIM];
+        crate::vector::upsert(&conn, old, &older_vector).unwrap();
+        for id in [boundary, future] {
+            crate::vector::upsert(&conn, id, &query).unwrap();
+        }
+        if cold {
+            for (id, ts) in [(old, -10), (boundary, 1_000), (future, 2_000)] {
+                assert!(crate::cold::demote(&mut conn, id, ts).unwrap());
+            }
+        }
+        let result = search_federated(
+            &conn,
+            "unrelated vocabulary",
+            Some(&query),
+            3_000,
+            &FederatedSearchOptions {
+                to_ts: Some(1_000),
+                per_source_limit: 1,
+                depth: if cold {
+                    SearchDepth::All
+                } else {
+                    SearchDepth::WarmOnly
+                },
+                ..FederatedSearchOptions::default()
+            },
+            1,
+        )
+        .unwrap();
+        assert_eq!(result.hits.len(), 1, "cold={cold}: {result:?}");
+        assert_eq!(
+            result.hits[0].source_id,
+            FederatedSourceId::Event(old),
+            "cold={cold}"
+        );
+        let ranks = result.hits[0].component_ranks;
+        assert!(ranks.event_fts.is_none());
+        assert_eq!(ranks.warm_knn.is_some(), !cold);
+        assert_eq!(ranks.cold_scan.is_some(), cold);
+    }
+}
+
+#[test]
+fn upper_bound_only_meeting_search_filters_before_the_candidate_limit() {
+    let mut conn = crate::open_in_memory().unwrap();
+    let old = weak_meeting(&mut conn, 0, "quarry vendor decision");
+    weak_meeting(&mut conn, 1, "quarry vendor decision");
+    weak_meeting(&mut conn, 2, "quarry vendor decision");
+    let result = search_federated(
+        &conn,
+        "quarry vendor decision",
+        None,
+        2_000,
+        &FederatedSearchOptions {
+            to_ts: Some(1_010),
+            per_source_limit: 1,
+            source: SourceConstraint::Require(MemorySourceFamily::Meeting),
+            ..FederatedSearchOptions::default()
+        },
+        1,
+    )
+    .unwrap();
+    assert_eq!(result.hits.len(), 1, "{result:?}");
+    assert!(result.hits[0]
+        .evidence_ids
+        .contains(&CanonicalEvidenceId::Session(old)));
+    assert_eq!(
+        result.hits[0].component_ranks.meeting,
+        Some(1),
+        "{result:?}"
+    );
+    assert!(result.raw_event_ranks.is_empty());
+    assert!(result.hits[0].component_ranks.warm_knn.is_none());
+}
+
+#[test]
+fn upper_bound_only_search_preserves_agent_scratch_visibility() {
+    use crate::actor::{with_call_scope, Actor, CallScope, ReadScope, WriteContext};
+    let conn = crate::open_in_memory().unwrap();
+    let world = event(&conn, 10, "quarry vendor world", "scope-upper-world");
+    let alice = WriteContext::scratch(Actor::agent("alice").unwrap()).unwrap();
+    let bob = WriteContext::scratch(Actor::agent("bob").unwrap()).unwrap();
+    let own = with_call_scope(
+        CallScope {
+            write: alice.clone(),
+            read: ReadScope::WITH_SCRATCH,
+        },
+        || event(&conn, 20, "quarry vendor own", "scope-upper-alice"),
+    );
+    let other = with_call_scope(
+        CallScope {
+            write: bob,
+            read: ReadScope::WITH_SCRATCH,
+        },
+        || event(&conn, 30, "quarry vendor other", "scope-upper-bob"),
+    );
+    let later = event(&conn, 100, "quarry vendor later", "scope-upper-later");
+    let query = vec![0.0_f32; crate::embed::E5_SMALL_DIM];
+    // Include both lexical and warm retrieval in the access-control check.
+    for id in [world, own, other, later] {
+        crate::vector::upsert(&conn, id, &query).unwrap();
+    }
+    for (read, expected) in [
+        (ReadScope::WORLD_ONLY, vec![world]),
+        (ReadScope::WITH_SCRATCH, vec![world, own]),
+    ] {
+        let result = with_call_scope(
+            CallScope {
+                write: alice.clone(),
+                read,
+            },
+            || {
+                search_federated(
+                    &conn,
+                    "quarry vendor",
+                    Some(&query),
+                    200,
+                    &FederatedSearchOptions {
+                        to_ts: Some(100),
+                        ..FederatedSearchOptions::default()
+                    },
+                    10,
+                )
+                .unwrap()
+            },
+        );
+        let mut ids: Vec<_> = result.raw_event_ranks.iter().map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, expected);
+        assert_eq!(result.hits.len(), expected.len());
+    }
+}
