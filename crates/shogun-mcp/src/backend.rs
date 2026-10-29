@@ -696,6 +696,17 @@ pub trait MemoryBackend: Send + Sync {
         Err("ingest_unavailable".to_string())
     }
 
+    /// Internal connector snapshot ingestion: retain changed bodies even when nearly identical.
+    /// Shares ingest's sanitization, authorization and atomic receipts, but reuses evidence only
+    /// for identical sanitized text at the same source timestamp. Different timestamps remain
+    /// separate even for unchanged text. Requires a stable native object/thread id.
+    /// Only the trusted read-sync boundary selects
+    /// this policy; it is not a wire option. Unsupported backends must refuse, not silently fall
+    /// back to the lossy generic policy.
+    fn ingest_versioned_snapshot(&self, _request: &crate::ingest_api::IngestRequest) -> Result<crate::ingest_api::IngestOutcome, String> {
+        Err("ingest_unavailable".to_string())
+    }
+
     /// E44: queue a provider "changed" notice (`provider` as `memory.ingest_webhook` names it,
     /// `detail` the ids it carried) for the connector read-sync, which fetches the content with the
     /// principal's own credentials in the background. Only a hosted sidecar's backend has a queue
@@ -835,6 +846,9 @@ impl<T: MemoryBackend + ?Sized> MemoryBackend for std::sync::Arc<T> {
     }
     fn ingest(&self, request: &crate::ingest_api::IngestRequest) -> Result<crate::ingest_api::IngestOutcome, String> {
         (**self).ingest(request)
+    }
+    fn ingest_versioned_snapshot(&self, request: &crate::ingest_api::IngestRequest) -> Result<crate::ingest_api::IngestOutcome, String> {
+        (**self).ingest_versioned_snapshot(request)
     }
     fn enqueue_connector_sync(&self, provider: &str, detail: &serde_json::Value) -> Result<crate::connector_vault::SyncQueued, crate::connector_vault::VaultError> {
         (**self).enqueue_connector_sync(provider, detail)

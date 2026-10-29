@@ -22,11 +22,17 @@
 //! an attachment id, and every non-text block, is skipped). Every event names its provider, the
 //! object's id and URL (in its closing line and the receipt metadata, invariant 5), and is ingested
 //! under `sync:<provider>:<hash(object id, version)>`, so the same object at the same version is
-//! stored once however often it is fetched; a newer version (Gmail's `historyId`, Calendar's and
-//! Notion's last-edited time) is a new event. The credential comes from the vault
+//! stored once however often it is fetched. A newer version (Gmail's `historyId`, Calendar's and
+//! Notion's last-edited time) retains changed text, including a return to historical wording.
+//! Different provider timestamps remain separate evidence even for unchanged text: this costs
+//! more storage but preserves temporal ordering when older revisions arrive late. Only identical
+//! sanitized text at the same timestamp in the same source/thread/namespace can reuse an event.
+//! Same-version receipt replay still appends nothing. The credential comes from the vault
 //! ([`HostedConnectors::access_token`]: refreshed through the single egress when needed), every GET
 //! goes through the core's HTTP client behind [`ProviderHttp`] (the single egress; a fake in
 //! tests), and each one writes an audit row (action `sync`, the vendor host, the outcome).
+//! Snapshot receipts are separate from old generic-ingest receipts, so refetching a previously
+//! collapsed version can recover its text. This does not schedule a historical backfill.
 //!
 //! Failures: no grant (or a revoked one) drops the notice and counts it `not_connected`; a vendor
 //! or store that did not answer re-queues it with a back-off, at most [`MAX_ATTEMPTS`] times; an
@@ -602,7 +608,9 @@ fn run_job<X: TokenExchange + Send + Sync>(vault: &HostedConnectors<X>, http: &d
     };
     let mut stored = 0;
     for obj in &objects {
-        match backend.ingest(&ingest_request(provider, obj)) {
+        // Provider versions already identify retries. Similarity must not erase a small
+        // factual edit in the fetched snapshot; only same-timestamp/body dedup remains.
+        match backend.ingest_versioned_snapshot(&ingest_request(provider, obj)) {
             Ok(outcome) => stored += outcome.inserted,
             // The store did not take it: the same notice runs again (ingest is idempotent).
             Err(_) => return JobOutcome::Retry,
@@ -723,7 +731,7 @@ mod tests {
         fn read(&self, _: Tool, _: &ReadParams) -> Vec<ReadItem> {
             Vec::new()
         }
-        fn ingest(&self, request: &IngestRequest) -> Result<IngestOutcome, String> {
+        fn ingest_versioned_snapshot(&self, request: &IngestRequest) -> Result<IngestOutcome, String> {
             let fresh = self.keys.lock().unwrap().insert(request.idempotency_key.clone());
             self.requests.lock().unwrap().push(request.clone());
             Ok(IngestOutcome { inserted: usize::from(fresh), replayed: !fresh, ..Default::default() })
