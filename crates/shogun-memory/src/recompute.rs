@@ -264,6 +264,7 @@ mod tests {
         let refs: (Option<i64>, Option<i64>) = conn.query_row("SELECT counterparty_id,project_id FROM commitments WHERE id=?1", [task], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
         assert_eq!(refs, (None, None));
         assert_eq!(conn.query_row("SELECT count(*) FROM state_suppressions", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(conn.query_row("SELECT count(*) FROM state_suppressions_scoped", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
         assert!(conn.query_row("SELECT 1 FROM event_log WHERE id=?1", [e], |_| Ok(())).is_ok());
     }
 
