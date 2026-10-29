@@ -197,18 +197,22 @@ fn foreign_scratch_mutations_need_write_grants_and_denials_do_not_write() -> Tes
         )?;
         assert_eq!(reason, "deleted_by:agent:bob");
         if matches!(table, StateTable::Commitments | StateTable::OpenLoops) {
-            assert!(state_edit::is_suppressed(
+            assert!(state_edit::is_suppressed_in_namespace(
                 &conn,
                 table,
                 "review the draft",
-                1
+                1,
+                &namespace.as_str(),
             )?);
-            assert!(state_edit::is_suppressed(
+            assert!(state_edit::is_suppressed_in_namespace(
                 &conn,
                 table,
                 "review the final draft",
-                1
+                1,
+                &namespace.as_str(),
             )?);
+            assert!(!state_edit::is_suppressed(&conn, table, "review the draft", 1)?);
+            assert!(!state_edit::is_suppressed(&conn, table, "review the final draft", 1)?);
         }
     }
     Ok(())
