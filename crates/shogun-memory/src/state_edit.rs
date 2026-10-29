@@ -274,7 +274,25 @@ pub(crate) fn source_ref(table: StateTable, id: i64) -> crate::search_documents:
     }
 }
 
-/// Apply a user correction and pin the row. `Ok(false)` when no such row exists. The patch is
+/// Check the stored target namespace, not the caller's destination namespace. Callers hold the
+/// mutation savepoint so the authorization and write observe the same row and grant state.
+fn may_write_state(
+    conn: &Connection,
+    table: StateTable,
+    id: i64,
+    ctx: &crate::actor::WriteContext,
+) -> Result<bool, EditError> {
+    let namespace: Option<String> = conn
+        .query_row(&format!("SELECT namespace FROM {} WHERE id = ?1", table.as_str()), [id], |r| r.get(0))
+        .optional()?;
+    let Some(namespace) = namespace else {
+        return Ok(false);
+    };
+    crate::acl::may_write(conn, &ctx.actor, &namespace)
+        .map_err(|_| EditError::Db(crate::event_log::scratch_denied()))
+}
+
+/// Apply a user correction and pin the row. `Ok(false)` when absent or not writable. The patch is
 /// validated against the table first — a field the table does not have is refused, not ignored.
 pub fn update_state(
     conn: &mut Connection,
@@ -391,6 +409,9 @@ pub fn update_state_as(
     }
 
     let tx = conn.savepoint()?;
+    if !may_write_state(&tx, table, id, ctx)? {
+        return Ok(false);
+    }
     let old_row: Option<(String, String)> = match table {
         StateTable::Commitments | StateTable::OpenLoops => tx
             .query_row(
@@ -486,7 +507,8 @@ pub fn parse_create_request(body: &str) -> Result<CreateRequest, EditError> {
 /// Add a commitment / open loop the user wrote themselves. It is the user's own statement: pinned
 /// at confidence 1.0 with `user_edited_at` set and no event provenance (a pinned row needs none;
 /// [`crate::state::supported_provenance`]). Returns the new id; `Ok(None)` when `person_id`
-/// names no person.
+/// names no readable person. A scratch destination requires the writer's own namespace or an
+/// explicit write grant; a read grant is sufficient to reference an existing person.
 pub fn create_state(
     conn: &mut Connection,
     req: &CreateRequest,
@@ -506,10 +528,20 @@ pub fn create_state_as(
     let description = clean_text(&req.description, MAX_TEXT_CHARS, false)?
         .ok_or(EditError::Invalid("invalid empty text"))?;
     let tx = conn.savepoint()?;
+    if !crate::acl::may_write(&tx, &ctx.actor, &ctx.namespace_sql())
+        .map_err(|_| EditError::Db(crate::event_log::scratch_denied()))?
+    {
+        return Err(EditError::Invalid("invalid namespace access"));
+    }
     if let Some(person) = req.person_id {
-        let found: Option<i64> =
-            tx.query_row("SELECT id FROM people WHERE id = ?1", [person], |r| r.get(0)).optional()?;
-        if found.is_none() {
+        let namespace: Option<String> =
+            tx.query_row("SELECT namespace FROM people WHERE id = ?1", [person], |r| r.get(0)).optional()?;
+        let Some(namespace) = namespace else {
+            return Ok(None);
+        };
+        if !crate::acl::may_read(&tx, &ctx.actor, &namespace)
+            .map_err(|_| EditError::Db(crate::event_log::scratch_denied()))?
+        {
             return Ok(None);
         }
     }
@@ -539,7 +571,7 @@ pub fn create_state_as(
 
 /// Delete a state row outright. Its provenance links and any contradiction flag naming it go with
 /// it; the events stay. References from other state rows are cleared first (the schema has no
-/// ON DELETE clause). `Ok(false)` when no such row exists.
+/// ON DELETE clause). `Ok(false)` when the row is absent or not writable by the caller.
 pub fn delete_state(
     conn: &mut Connection,
     table: StateTable,
@@ -560,6 +592,9 @@ pub fn delete_state_as(
     ctx: &crate::actor::WriteContext,
 ) -> Result<bool, EditError> {
     let tx = conn.savepoint()?;
+    if !may_write_state(&tx, table, id, ctx)? {
+        return Ok(false);
+    }
     let row: Option<(Option<String>, String)> = match table {
         StateTable::Commitments | StateTable::OpenLoops => tx
             .query_row(
