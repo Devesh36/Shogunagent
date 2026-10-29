@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 
-// No network and no real filesystem writes in tests: every test injects an in-memory `Fs`, a fake
-// `spawn` and a fake `fetch` (src/types.ts). A test that reaches the network fails on purpose.
+// Unit tests inject an in-memory Fs/spawn/fetch. The local-launcher smoke uses isolated temporary
+// files and a synthetic stdio executable; it never opens user stores/configs or needs the network.
 export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],

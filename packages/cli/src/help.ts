@@ -53,9 +53,9 @@ export const COMMANDS: readonly CommandHelp[] = [
     network: "api.github.com (latest tag), github.com release assets",
   },
   {
-    name: "connect", usage: "shogunagent connect [--yes] [--client claude-code|cursor|codex|claude-desktop]",
-    summary: "Write a read-only stdio MCP entry (`npx -y shogunagent@0.1 mcp`) into each agent app found on this machine. Shows the plan; writes only after an interactive yes or --yes. Idempotent; other entries are left byte for byte.",
-    flags: [{ flag: "--yes", meaning: "Skip the question." }, { flag: "--client ID", meaning: "Only this client (repeatable)." }],
+    name: "connect", usage: "shogunagent connect [--local] [--yes] [--client claude-code|cursor|codex|claude-desktop]",
+    summary: "Write a read-only stdio MCP entry into each agent app found here. Default: npx -y shogunagent@0.1 mcp; --local uses this built CLI and Node directly. Shows the plan; writes only after an interactive yes or --yes. Idempotent; other entries are left byte for byte.",
+    flags: [{ flag: "--local", meaning: "Use the absolute running Node and local CLI paths, with the selected data/binary directories. Requires a built CLI and existing binaries; copies no credentials. connect only." }, { flag: "--yes", meaning: "Skip the question." }, { flag: "--client ID", meaning: "Only this client (repeatable)." }],
     writes: "~/.claude.json, ~/.cursor/mcp.json, ~/.codex/config.toml, Claude Desktop's claude_desktop_config.json (each backed up to <file>.bak-shogunagent first)",
     network: "none",
   },

@@ -45,6 +45,8 @@ export type Fetch = (url: string, init?: { headers?: Record<string, string> }) =
 }>;
 
 export interface Platform {
+  /** The running local CLI, supplied by bin.ts; never discovered through PATH. */
+  localLauncher?: { node: string; script: string };
   /** Running Node.js version; defaults to process.versions.node when omitted. */
   nodeVersion?: string;
   /** `process.platform`. */
