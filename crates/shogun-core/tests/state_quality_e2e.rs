@@ -22,9 +22,11 @@ use shogun_core::tenancy::{
     EnvKeyProvider, PrincipalId, PrincipalStore,
 };
 use shogun_mcp::ingest_api::{ingest_request, recall_request, RecallOutcome};
+use shogun_memory::actor::{with_call_scope, Actor, CallScope, ReadScope, WriteContext};
 use shogun_memory::{state::StateTable, DbKey};
 
 const HOUR: i64 = 3_600_000;
+const CONTEXT: &str = "Toru is the product lead at Nebula Labs. Nebula is our launch project. We work together on the Nebula launch deck over Slack.";
 const PROMISE: &str = "I'll send Toru the Nebula launch deck by Friday.";
 const MOVED: &str = "Update: the Nebula launch deck for Toru moves to next Monday.";
 const DONE: &str = "Sent the Nebula launch deck to Toru.";
@@ -75,9 +77,19 @@ impl Scenario {
     }
 
     fn request(stage: usize, messages: &[&str]) -> shogun_mcp::ingest_api::IngestRequest {
+        // The entity-list policy requires observations in two distinct hours, as in
+        // examples/maya_handoff.rs. Keep the initial context older than the promise.
+        let context_ts = Local
+            .with_ymd_and_hms(2026, 10, 26, 9, 30, 0)
+            .unwrap()
+            .timestamp_millis();
         ingest_request(&json!({
-            "events": messages.iter().map(|text| json!({"kind": "message", "title": "Chat with Toru", "content": text})).collect::<Vec<_>>(),
-            "source": "synthetic-quality-eval", "actor": "agent:quality-eval", "thread_key": "nebula-with-toru",
+            "events": messages.iter().map(|text| {
+                let mut event = json!({"kind": "message", "title": "Chat with Toru", "content": text});
+                if *text == CONTEXT { event["ts_ms"] = json!(context_ts); }
+                event
+            }).collect::<Vec<_>>(),
+            "source": "synthetic-quality-eval", "actor": "agent:quality-writer", "thread_key": "nebula-with-toru",
             "idempotency_key": format!("stage-{stage}"),
         })).unwrap()
     }
@@ -102,8 +114,20 @@ impl Drop for Scenario {
 }
 
 fn recall(db: &Db, query: &str) -> RecallOutcome {
-    db.agent_recall(&recall_request(&json!({"query": query, "budget_tokens": 3000})).unwrap())
-        .unwrap()
+    // Two agent identities share one principal through the real call-scope mechanism.
+    // This exercises engine calls, not two running application clients.
+    with_call_scope(
+        CallScope {
+            write: WriteContext::world(Actor::agent("quality-reader").unwrap()),
+            read: ReadScope::WORLD_ONLY,
+        },
+        || {
+            db.agent_recall(
+                &recall_request(&json!({"query": query, "budget_tokens": 3000})).unwrap(),
+            )
+            .unwrap()
+        },
+    )
 }
 
 /// Scripted answers are deliberately independent of the expected state assertions. The
@@ -166,37 +190,59 @@ impl EvaluationLane {
                 _ => unreachable!(),
             };
         }
-        let mut session = String::new();
-        let mut commitments = Vec::new();
-        let mut open_loops = Vec::new();
+        let mut sessions: Vec<Value> = Vec::new();
         for line in item.chunk.lines() {
             if let Some(id) = line.strip_prefix("Session: ") {
-                session = id.trim().into();
+                sessions.push(
+                    json!({"id": id.trim(), "commitments": [], "open_loops": [], "entities": []}),
+                );
+                continue;
             }
             let Some((number, text)) = line.strip_prefix('[').and_then(|s| s.split_once("] "))
             else {
                 continue;
             };
-            let Ok(number) = number.parse::<usize>() else {
+            let (Ok(number), Some(session)) = (number.parse::<usize>(), sessions.last_mut()) else {
                 continue;
             };
             let anchored = |description: &str| {
                 json!({"description": description, "line": number,
                 "anchor": text.chars().take(40).collect::<String>(), "anchor_len": text.chars().count()})
             };
+            if text.contains(CONTEXT) || text.contains(PROMISE) {
+                let mut person = anchored("Toru is a contact for the Nebula launch deck.");
+                person["kind"] = json!("person");
+                person["name"] = json!("Toru");
+                person["context"] = json!("Nebula launch deck");
+                person["person_class"] = json!("contact");
+                person["channel"] = json!("Slack");
+                session["entities"].as_array_mut().unwrap().push(person);
+                let mut project = anchored("Nebula is the user's launch project with Toru.");
+                project["kind"] = json!("project");
+                project["name"] = json!("Nebula");
+                project["context"] = json!("Nebula launch deck");
+                project["project_class"] = json!("user_project");
+                session["entities"].as_array_mut().unwrap().push(project);
+            }
             if text.contains(PROMISE) {
                 let mut candidate = anchored(ACTION);
                 candidate["direction"] = json!("mine");
-                commitments.push(candidate);
+                session["commitments"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(candidate);
             }
             if text.contains(WAITING) {
                 let mut candidate = anchored(QUESTION);
                 candidate["kind"] = json!("waiting_on_them");
-                open_loops.push(candidate);
+                session["open_loops"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(candidate);
             }
         }
-        assert!(!session.is_empty(), "production review carries a session");
-        json!({"sessions": [{"id": session, "commitments": commitments, "open_loops": open_loops, "entities": []}]})
+        assert!(!sessions.is_empty(), "production review carries a session");
+        json!({"sessions": sessions})
     }
 }
 
@@ -289,9 +335,10 @@ fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
     let mut commitment_id = None;
     let mut loop_id = None;
     let mut friday = None;
+    let mut entity_ids = None;
     let mut total_calls = 0;
     for (stage, messages) in [
-        vec![PROMISE, WAITING, DISTRACTOR],
+        vec![PROMISE, WAITING, DISTRACTOR, CONTEXT],
         vec![MOVED],
         vec![DONE, ANSWERED],
     ]
@@ -299,6 +346,12 @@ fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
     .enumerate()
     {
         let sources = scenario.ingest(alice.db(), stage, messages);
+        if stage == 0 {
+            assert!(
+                recall(alice.db(), "Nebula Toru").items.is_empty(),
+                "raw ingestion alone must not present unreviewed candidates as facts"
+            );
+        }
         scenario.now.fetch_add(HOUR, Ordering::SeqCst);
         let now = scenario.now.load(Ordering::SeqCst);
         let lane = EvaluationLane {
@@ -322,6 +375,42 @@ fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
             "both model steps ran at stage {stage}"
         );
         total_calls += lane.calls.load(Ordering::SeqCst);
+        let pack = recall(alice.db(), "Nebula Toru");
+        let mut ids = Vec::new();
+        for (kind, name) in [("person", "Toru"), ("project", "Nebula")] {
+            let item = pack
+                .items
+                .iter()
+                .find(|item| item.kind == kind)
+                .expect("agent B recalls the reviewed person and project");
+            assert_eq!(item.text, name);
+            assert!(matches!(item.band, "high" | "medium"));
+            let event_id = item
+                .event_id
+                .expect("typed entity cites a stored source event");
+            let source = alice.db().events_json(&[event_id], 4000).unwrap();
+            let quote = item
+                .quote
+                .as_deref()
+                .expect("typed entity has a proving quote");
+            assert!(!quote.is_empty());
+            assert!(
+                source["events"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains(quote),
+                "typed entity quote is verbatim stored evidence"
+            );
+            ids.push(item.id);
+        }
+        if stage == 0 {
+            entity_ids = Some(ids.clone());
+        }
+        assert_eq!(
+            Some(ids),
+            entity_ids,
+            "typed entity identities survive later reviews"
+        );
         let rows = alice.db().try_commitment_rows().unwrap();
         let active: Vec<_> = rows
             .iter()
@@ -357,6 +446,14 @@ fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
             );
             if stage == 1 {
                 assert!(row.due_at > friday, "newer evidence supersedes Friday");
+                assert!(
+                    pack.items
+                        .iter()
+                        .filter(|item| item.kind == "commitment")
+                        .all(|item| !item.text.contains("Friday")
+                            && !item.quote.as_deref().unwrap_or_default().contains("Friday")),
+                    "current recalled commitment must not carry the superseded deadline"
+                );
             }
             let loops = alice.db().try_open_loop_rows().unwrap();
             let outstanding: Vec<_> = loops
@@ -463,7 +560,7 @@ fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
             before,
             "same-hour replay makes no model call"
         );
-        let before_restart = recall(alice.db(), "Nebula");
+        let before_restart = recall(alice.db(), "Nebula Toru");
         drop(lane);
         drop(alice);
         assert!(scenario.store.close(&PrincipalId::parse("alice").unwrap()));
@@ -477,7 +574,7 @@ fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
             .open(&PrincipalId::parse("alice").unwrap())
             .unwrap();
         assert_eq!(
-            recall(alice.db(), "Nebula"),
+            recall(alice.db(), "Nebula Toru"),
             before_restart,
             "stage {stage}: state and evidence survive reopening the encrypted store"
         );
@@ -504,7 +601,172 @@ fn run_scenario(mut provider: impl FnMut(&Db) -> Option<Box<dyn AgentClient>>) {
 
 #[test]
 fn commitment_changes_and_completion_preserve_grounded_state() {
+    println!("SYNTHETIC REPLAY: real engine, scripted model answers; no model or network calls.");
     run_scenario(|_| None);
+}
+
+#[test]
+fn owner_correction_survives_newer_automatic_suggestion_replay_and_restart() {
+    println!("SYNTHETIC REPLAY: owner correction against scripted automatic suggestions; no model or network calls.");
+    const CORRECTED: &str = "Send Toru the revised Nebula launch deck by Wednesday";
+    let scenario = Scenario::new();
+    let principal = PrincipalId::parse("alice").unwrap();
+    let mut alice = scenario.store.open(&principal).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let sources = scenario.ingest(alice.db(), 0, &[PROMISE, WAITING, CONTEXT]);
+    scenario.now.fetch_add(HOUR, Ordering::SeqCst);
+    let lane = EvaluationLane {
+        db: alice.db().clone(),
+        stage: 0,
+        sources,
+        calls: AtomicUsize::new(0),
+        provider: None,
+        invalid: None,
+    };
+    let (outcome, applied) = rt.block_on(tick_principal_batch(
+        alice.db(),
+        &lane,
+        scenario.now.load(Ordering::SeqCst),
+    ));
+    assert_eq!(outcome, TickOutcome::Ran { complete: true });
+    assert!(applied.is_some());
+    let id = recall(alice.db(), "Nebula")
+        .items
+        .iter()
+        .find(|item| item.kind == "commitment")
+        .unwrap()
+        .id;
+    drop(lane);
+
+    let corrected_due = Local
+        .with_ymd_and_hms(2026, 11, 4, 17, 0, 0)
+        .unwrap()
+        .timestamp_millis();
+    // Changing just the due-date field preserves the original source as context for
+    // the unchanged wording. That old quote is not proof of the owner-entered deadline.
+    assert!(alice
+        .db()
+        .state_update_as(
+            &json!({"table": "commitments", "id": id, "due_at": corrected_due}).to_string(),
+            &WriteContext::owner(),
+        )
+        .unwrap());
+    let date_only = recall(alice.db(), "Nebula");
+    let date_only = date_only
+        .items
+        .iter()
+        .find(|item| item.id == id && item.kind == "commitment")
+        .expect("date-only correction remains recallable");
+    assert_eq!(date_only.text, ACTION);
+    assert_eq!(date_only.quote.as_deref(), Some(PROMISE));
+    assert!(date_only.event_id.is_some());
+    assert_eq!(
+        alice.db().commitment(id).unwrap().due_at,
+        Some(corrected_due)
+    );
+
+    assert!(alice
+        .db()
+        .state_update_as(
+            &json!({"table": "commitments", "id": id,
+            "description": CORRECTED, "due_at": corrected_due})
+            .to_string(),
+            &WriteContext::owner(),
+        )
+        .unwrap());
+    let assert_corrected =
+        |db: &Db| {
+            let row = db.commitment(id).expect("same corrected commitment exists");
+            assert_eq!(row.description, CORRECTED);
+            assert_eq!(row.due_at, Some(corrected_due));
+            assert_eq!(row.confidence, 1.0);
+            let model = db
+                .world_model(false)
+                .expect("world model remains exportable");
+            let exported = model.commitments.iter().find(|row| row.id == id).unwrap();
+            assert!(exported.pinned, "owner correction stays pinned");
+            assert!(
+                !exported.provenance.is_empty(),
+                "correction retains source history"
+            );
+            let pack = recall(db, "Nebula Toru");
+            let commitments: Vec<_> = pack
+                .items
+                .iter()
+                .filter(|item| item.kind == "commitment")
+                .collect();
+            assert_eq!(
+                commitments.len(),
+                1,
+                "automatic review cannot create a stale twin"
+            );
+            assert_eq!(commitments[0].id, id);
+            assert_eq!(commitments[0].text, CORRECTED);
+            assert_eq!(commitments[0].quote, None,
+            "retained automatic evidence must not masquerade as proof of owner-corrected wording");
+            assert_eq!(
+                commitments[0].event_id, None,
+                "owner-corrected wording has no supporting captured event"
+            );
+            for kind in ["person", "project", "open_loop"] {
+                assert!(
+                    pack.items.iter().any(|item| item.kind == kind),
+                    "correction must preserve other typed state: {kind}"
+                );
+            }
+            pack
+        };
+    let before_restart = assert_corrected(alice.db());
+    drop(alice);
+    assert!(scenario.store.close(&principal));
+    assert_eq!(scenario.store.live_handles(), 0);
+    alice = scenario.store.open(&principal).unwrap();
+    assert_eq!(assert_corrected(alice.db()), before_restart);
+
+    // This newer raw event and scripted relist target the existing row with Monday
+    // and the old wording. The real consolidator must preserve the owner's correction.
+    scenario.now.fetch_add(1, Ordering::SeqCst);
+    let sources = scenario.ingest(alice.db(), 1, &[MOVED]);
+    scenario.now.fetch_add(HOUR, Ordering::SeqCst);
+    let now = scenario.now.load(Ordering::SeqCst);
+    let lane = EvaluationLane {
+        db: alice.db().clone(),
+        stage: 1,
+        sources: sources.clone(),
+        calls: AtomicUsize::new(0),
+        provider: None,
+        invalid: None,
+    };
+    let (outcome, applied) = rt.block_on(tick_principal_batch(alice.db(), &lane, now));
+    assert_eq!(outcome, TickOutcome::Ran { complete: true });
+    assert!(
+        applied.is_some(),
+        "new automatic suggestion reaches the consolidator"
+    );
+    assert_eq!(lane.calls.load(Ordering::SeqCst), 2);
+    let before_restart = assert_corrected(alice.db());
+    let _ = rt.block_on(tick_principal_batch(alice.db(), &lane, now));
+    assert_eq!(
+        lane.calls.load(Ordering::SeqCst),
+        2,
+        "replay makes no model call"
+    );
+    drop(lane);
+    drop(alice);
+    assert!(scenario.store.close(&principal));
+    assert_eq!(scenario.store.live_handles(), 0);
+    let alice = scenario.store.open(&principal).unwrap();
+    let replay = alice
+        .db()
+        .agent_ingest(&Scenario::request(1, &[MOVED]))
+        .unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.inserted, 0);
+    assert_eq!(replay.event_ids, sources);
+    assert_eq!(assert_corrected(alice.db()), before_restart);
 }
 
 #[test]
@@ -693,7 +955,7 @@ fn unsafe_model_answers_do_not_become_authoritative_state() {
                 .all(|line| line.starts_with("possibly: ")),
             "{invalid}"
         );
-        println!("PASS reject {invalid}");
+        println!("SYNTHETIC PASS reject {invalid}");
     }
 }
 
