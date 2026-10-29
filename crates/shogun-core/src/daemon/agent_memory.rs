@@ -14,6 +14,10 @@
 //! 3. the append path itself strips hidden format characters, masks secrets and collapses an
 //!    exact duplicate onto its row.
 //!
+//! Trusted versioned connector snapshots use the same path with gate 2 disabled: a one-character
+//! factual edit must remain evidence. Exact content dedup and idempotent receipts still apply.
+//! The connector boundary selects this internal policy, never a source label or wire argument.
+//!
 //! The local-rule extraction then runs over every new row exactly as it does for a synced mail,
 //! and the review sessionizes `turns[]` by thread and hour (E5-T2, `dreamcycle::session`).
 //!
@@ -166,10 +170,26 @@ fn recent_thread_bodies(
     Ok(rows)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IngestDedup {
+    NearDuplicates,
+    ExactOnly,
+}
+
 impl Db {
     /// `memory.ingest`: see the module docs. One transaction holds the rows and the receipt, so a
     /// crash between them leaves neither; the caller retries with the same key.
     pub fn agent_ingest(&self, request: &IngestRequest) -> Result<IngestOutcome, String> {
+        self.ingest_with_dedup(request, IngestDedup::NearDuplicates)
+    }
+
+    /// Trusted read-sync snapshots preserve small factual changes; all other ingest gates and
+    /// the atomic receipt remain shared with `memory.ingest`.
+    pub(crate) fn ingest_versioned_snapshot(&self, request: &IngestRequest) -> Result<IngestOutcome, String> {
+        self.ingest_with_dedup(request, IngestDedup::ExactOnly)
+    }
+
+    fn ingest_with_dedup(&self, request: &IngestRequest, policy: IngestDedup) -> Result<IngestOutcome, String> {
         let ctx = write_context(request)?;
         let hash = receipt_hash(&request.idempotency_key);
         let legacy_key = legacy_marker_key(&request.idempotency_key);
@@ -195,7 +215,10 @@ impl Db {
                 let mut outcome = IngestOutcome::default();
                 // Newest first, as `dedup::decide_hash` expects; the request's own earlier items
                 // join the front as they are written.
-                let mut recents = recent_thread_bodies(conn, &namespace, derived_thread.as_deref())?;
+                let mut recents = match policy {
+                    IngestDedup::NearDuplicates => recent_thread_bodies(conn, &namespace, derived_thread.as_deref())?,
+                    IngestDedup::ExactOnly => Vec::new(),
+                };
                 for item in &request.items {
                     // Gate 1: an instruction to the assistant is not a memory (P4).
                     if shogun_redact::reject_instruction_shaped(&item.content) {
@@ -206,11 +229,16 @@ impl Db {
                     // Gate 2: a near-duplicate of a recent row in this thread takes its hash, so
                     // the append path touches that row (FR-CAP-03 for agents).
                     let fresh = event_log::content_hash(&item.content);
-                    let candidates: Vec<dedup::Recent<'_>> = recents
-                        .iter()
-                        .map(|(content_hash, content)| dedup::Recent { content_hash, content })
-                        .collect();
-                    let decision = dedup::decide_hash(&item.content, &candidates, |_| fresh.clone());
+                    let decision = match policy {
+                        IngestDedup::NearDuplicates => {
+                            let candidates: Vec<dedup::Recent<'_>> = recents
+                                .iter()
+                                .map(|(content_hash, content)| dedup::Recent { content_hash, content })
+                                .collect();
+                            dedup::decide_hash(&item.content, &candidates, |_| fresh.clone())
+                        }
+                        IngestDedup::ExactOnly => dedup::HashDecision::Fresh(fresh.clone()),
+                    };
                     let near_duplicate = decision.is_duplicate() && decision.hash() != fresh;
                     let title = item.title.as_deref().map(str::to_string).unwrap_or_else(|| request.source.clone());
                     let ev = NewEvent {
@@ -238,7 +266,9 @@ impl Db {
                         continue;
                     }
                     outcome.inserted += 1;
-                    recents.insert(0, (decision.hash().to_string(), item.content.clone()));
+                    if policy == IngestDedup::NearDuplicates {
+                        recents.insert(0, (decision.hash().to_string(), item.content.clone()));
+                    }
                     // The first-stage local-rule extraction (low-confidence candidates linked
                     // to this event), as for a synced mail: the hourly review confirms them.
                     let candidates = shogun_memory::extract::extract_untrusted(&item.content);
@@ -495,6 +525,30 @@ mod tests {
             rows
         })
         .expect("rows")
+    }
+
+    #[test]
+    fn versioned_snapshot_receipt_failure_rolls_back_and_can_retry() {
+        let db = db();
+        let request = request("snapshot-receipt-fault", &["The synthetic release deadline is April 21."]);
+        db.with_conn_mut("inject-receipt-fault", |c| c.execute_batch(
+            "CREATE TEMP TRIGGER reject_snapshot_receipt BEFORE INSERT ON ingest_receipts
+             BEGIN SELECT RAISE(ABORT, 'synthetic receipt failure'); END;"
+        )).unwrap();
+        assert_eq!(db.ingest_versioned_snapshot(&request), Err("ingest_unavailable".into()));
+        let counts: (i64, i64) = db.with_conn("check-rollback", |c| c.query_row(
+            "SELECT (SELECT COUNT(*) FROM event_log), (SELECT COUNT(*) FROM ingest_receipts)",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        )).unwrap();
+        assert_eq!(counts, (0, 0), "a failed receipt must leave no unreceipted event");
+        db.with_conn_mut("remove-receipt-fault", |c| c.execute_batch("DROP TRIGGER reject_snapshot_receipt")).unwrap();
+        let stored = db.ingest_versioned_snapshot(&request).unwrap();
+        assert_eq!(stored.inserted, 1);
+        assert!(!stored.replayed);
+        let replay = db.ingest_versioned_snapshot(&request).unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.inserted, 0);
+        assert_eq!(replay.event_ids, stored.event_ids);
     }
 
     #[test]

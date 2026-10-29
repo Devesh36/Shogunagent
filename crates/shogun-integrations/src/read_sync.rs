@@ -22,8 +22,9 @@
 //! an attachment id, and every non-text block, is skipped). Every event names its provider, the
 //! object's id and URL (in its closing line and the receipt metadata, invariant 5), and is ingested
 //! under `sync:<provider>:<hash(object id, version)>`, so the same object at the same version is
-//! stored once however often it is fetched; a newer version (Gmail's `historyId`, Calendar's and
-//! Notion's last-edited time) is a new event. The credential comes from the vault
+//! stored once however often it is fetched. A newer version (Gmail's `historyId`, Calendar's and
+//! Notion's last-edited time) with changed text is a new event even for a one-character edit;
+//! unchanged text still exact-deduplicates in its thread. The credential comes from the vault
 //! ([`HostedConnectors::access_token`]: refreshed through the single egress when needed), every GET
 //! goes through the core's HTTP client behind [`ProviderHttp`] (the single egress; a fake in
 //! tests), and each one writes an audit row (action `sync`, the vendor host, the outcome).
@@ -602,7 +603,9 @@ fn run_job<X: TokenExchange + Send + Sync>(vault: &HostedConnectors<X>, http: &d
     };
     let mut stored = 0;
     for obj in &objects {
-        match backend.ingest(&ingest_request(provider, obj)) {
+        // Provider versions already identify retries. Similarity must not erase a small
+        // factual edit in the fetched snapshot; exact content dedup remains in the store.
+        match backend.ingest_versioned_snapshot(&ingest_request(provider, obj)) {
             Ok(outcome) => stored += outcome.inserted,
             // The store did not take it: the same notice runs again (ingest is idempotent).
             Err(_) => return JobOutcome::Retry,
@@ -723,7 +726,7 @@ mod tests {
         fn read(&self, _: Tool, _: &ReadParams) -> Vec<ReadItem> {
             Vec::new()
         }
-        fn ingest(&self, request: &IngestRequest) -> Result<IngestOutcome, String> {
+        fn ingest_versioned_snapshot(&self, request: &IngestRequest) -> Result<IngestOutcome, String> {
             let fresh = self.keys.lock().unwrap().insert(request.idempotency_key.clone());
             self.requests.lock().unwrap().push(request.clone());
             Ok(IngestOutcome { inserted: usize::from(fresh), replayed: !fresh, ..Default::default() })

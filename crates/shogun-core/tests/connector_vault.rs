@@ -460,3 +460,145 @@ fn a_gmail_notice_is_queued_and_the_tick_fetches_it_into_the_principals_store_on
     let again = tick[0].outcome.clone().unwrap().unwrap();
     assert_eq!((again.objects, again.stored), (1, 0));
 }
+
+/// Synthetic versioned document provider. No network or token exchange is performed.
+struct FakeNotionVersions {
+    version: std::sync::atomic::AtomicUsize,
+    fail_next: std::sync::atomic::AtomicBool,
+}
+
+impl FakeNotionVersions {
+    fn page_and_blocks(&self) -> (serde_json::Value, serde_json::Value) {
+        let version = self.version.load(std::sync::atomic::Ordering::SeqCst);
+        let day = if version == 1 { 20 } else { 21 };
+        let body = format!(
+            "Deadline: 2030-04-{day}.\n{}",
+            "Synthetic launch planning context: the team reviews the draft and records the next steps. ".repeat(60)
+        );
+        (
+            serde_json::json!({
+                "id": "synthetic-launch-page", "last_edited_time": format!("2026-10-29T1{version}:00:00Z"),
+                "url": "https://example.test/synthetic-launch-page",
+                "properties": {"title": {"type": "title", "title": [{"plain_text": "Synthetic launch plan"}]}},
+            }),
+            serde_json::json!({"results": [{"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": body}]}}]}),
+        )
+    }
+
+    fn request(&self) -> shogun_mcp::ingest_api::IngestRequest {
+        let (page, blocks) = self.page_and_blocks();
+        let object = shogun_integrations::read_sync::notion_page(&page, &blocks).unwrap();
+        shogun_integrations::read_sync::ingest_request(shogun_integrations::read_sync::SyncProvider::Notion, &object)
+    }
+}
+
+impl ProviderHttp for FakeNotionVersions {
+    fn get(&self, url: &str, bearer: &Secret, headers: &[(&'static str, &'static str)]) -> Result<String, FetchError> {
+        assert_eq!(*bearer, Secret::new("synthetic-notion-read-token"));
+        assert_eq!(headers, &[("Notion-Version", shogun_integrations::read_sync::NOTION_VERSION)]);
+        if self.fail_next.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(FetchError::Transient);
+        }
+        let (page, blocks) = self.page_and_blocks();
+        match url.split('?').next().unwrap_or(url) {
+            "https://api.notion.com/v1/pages/synthetic-launch-page" => Ok(page.to_string()),
+            "https://api.notion.com/v1/blocks/synthetic-launch-page/children" => Ok(blocks.to_string()),
+            _ => Err(FetchError::NotFound),
+        }
+    }
+}
+
+#[test]
+fn versioned_notion_snapshot_retains_small_factual_edits_and_replays_after_restart() {
+    use shogun_integrations::read_sync::{enqueue, pending, RETRY_AFTER_MS};
+    use shogun_mcp::backend::MemoryBackend;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    println!("SYNTHETIC CONNECTOR REPLAY: fake Notion responses, real principal stores; no network or model calls.");
+    let root = TempRoot::new("versioned_notion");
+    let now = 1_800_000_000_000;
+    let tokens = Arc::new(MemorySecretStore::new());
+    let vault = HostedConnectors::new(tokens.clone(), HostedClients::default(), || Ok(FakeVendor::default()));
+    let store = PrincipalStore::new(&root.0, Arc::new(EnvKeyProvider::with_default(DbKey::new([0x67; 32]))), Arc::new(move || now), 4);
+    let alice = PrincipalId::parse("snapshot_alice").unwrap();
+    let bob = PrincipalId::parse("snapshot_bob").unwrap();
+    PrincipalGrants::new(tokens.as_ref(), alice.as_str()).save(Service::Notion, &TokenSet {
+        access_token: "synthetic-notion-read-token".into(), refresh_token: None,
+        expires_at_ms: now + 3_600_000, account_label: None,
+    }).unwrap();
+    let http = FakeNotionVersions { version: AtomicUsize::new(1), fail_next: AtomicBool::new(false) };
+    let notice = serde_json::json!({"entity_type": "page", "entity_id": "synthetic-launch-page"});
+    let queue = |at| enqueue(&vault, alice.as_str(), "notion", &notice, at).unwrap();
+    let tick = |at| shogun_core::tenancy::connector_sync::drain_tick(&store, &vault, &http, std::slice::from_ref(&alice), at)[0]
+        .outcome.clone().unwrap().unwrap();
+
+    queue(now);
+    assert_eq!(tick(now).stored, 1);
+    let first_request = http.request();
+    let first = store.open(&alice).unwrap().memory_backend().ingest_versioned_snapshot(&first_request).unwrap();
+    assert!(first.replayed);
+    assert_eq!(first.event_ids.len(), 1);
+
+    http.version.store(2, Ordering::SeqCst);
+    let revised_request = http.request();
+    assert_ne!(first_request.idempotency_key, revised_request.idempotency_key);
+    assert!(shogun_core::capture::dedup::similarity(&first_request.items[0].content, &revised_request.items[0].content)
+        >= shogun_core::capture::dedup::NEAR_DUP_THRESHOLD, "fixture must expose near-duplicate loss");
+    // A failed fetch leaves the prior snapshot and retries the queued notice without a receipt.
+    http.fail_next.store(true, Ordering::SeqCst);
+    queue(now + 1);
+    assert_eq!(tick(now + 1).retried, 1);
+    assert_eq!(pending(&vault, alice.as_str()).unwrap().len(), 1);
+    assert_eq!(store.open(&alice).unwrap().db().try_events_in_range(0, i64::MAX).unwrap().len(), 1);
+    assert_eq!(tick(now + RETRY_AFTER_MS + 1).stored, 1, "a changed version must retain its corrected body");
+
+    let handle = store.open(&alice).unwrap();
+    let backend = handle.memory_backend();
+    let revised = MemoryBackend::ingest_versioned_snapshot(&backend, &revised_request).unwrap();
+    assert!(revised.replayed);
+    assert_eq!(revised.inserted, 0);
+    assert_ne!(revised.event_ids, first.event_ids);
+    let events = handle.db().events_json(&[first.event_ids[0], revised.event_ids[0]], 16_000).unwrap();
+    assert!(events["events"][0]["text"].as_str().unwrap().contains("Deadline: 2030-04-20."));
+    assert!(events["events"][1]["text"].as_str().unwrap().contains("Deadline: 2030-04-21."));
+    for (request, ids) in [(&first_request, &first.event_ids), (&revised_request, &revised.event_ids)] {
+        let ts = request.items[0].ts_ms.unwrap();
+        let dated = handle.db().try_events_in_range(ts, ts + 1).unwrap();
+        assert_eq!(dated.len(), 1);
+        assert_eq!(dated[0].id, ids[0]);
+        assert_eq!(dated[0].content, request.items[0].content, "preserve the entire dated snapshot and provider footer");
+    }
+
+    // A metadata-only version change still exact-deduplicates the unchanged body.
+    http.version.store(3, Ordering::SeqCst);
+    let unchanged_request = http.request();
+    assert_ne!(unchanged_request.idempotency_key, revised_request.idempotency_key);
+    let unchanged = backend.ingest_versioned_snapshot(&unchanged_request).unwrap();
+    assert_eq!((unchanged.inserted, unchanged.deduplicated, unchanged.near_duplicates), (0, 1, 0));
+    assert_eq!(unchanged.event_ids, revised.event_ids);
+    let other = store.open(&bob).unwrap();
+    assert!(other.db().try_events_in_range(0, i64::MAX).unwrap().is_empty());
+    assert!(other.db().events_json(&revised.event_ids, 16_000).unwrap()["events"].as_array().unwrap().is_empty());
+    // The same connector-looking source/metadata on generic ingest must not select the
+    // trusted policy. Bob's separate receipts also cannot replay Alice's accepted keys.
+    let generic_first = other.memory_backend().ingest(&first_request).unwrap();
+    assert!(!generic_first.replayed);
+    assert_eq!(generic_first.inserted, 1);
+    let generic_revision = other.memory_backend().ingest(&revised_request).unwrap();
+    assert_eq!((generic_revision.inserted, generic_revision.deduplicated, generic_revision.near_duplicates), (0, 1, 1));
+    assert_eq!(generic_revision.event_ids, generic_first.event_ids);
+
+    drop(other);
+    drop(backend);
+    drop(handle);
+    store.close_all();
+    assert_eq!(store.live_handles(), 0);
+    let handle = store.open(&alice).unwrap();
+    for (request, ids) in [(&first_request, &first.event_ids), (&revised_request, &revised.event_ids), (&unchanged_request, &revised.event_ids)] {
+        let replay = handle.memory_backend().ingest_versioned_snapshot(request).unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.inserted, 0);
+        assert_eq!(&replay.event_ids, ids);
+    }
+    assert_eq!(handle.db().try_events_in_range(0, i64::MAX).unwrap().len(), 2);
+}

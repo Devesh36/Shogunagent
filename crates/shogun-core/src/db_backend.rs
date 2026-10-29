@@ -2520,6 +2520,13 @@ impl MemoryBackend for DbBackend {
         self.db.agent_ingest(request)
     }
 
+    fn ingest_versioned_snapshot(
+        &self,
+        request: &shogun_mcp::ingest_api::IngestRequest,
+    ) -> Result<shogun_mcp::ingest_api::IngestOutcome, String> {
+        self.db.ingest_versioned_snapshot(request)
+    }
+
     /// `memory.recall` (E4-T3): the context-pack assembly within the request's token budget.
     fn recall(
         &self,
