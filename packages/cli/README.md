@@ -80,6 +80,10 @@ A missing store, missing or malformed store key, missing binaries, or disabled A
 
 A successful report checks only these prerequisites: it does not verify that the key decrypts the store, that the schema is compatible, that all settings fields are valid, that settings seals or plan access permit use, that binaries execute, that directories are writable, or that a server is healthy. Follow the sidecar's startup result for those checks. This command diagnoses the CLI's single-store mode; the separate `--multi` evaluation mode has its own setup in the deployment guide.
 
+## Inspect approvals and sharing
+
+The read-only MCP connection also exposes `approvals.list` and `approvals.get` for pending approval summaries, `audit.list` for audit records, and `acl.list` for access grants on the connected store. The Rust backend applies its existing scope and redaction rules; listing a grant does not grant access. Use `tools/list` to discover supported tools. Approval decisions and ACL grant/revoke operations remain outside this connection and require the existing human or operator workflow. Other unsupported tools, including reads outside this connection's explicit supported set, return `next_action: not_allowed`.
+
 ## First authenticated write
 
 The CLI's MCP connection filters `tools/list` and rejects write calls with `next_action: not_allowed`, including `memory.ingest`. With authorization to write to the local store, use **HTTP `POST /v1/memory/ingest`** and the local bearer token. Free reads also require authentication; a free operation is not anonymous access.

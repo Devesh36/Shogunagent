@@ -7,16 +7,18 @@
  * `tools/call` of a tool outside the read-only set is answered here with an MCP tool error
  * (`isError: true`, `next_action: not_allowed`) and never reaches the server; `tools/list`
  * answers are filtered to the same set; everything else is relayed byte for byte. The set is
- * the tool table's `level: read` rows (apps/api/fixtures/tool-table.json; a test pins the copy).
+ * the frozen core's `level: read` rows plus four governance reads. Tests pin the core fixture
+ * and the governance extension's wire names / Read classification in Rust's memory_api.rs.
  */
 import type { Readable, Writable } from "node:stream";
 
-/** The read-only tools of the core (docs/implementation-plan.md §7.1, level `read`). */
+/** Supported core and governance reads; new tools remain denied until explicitly reviewed. */
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "memory.search", "memory.get_context", "memory.get_context_pack", "memory.get_events", "memory.read_session",
   "memory.get_wrap", "memory.get_periods", "memory.recall", "calendar.upcoming", "profile.whoami",
   "state.commitments.list", "state.open_loops.list", "state.people.list", "state.projects.list",
   "state.people.get", "state.projects.get", "wiki.evidence", "actions.status",
+  "approvals.list", "approvals.get", "audit.list", "acl.list",
 ]);
 
 interface JsonRpc {
@@ -42,15 +44,15 @@ export type Pending = Set<string>;
 
 const idKey = (id: unknown): string | undefined => (typeof id === "string" || typeof id === "number" ? `${typeof id}:${String(id)}` : undefined);
 
-/** The refusal an agent sees for a write through the read-only face. */
+/** The refusal for any unsupported tool, including reads outside the supported set. */
 export function refusal(id: unknown, name: string): string {
   return JSON.stringify({
     jsonrpc: "2.0",
     id,
     result: {
       isError: true,
-      content: [{ type: "text", text: `${name} is not available on this read-only connection. This entry was written by \`npx shogunagent\` with read access only; writes need the hosted endpoint with an agent key, or a connection the user widens in the ShogunAgent settings. next_action: not_allowed.` }],
-      structuredContent: { error: { code: "source_not_allowed", message: `${name} is a write; this connection is read-only.`, next_action: "not_allowed" } },
+      content: [{ type: "text", text: `${name} is not supported on this read-only connection. Use tools/list to see supported tools. Other operations require an appropriate authorized connection; approval decisions and access changes require the human or operator workflow. next_action: not_allowed.` }],
+      structuredContent: { error: { code: "source_not_allowed", message: `${name} is not supported on this read-only connection.`, next_action: "not_allowed" } },
     },
   });
 }

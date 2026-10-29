@@ -1,5 +1,5 @@
 /** The read-only stdio filter behind `shogunagent mcp`: writes never reach the server, the tool
- * list is filtered, everything else is relayed unchanged; the read set equals the tool table's. */
+ * list is filtered, everything else is relayed unchanged; metadata pins the supported read set. */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { READ_ONLY_TOOLS, filterRequest, filterResponse, lineSplitter, runReadOnlyProxy, type Pending } from "../src/readonly-proxy.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
+const governanceReads = ["approvals.list", "approvals.get", "audit.list", "acl.list"];
 
 describe("filterRequest", () => {
   it("forwards read tools, protocol methods and notifications unchanged", () => {
@@ -27,7 +28,7 @@ describe("filterRequest", () => {
 
   it("answers a write locally with an MCP tool error and never forwards it", () => {
     const pending: Pending = new Set();
-    for (const name of ["memory.ingest", "memory.append_note", "actions.execute", "router.run", "memory.delete_everything"]) {
+    for (const name of ["memory.ingest", "memory.append_note", "actions.execute", "router.run", "memory.delete_everything", "state.update", "state.delete", "state.create", "approvals.decide", "approvals.approve", "approvals.reject", "acl.grant", "acl.revoke"]) {
       const out = filterRequest(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name, arguments: {} } }), pending);
       expect(out.forward).toBeUndefined();
       const reply = JSON.parse(out.reply ?? "") as { id: number; result: { isError: boolean; content: Array<{ text: string }>; structuredContent: { error: { code: string; next_action: string } } } };
@@ -57,15 +58,89 @@ describe("filterRequest", () => {
     expect(filterResponse("garbage", pending)).toBe("garbage");
   });
 
-  it("the read set is the tool table's level: read rows (apps/api/fixtures/tool-table.json)", () => {
+  it("supports the frozen core reads plus the four authoritative governance reads", () => {
     const table = JSON.parse(readFileSync(join(here, "..", "..", "..", "apps", "api", "fixtures", "tool-table.json"), "utf8")) as { tools: Array<{ name: string; level: string }> };
     const reads = table.tools.filter((t) => t.level === "read").map((t) => t.name).sort();
-    expect([...READ_ONLY_TOOLS].sort()).toEqual(reads);
+    expect([...READ_ONLY_TOOLS].sort()).toEqual([...reads, ...governanceReads].sort());
     for (const t of table.tools.filter((t) => t.level !== "read")) expect(READ_ONLY_TOOLS.has(t.name), t.name).toBe(false);
+
+    // The interim core fixture predates governance. Pin the deliberate extension to the Rust
+    // metadata that generates the actual tool table, without building Rust during Node tests.
+    const metadata = readFileSync(join(here, "../../../crates/shogun-mcp/src/memory_api.rs"), "utf8");
+    const classification = metadata.match(/pub fn tool_level\([\s\S]*?\n\}/)?.[0] ?? "";
+    const readsInRust = [...classification.matchAll(/((?:Tool::\w+\s*(?:\|\s*)?)+)=>\s*ApiLevel::Read\b/g)]
+      .flatMap((match) => [...(match[1] ?? "").matchAll(/Tool::(\w+)/g)].map((variant) => variant[1]));
+    for (const [index, variant] of ["ApprovalsList", "ApprovalsGet", "AuditList", "AclList"].entries()) {
+      expect(metadata).toContain(`Tool::${variant} => "${governanceReads[index]}"`);
+      expect(readsInRust).toContain(variant);
+    }
+  });
+
+  it("describes unsupported reads neutrally and never trusts names or claimed annotations", () => {
+    for (const name of ["state.export", "future.list", "approvals.list.extra", "ACL.list", "acl.grant"]) {
+      const out = filterRequest(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, annotations: { readOnlyHint: true } } }), new Set());
+      expect(out.forward).toBeUndefined();
+      const result = JSON.parse(out.reply ?? "").result;
+      expect(result.structuredContent.error.message).toBe(`${name} is not supported on this read-only connection.`);
+      expect(result.content[0].text).not.toContain("is a write");
+      expect(result.structuredContent.error.next_action).toBe("not_allowed");
+    }
   });
 });
 
 describe("runReadOnlyProxy over streams", () => {
+  it("discovers and relays governance reads without changing backend scope or crossing connections", async () => {
+    // Two synthetic backend connections; the Rust backend remains responsible for tenancy and
+    // redaction. This checks transport separation and exact response/denial preservation only.
+    const makeConnection = () => {
+      const ends = { clientIn: new PassThrough(), clientOut: new PassThrough(), serverIn: new PassThrough(), serverOut: new PassThrough() };
+      const requests: string[] = [];
+      const replies: string[] = [];
+      ends.serverIn.on("data", lineSplitter((line) => requests.push(line)));
+      ends.clientOut.on("data", lineSplitter((line) => replies.push(line)));
+      return { ...ends, requests, replies, done: runReadOnlyProxy(ends) };
+    };
+    const alice = makeConnection();
+    const bob = makeConnection();
+    const mutations = ["approvals.decide", "acl.grant", "acl.revoke", "state.update", "state.delete", "memory.ingest"];
+    const tools = [...governanceReads, ...mutations, "future.list"].map((name) => ({ name, inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }));
+    for (const connection of [alice, bob]) {
+      connection.clientIn.write(JSON.stringify({ jsonrpc: "2.0", id: "list", method: "tools/list" }) + "\n");
+    }
+    // Even the same JSON-RPC id on separate connections cannot share pending discovery state.
+    alice.serverOut.write(JSON.stringify({ jsonrpc: "2.0", id: "list", result: { tools, nextCursor: "next-page" } }) + "\n");
+    expect(bob.replies).toEqual([]);
+    bob.serverOut.write(JSON.stringify({ jsonrpc: "2.0", id: "list", result: { tools } }) + "\n");
+    expect(JSON.parse(alice.replies[0] ?? "").result).toEqual({ tools: tools.slice(0, 4), nextCursor: "next-page" });
+    expect(JSON.parse(bob.replies[0] ?? "").result.tools).toEqual(tools.slice(0, 4));
+    for (const [index, name] of governanceReads.entries()) {
+      const args = name === "approvals.get" ? { approval_id: 17 } : name === "audit.list" ? { since_ms: 100, limit: 5 } : {};
+      const request = JSON.stringify({ jsonrpc: "2.0", id: index, method: "tools/call", params: { name, arguments: args } });
+      alice.clientIn.write(request + "\n");
+      bob.clientIn.write(request + "\n");
+      expect(alice.requests.at(-1)).toBe(request);
+      expect(bob.requests.at(-1)).toBe(request);
+      const own = JSON.stringify({ jsonrpc: "2.0", id: index, result: { isError: false, content: [{ type: "text", text: JSON.stringify({ tool: name, principal: "alice", records: [] }) }] } });
+      const denied = JSON.stringify({ jsonrpc: "2.0", id: index, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ tool: name, error: "not_found" }) }] } });
+      alice.serverOut.write(own + "\n");
+      bob.serverOut.write(denied + "\n");
+      expect(alice.replies.at(-1)).toBe(own);
+      expect(bob.replies.at(-1)).toBe(denied);
+      expect(bob.replies.join("\n")).not.toContain("alice");
+    }
+    for (const connection of [alice, bob]) {
+      const before = [...connection.requests];
+      for (const name of mutations) {
+        for (const id of [99, undefined]) {
+          connection.clientIn.write(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: { approval_id: 17, access: "write" } } }) + "\n");
+        }
+      }
+      expect(connection.requests).toEqual(before);
+      connection.serverOut.end();
+    }
+    await Promise.all([alice.done, bob.done]);
+  });
+
   it("relays, refuses and filters on a live stream, and ends when the server does", async () => {
     const clientIn = new PassThrough();
     const clientOut = new PassThrough();
