@@ -139,8 +139,11 @@ fn visible_state_does_not_export_hidden_source_identifiers_or_counts() {
         .expect("link");
     }
     as_agent(ReadScope::WITH_SCRATCH, || {
-        for (_, rows) in export(&conn).expect("export").tables() {
+        for (table, rows) in export(&conn).expect("export").tables() {
             assert!(rows.iter().all(|r| r.provenance.is_empty()));
+            if matches!(table, StateTable::People | StateTable::Projects) {
+                assert!(rows.iter().all(|r| r.evidence_count == Some(0)));
+            }
         }
         for table in [StateTable::People, StateTable::Projects] {
             let row = export_entity(&conn, table, 1)
@@ -171,5 +174,52 @@ fn visible_state_does_not_export_hidden_source_identifiers_or_counts() {
                 .evidence_count,
             Some(1)
         );
+        let public = insert(
+            &conn,
+            &NewEvent {
+                ts: 2,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: None,
+                window_title: None,
+                content: "Synthetic public evidence",
+                content_hash: "public-export-fixture",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .expect("public event");
+        for table in [StateTable::People, StateTable::Projects] {
+            conn.execute(
+                "INSERT INTO state_provenance(state_table,state_id,event_id) VALUES(?1,1,?2)",
+                params![table.as_str(), public],
+            )
+            .expect("public link");
+        }
+        for (table, rows) in export(&conn).expect("mixed evidence").tables() {
+            if matches!(table, StateTable::People | StateTable::Projects) {
+                let row = rows.iter().find(|r| r.id == 1).expect("row");
+                assert_eq!(row.evidence_count, Some(2));
+                assert_eq!(row.provenance, vec![event, public]);
+            }
+        }
+        revoke_scratch(
+            &conn,
+            &Actor::agent("alpha").expect("actor"),
+            &Namespace::scratch("beta").expect("namespace"),
+        )
+        .expect("revoke source access");
+        for (table, rows) in export(&conn).expect("revoked evidence").tables() {
+            if matches!(table, StateTable::People | StateTable::Projects) {
+                let row = rows.iter().find(|r| r.id == 1).expect("row");
+                assert_eq!(row.evidence_count, Some(1));
+                assert_eq!(row.provenance, vec![public]);
+                assert_eq!(
+                    Some(row),
+                    export_entity(&conn, table, 1).expect("entity").as_ref()
+                );
+            }
+        }
     });
 }
