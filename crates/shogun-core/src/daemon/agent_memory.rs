@@ -314,6 +314,16 @@ fn band_label(confidence: f64) -> Option<&'static str> {
 /// first, newest source first within that class. Re-listed state must cite its current
 /// evidence, even when an older quote was linked more recently during a replay.
 fn proving_quote(conn: &Connection, table: StateTable, id: i64, scope: ReadScope) -> Result<Option<(String, i64)>, rusqlite::Error> {
+    // Retained evidence describes the pre-edit wording. Match supported_provenance:
+    // an owner's wording correction remains authoritative without claiming old proof.
+    let wording_corrected: bool = conn.query_row(
+        &format!("SELECT user_pinned = 1 AND wording_edited = 1 FROM {} WHERE id = ?1", table.as_str()),
+        [id],
+        |row| row.get(0),
+    ).optional()?.unwrap_or(false);
+    if wording_corrected {
+        return Ok(None);
+    }
     let mut statement = conn.prepare(&format!(
         "SELECT p.quote, p.event_id, e.content, e.source FROM state_provenance p JOIN event_log e ON e.id = p.event_id
          WHERE p.state_table = ?1 AND p.state_id = ?2 AND p.quote IS NOT NULL AND ({})
