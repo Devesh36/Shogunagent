@@ -3,7 +3,7 @@
  * the exit code; `bin.ts` supplies the real `Deps`.
  */
 import { installBinaries, locateBinaries, releaseTarget, InstallError } from "./binaries.js";
-import { applyPlan, describePlan, detectClients, entryFor, planFor, PlanRefusal, type FilePlan } from "./clients.js";
+import { applyPlan, describePlan, detectClients, entryFor, localEntryFor, planFor, PlanRefusal, type FilePlan } from "./clients.js";
 import { doctor } from "./doctor.js";
 import { HOSTED, SKILL_MINOR, VERSION, helpJson, helpText } from "./help.js";
 import { ALL_CLIENTS, CLIENT_LABEL, DATA_DIR_ENV, dataPaths, type ClientId } from "./paths.js";
@@ -65,10 +65,10 @@ const INSTALL_HINT = "No sidecar binaries found. Run `npx shogunagent install` (
  * exit code: 0 when every planned write happened or nothing needed writing; 2 when consent was
  * not given (nothing written); 1 on a refusal.
  */
-export async function connectCommand(deps: Deps, options: { remove: boolean; yes: boolean; clients?: ClientId[] | undefined }): Promise<number> {
+export async function connectCommand(deps: Deps, options: { remove: boolean; yes: boolean; local?: boolean; clients?: ClientId[] | undefined }): Promise<number> {
   const paths = dataPaths(deps.platform);
   const explicitDataDir = deps.platform.env[DATA_DIR_ENV]?.trim();
-  const entry = options.remove ? null : entryFor(SKILL_MINOR, explicitDataDir || undefined);
+  const entry = options.remove ? null : options.local ? await localEntryFor(deps) : entryFor(SKILL_MINOR, explicitDataDir || undefined);
   const present = await detectClients(deps, options.clients);
   if (present.length === 0) {
     deps.io.out(options.clients ? `None of ${options.clients.map((c) => CLIENT_LABEL[c]).join(", ")} is installed here (no config file or directory found). Nothing written.` : "No agent app found here (Claude Code, Cursor, Codex, Claude Desktop). Nothing written.");
@@ -115,7 +115,7 @@ export async function connectCommand(deps: Deps, options: { remove: boolean; yes
       deps.io.err(`${p.path} changed while planning; not written. Retry.`);
     }
   }
-  if (!options.remove && failed === 0) deps.io.out(`Connected. Each app now has a read-only "shogunagent" MCP server; restart the app to pick it up. profile.whoami confirms the connection; reads are free.`);
+  if (!options.remove && failed === 0) deps.io.out(`Configuration written for a read-only "shogunagent" MCP server. Restart the app, then call profile.whoami to verify the connection. Configuration alone does not verify a tool call; reads are free.`);
   return failed > 0 ? 1 : 0;
 }
 
@@ -138,6 +138,10 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
   }
   const paths = dataPaths(deps.platform);
   try {
+    if (flags.local !== undefined && (command !== "connect" || flags.local !== true || parsed.positional.length > 0 ||
+        Object.keys(flags).some((flag) => !["local", "yes", "client"].includes(flag)))) {
+      throw new UsageError("--local is a boolean connect option; use connect --local [--yes] [--client ID].");
+    }
     switch (command) {
       case "help":
       case "--help": {
@@ -151,7 +155,7 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         return 0;
       }
       case "connect":
-        return connectCommand(deps, { remove: false, yes: flags.yes === true, clients: clientsFlag(flags) });
+        return await connectCommand(deps, { remove: false, yes: flags.yes === true, local: flags.local === true, clients: clientsFlag(flags) });
       case "disconnect":
         return connectCommand(deps, { remove: true, yes: flags.yes === true, clients: clientsFlag(flags) });
       case "doctor": {
@@ -168,10 +172,12 @@ export async function main(argv: string[], deps: Deps): Promise<number> {
         const port = await runningPort(deps, paths);
         const present = await detectClients(deps);
         const connected: Record<string, string> = {};
+        const local = await localEntryFor(deps).catch(() => undefined);
         for (const c of present) {
           try {
             const p = await planFor(deps, c, entryFor(SKILL_MINOR, deps.platform.env[DATA_DIR_ENV]?.trim() || undefined));
-            connected[c] = p.change === "unchanged" ? "connected" : p.before !== undefined ? "entry differs" : "not connected";
+            const localMatches = p.change !== "unchanged" && local && (await planFor(deps, c, local)).change === "unchanged";
+            connected[c] = p.change === "unchanged" ? "connected" : localMatches ? "configured (local launcher)" : p.before !== undefined ? "entry differs" : "not connected";
           } catch (e) {
             connected[c] = e instanceof PlanRefusal ? `refused: ${e.refusal}` : "unreadable";
           }

@@ -36,7 +36,15 @@ node packages/cli/bin/shogunagent.mjs serve
 
 If `CARGO_TARGET_DIR` is set, point `SHOGUNAGENT_BIN_DIR` at that directory's `release` subdirectory instead. It must be absolute. The CLI locates binaries there or in an explicitly installed release, never on PATH or by searching the current directory. Keep `serve` running while using local HTTP at `http://127.0.0.1:7464`; `--port` selects another port.
 
-For a source-only MCP setup, configure the app's stdio server to run an absolute Node executable with arguments `["/absolute/path/to/Shogunagent/packages/cli/bin/shogunagent.mjs", "mcp"]`, and provide the same `SHOGUNAGENT_BIN_DIR` and `SHOGUNAGENT_DATA_DIR` environment paths. Each MCP process must also have access to the matching store key. Use your app's MCP configuration format. The automatic `connect` command writes an **npx-based** entry, so it requires the published npm package even when you invoke `connect` from a checkout; it does not write the source-build binary directory into that entry.
+For a source-only MCP setup, use the built checkout with the same binary/data directory settings:
+
+```sh
+node packages/cli/bin/shogunagent.mjs connect --local --client codex
+```
+
+`--local` uses the absolute running Node executable and this checkout's `bin/shogunagent.mjs`, with `mcp` as its argument. It records only the selected absolute `SHOGUNAGENT_BIN_DIR` and `SHOGUNAGENT_DATA_DIR` paths. It checks that the launcher, compiled CLI module and binaries exist before proposing changes. It needs no npm package publication or download. The same option supports `claude-code`, `cursor` and `claude-desktop`; repeat `--client` to select several, or omit it for detected clients. Add `--yes` to apply the preview non-interactively. `--local` belongs to `connect`; run it separately before `serve` when both are needed.
+
+The existing store and matching key are still required. Keys and tokens are never copied into client configuration; the client must inherit the required secure environment or use the existing protected files in the selected data directory. Restart the client and verify an actual read tool call. Configuration success is not a protocol or decryption check. Regenerate the entry after moving the checkout, Node, binaries or data directory. `status` recognizes this local entry; `disconnect` removes it using the normal backup and consent rules. Without `--local`, `connect` retains the package-based `npx` launcher.
 
 ## Use published packages and releases
 
@@ -54,6 +62,7 @@ npx shogunagent@0.1 help --json
 | `install` | Download and verify release binaries; does not start the sidecar. |
 | `serve --install` | Download binaries, then start the sidecar. |
 | `connect` | Show proposed MCP configuration changes and ask before writing; `--yes` applies them non-interactively. Does not start HTTP. |
+| `connect --local` | Use this built CLI and Node directly, with selected absolute data/binary paths; no npm download. Preserves the read-only MCP filter. |
 | `serve --connect` | Apply MCP configuration changes and start HTTP. The flag explicitly authorizes those configuration writes. |
 | `mcp` | Run the stdio MCP server behind the read-only filter. |
 | `doctor --json` | Check local single-store prerequisites without starting a process or changing files. Exit 1 reports a blocker; warnings alone return 0. |

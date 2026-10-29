@@ -8,6 +8,7 @@ import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "no
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { fileURLToPath } from "node:url";
 
 import { main as run } from "./cli.js";
 import type { Deps, Fs, Spawn, SpawnedProcess } from "./types.js";
@@ -56,7 +57,10 @@ const deps: Deps = {
   fs,
   spawn,
   fetch: (url, init) => fetch(url, init ? { headers: init.headers ?? {} } : undefined),
-  platform: { nodeVersion: process.versions.node, os: process.platform, arch: process.arch, homedir: homedir(), env: process.env, interactive },
+  platform: {
+    nodeVersion: process.versions.node, os: process.platform, arch: process.arch, homedir: homedir(), env: process.env, interactive,
+    localLauncher: { node: process.execPath, script: fileURLToPath(new URL("../bin/shogunagent.mjs", import.meta.url)) },
+  },
   io: {
     out: (line) => console.log(line),
     err: (line) => console.error(line),

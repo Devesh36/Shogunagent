@@ -6,8 +6,8 @@
  *   is kept; the result is parsed again and compared with the original, entry by entry, before
  *   it may be written; a file that does not parse is refused, never "repaired".
  * - Idempotent: an entry that is already exactly this is `unchanged` and nothing is written.
- * - Never a secret: the entry is `npx -y shogunagent@<minor> mcp` (the read-only stdio face,
- *   src/readonly-proxy.ts) plus, when the data directory is not the default, its path. The token
+ * - Never a secret: the entry runs `mcp` through npx or an explicit local Node/CLI launcher
+ *   (the read-only stdio face, src/readonly-proxy.ts), with only data/binary directory paths. The token
  *   and the store key stay in the data directory (0600) and are read by that subcommand.
  * - A plan is built first and shown; applying refuses when the file changed since the plan
  *   (`baseDigest`), writes a backup next to the file, then writes atomically.
@@ -16,8 +16,10 @@
  *   the entry is still exactly what `claude mcp add --scope user` would write.
  */
 import { createHash } from "node:crypto";
+import { dirname, isAbsolute, resolve } from "node:path";
 
-import { ALL_CLIENTS, CLIENT_LABEL, DATA_DIR_ENV, clientConfigPath, clientPresenceMarkers, type ClientId } from "./paths.js";
+import { locateBinaries } from "./binaries.js";
+import { ALL_CLIENTS, BIN_DIR_ENV, CLIENT_LABEL, DATA_DIR_ENV, clientConfigPath, clientPresenceMarkers, dataPaths, type ClientId } from "./paths.js";
 import type { Deps } from "./types.js";
 
 export const ENTRY_NAME = "shogunagent";
@@ -29,12 +31,39 @@ export interface Entry {
   env?: Record<string, string>;
 }
 
-/** The entry every client gets. `skillMinor` is the SKILL.md / package minor (`0.1`). */
+/** The default package entry. `skillMinor` is the SKILL.md / package minor (`0.1`). */
 export function entryFor(skillMinor: string, dataDir?: string): Entry {
   return {
     command: "npx",
     args: ["-y", `${NPM_PACKAGE}@${skillMinor}`, "mcp"],
     ...(dataDir ? { env: { [DATA_DIR_ENV]: dataDir } } : {}),
+  };
+}
+
+/** Launch this installed/built CLI directly, using only non-secret path settings. */
+export async function localEntryFor(deps: Deps): Promise<Entry> {
+  const launcher = deps.platform.localLauncher;
+  const paths = dataPaths(deps.platform);
+  const absolute = (path: string): boolean => isAbsolute(path) && !/[\u0000-\u001f\u007f]/u.test(path);
+  if (!launcher || !absolute(launcher.node) || !absolute(launcher.script)) {
+    throw new Error("Local launcher unavailable. Run the built bin/shogunagent.mjs with an absolute Node executable.");
+  }
+  if (!absolute(paths.root)) throw new Error("Local connection requires an absolute SHOGUNAGENT_DATA_DIR.");
+  const configuredBin = deps.platform.env[BIN_DIR_ENV]?.trim();
+  if (configuredBin && !absolute(configuredBin)) throw new Error("Local connection requires an absolute SHOGUNAGENT_BIN_DIR.");
+  const isFile = async (path: string): Promise<boolean> => (await deps.fs.exists(path)) && !(await deps.fs.isDirectory(path));
+  if (!(await isFile(launcher.node)) || !(await isFile(launcher.script)) ||
+      !(await isFile(resolve(dirname(launcher.script), "../dist/bin.js")))) {
+    throw new Error("Local launcher files are missing. Build the CLI, then run its bin/shogunagent.mjs again.");
+  }
+  const binaries = await locateBinaries(deps, paths);
+  if (!binaries || !absolute(binaries.dir) || !(await isFile(binaries.api)) || !(await isFile(binaries.mcp))) {
+    throw new Error("Local connection needs shogun-api and shogun-mcp. Set SHOGUNAGENT_BIN_DIR to their absolute directory or select an installed release.");
+  }
+  return {
+    command: launcher.node,
+    args: [launcher.script, "mcp"],
+    env: { [DATA_DIR_ENV]: paths.root, [BIN_DIR_ENV]: binaries.dir },
   };
 }
 
