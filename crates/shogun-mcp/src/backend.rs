@@ -697,8 +697,10 @@ pub trait MemoryBackend: Send + Sync {
     }
 
     /// Internal connector snapshot ingestion: retain changed bodies even when nearly identical.
-    /// Shares ingest's sanitization, authorization, atomic receipts and exact deduplication, but
-    /// never collapses a factual edit by similarity. Only the trusted read-sync boundary selects
+    /// Shares ingest's sanitization, authorization and atomic receipts, but reuses evidence only
+    /// for identical sanitized text at the same source timestamp. Different timestamps remain
+    /// separate even for unchanged text. Requires a stable native object/thread id.
+    /// Only the trusted read-sync boundary selects
     /// this policy; it is not a wire option. Unsupported backends must refuse, not silently fall
     /// back to the lossy generic policy.
     fn ingest_versioned_snapshot(&self, _request: &crate::ingest_api::IngestRequest) -> Result<crate::ingest_api::IngestOutcome, String> {

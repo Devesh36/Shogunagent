@@ -569,13 +569,13 @@ fn versioned_notion_snapshot_retains_small_factual_edits_and_replays_after_resta
         assert_eq!(dated[0].content, request.items[0].content, "preserve the entire dated snapshot and provider footer");
     }
 
-    // A metadata-only version change still exact-deduplicates the unchanged body.
+    // A new provider timestamp remains dated evidence even when the body is unchanged.
     http.version.store(3, Ordering::SeqCst);
     let unchanged_request = http.request();
     assert_ne!(unchanged_request.idempotency_key, revised_request.idempotency_key);
     let unchanged = backend.ingest_versioned_snapshot(&unchanged_request).unwrap();
-    assert_eq!((unchanged.inserted, unchanged.deduplicated, unchanged.near_duplicates), (0, 1, 0));
-    assert_eq!(unchanged.event_ids, revised.event_ids);
+    assert_eq!((unchanged.inserted, unchanged.deduplicated, unchanged.near_duplicates), (1, 0, 0));
+    assert_ne!(unchanged.event_ids, revised.event_ids);
     let other = store.open(&bob).unwrap();
     assert!(other.db().try_events_in_range(0, i64::MAX).unwrap().is_empty());
     assert!(other.db().events_json(&revised.event_ids, 16_000).unwrap()["events"].as_array().unwrap().is_empty());
@@ -594,13 +594,13 @@ fn versioned_notion_snapshot_retains_small_factual_edits_and_replays_after_resta
     store.close_all();
     assert_eq!(store.live_handles(), 0);
     let handle = store.open(&alice).unwrap();
-    for (request, ids) in [(&first_request, &first.event_ids), (&revised_request, &revised.event_ids), (&unchanged_request, &revised.event_ids)] {
+    for (request, ids) in [(&first_request, &first.event_ids), (&revised_request, &revised.event_ids), (&unchanged_request, &unchanged.event_ids)] {
         let replay = handle.memory_backend().ingest_versioned_snapshot(request).unwrap();
         assert!(replay.replayed);
         assert_eq!(replay.inserted, 0);
         assert_eq!(&replay.event_ids, ids);
     }
-    assert_eq!(handle.db().try_events_in_range(0, i64::MAX).unwrap().len(), 2);
+    assert_eq!(handle.db().try_events_in_range(0, i64::MAX).unwrap().len(), 3);
 }
 
 #[test]
@@ -654,4 +654,97 @@ fn refetched_snapshot_repairs_a_lossy_pre_upgrade_receipt() {
     let events = handle.db().events_json(&[original.event_ids[0], repaired.event_ids[0]], 16_000).unwrap();
     assert_eq!(events["events"][0]["text"].as_str(), Some(first_request.items[0].content.as_str()));
     assert_eq!(events["events"][1]["text"].as_str(), Some(revised_request.items[0].content.as_str()));
+}
+
+#[test]
+fn reverting_snapshot_and_unchanged_new_versions_retain_fresh_dated_evidence() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    println!("SYNTHETIC VERSION REVERSION: deadline 21 -> 22 -> 21; no network or model calls.");
+    let root = TempRoot::new("snapshot_reversion");
+    let store = PrincipalStore::new(&root.0, Arc::new(EnvKeyProvider::with_default(DbKey::new([0x69; 32]))), Arc::new(|| 1_800_000_000_000), 2);
+    let principal = PrincipalId::parse("snapshot_reversion").unwrap();
+    let http = FakeNotionVersions { version: AtomicUsize::new(1), fail_next: AtomicBool::new(false) };
+    let handle = store.open(&principal).unwrap();
+    let backend = handle.memory_backend();
+    let mut requests = Vec::new();
+    let mut event_ids = Vec::new();
+    for (version, day) in [(1, 21), (2, 22), (3, 21), (4, 21)] {
+        http.version.store(version, Ordering::SeqCst);
+        let mut request = http.request();
+        let fixture_day = if version == 1 { 20 } else { 21 };
+        request.items[0].content = request.items[0].content.replace(
+            &format!("Deadline: 2030-04-{fixture_day}."), &format!("Deadline: 2030-04-{day}."),
+        );
+        let outcome = backend.ingest_versioned_snapshot(&request).unwrap();
+        assert!(!outcome.replayed);
+        assert_eq!(outcome.inserted, 1, "new timestamp for version {version} must retain fresh evidence, including unchanged or historical wording");
+        assert_eq!(outcome.deduplicated, 0);
+        assert!(!event_ids.contains(&outcome.event_ids[0]));
+        let ts = request.items[0].ts_ms.unwrap();
+        let dated = handle.db().try_events_in_range(ts, ts + 1).unwrap();
+        assert_eq!(dated.len(), 1);
+        assert_eq!(dated[0].id, outcome.event_ids[0]);
+        assert_eq!(dated[0].content, request.items[0].content);
+        let replay = backend.ingest_versioned_snapshot(&request).unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.event_ids, outcome.event_ids);
+        event_ids.push(outcome.event_ids[0]);
+        requests.push(request);
+    }
+    assert_eq!(requests[0].items[0].content, requests[2].items[0].content);
+    assert_ne!(event_ids[0], event_ids[2], "a historical matching body is distinct fresh evidence");
+    drop(backend);
+    drop(handle);
+    store.close_all();
+    let handle = store.open(&principal).unwrap();
+    for (request, event_id) in requests.iter().zip(&event_ids) {
+        let replay = handle.memory_backend().ingest_versioned_snapshot(request).unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.inserted, 0);
+        assert_eq!(replay.event_ids, vec![*event_id]);
+    }
+    assert_eq!(handle.db().try_events_in_range(0, i64::MAX).unwrap().len(), 4);
+}
+
+#[test]
+fn late_changed_snapshot_cannot_replace_newer_unchanged_evidence() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    println!("SYNTHETIC OUT-OF-ORDER REPLAY: A11 -> unchanged A13 -> late B12; no network or model calls.");
+    let root = TempRoot::new("snapshot_out_of_order");
+    let store = PrincipalStore::new(&root.0, Arc::new(EnvKeyProvider::with_default(DbKey::new([0x70; 32]))), Arc::new(|| 1_800_000_000_000), 2);
+    let principal = PrincipalId::parse("snapshot_out_of_order").unwrap();
+    let http = FakeNotionVersions { version: AtomicUsize::new(1), fail_next: AtomicBool::new(false) };
+    let handle = store.open(&principal).unwrap();
+    let mut accepted = Vec::new();
+    for (version, day) in [(1, 21), (3, 21), (2, 22)] {
+        http.version.store(version, Ordering::SeqCst);
+        let mut request = http.request();
+        let fixture_day = if version == 1 { 20 } else { 21 };
+        request.items[0].content = request.items[0].content.replace(
+            &format!("Deadline: 2030-04-{fixture_day}."), &format!("Deadline: 2030-04-{day}."),
+        );
+        let outcome = handle.memory_backend().ingest_versioned_snapshot(&request).unwrap();
+        assert_eq!(outcome.inserted, 1, "each distinct provider timestamp remains dated evidence");
+        accepted.push((request, outcome.event_ids));
+    }
+    let assert_latest = |db: &shogun_core::daemon::Db| {
+        let events = db.try_events_in_range(0, i64::MAX).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[2].id, accepted[1].1[0], "late B12 cannot supersede unchanged A13");
+        assert_eq!(events[2].content, accepted[1].0.items[0].content);
+        assert_eq!(events[1].id, accepted[2].1[0], "the late revision retains its original provider time");
+    };
+    assert_latest(handle.db());
+    drop(handle);
+    store.close_all();
+    let handle = store.open(&principal).unwrap();
+    for (request, ids) in &accepted {
+        let replay = handle.memory_backend().ingest_versioned_snapshot(request).unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.inserted, 0);
+        assert_eq!(&replay.event_ids, ids);
+    }
+    assert_latest(handle.db());
 }

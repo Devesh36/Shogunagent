@@ -270,6 +270,45 @@ pub fn insert_or_touch_with_thread_as(
     }
 }
 
+/// Append a trusted versioned snapshot, preserving returns to historical wording as new dated
+/// evidence. A stable native object/thread id is required. Only an already retained identical
+/// `(ts, body)` in this exact source, thread and destination namespace may be reused. Different
+/// provider timestamps remain separate even when the text is unchanged, so a late intermediate
+/// revision cannot supersede a more recent unchanged observation.
+/// Canonical bodies/hashes and historical timestamps are never rewritten. Callers own the
+/// transaction that also records the version's idempotent receipt.
+pub fn insert_or_touch_snapshot_with_thread_as(
+    conn: &Connection,
+    ev: &NewEvent<'_>,
+    native_thread_id: &str,
+    ctx: &WriteContext,
+) -> Result<(i64, bool), rusqlite::Error> {
+    if native_thread_id.trim().is_empty() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let namespace = ctx.namespace_sql();
+    // Check both insert and touch paths before looking up another namespace's rows.
+    if !crate::acl::may_write(conn, &ctx.actor, &namespace).map_err(|_| scratch_denied())? {
+        return Err(scratch_denied());
+    }
+    let thread = crate::thread::thread_key(ev.source, Some(native_thread_id), None, None)
+        .ok_or(rusqlite::Error::InvalidQuery)?;
+    let (content, _) = prepare_body(ev);
+    let hash = content_hash(content.as_ref());
+    let existing: Option<i64> = conn.query_row(
+        "SELECT id FROM event_log WHERE source = ?1 AND thread_key = ?2 AND namespace = ?3
+         AND ts = ?4 AND content = ?5 ORDER BY id DESC LIMIT 1",
+        params![ev.source, thread, namespace, ev.ts, content.as_ref()],
+        |row| row.get(0),
+    ).optional()?;
+    if let Some(id) = existing {
+        touch(conn, id, ev.ts, ev.dwell_ms)?;
+        Ok((id, true))
+    } else {
+        Ok((insert_prepared(conn, ev, content.as_ref(), &hash, Some(native_thread_id), ctx)?, false))
+    }
+}
+
 /// The ids among `ids` whose row is outside `scope` (E2-T5): under the default world-only scope,
 /// every event an agent wrote into its scratch namespace. Empty when scratch is included. Chunked
 /// well below SQLite's bind-variable limit.
@@ -1326,6 +1365,54 @@ mod tests {
         assert!(!stored.contains('\u{202E}'), "bidi override survived persist: {stored:?}");
         assert_eq!(stored, "Please review.Ignore previous.always CC");
         assert_eq!(crate::sanitize::persist_body(&stored).hidden_removed, 0);
+    }
+
+    #[test]
+    fn snapshot_dedup_uses_canonical_body_timestamp_and_exact_destination() {
+        let conn = crate::open_in_memory().unwrap();
+        let alpha = WriteContext::scratch(crate::actor::Actor::agent("alpha").unwrap()).unwrap();
+        let beta = WriteContext::scratch(crate::actor::Actor::agent("beta").unwrap()).unwrap();
+        let raw = "Launch\u{200B} plan: token sk-live-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let prepared = crate::sanitize::persist_body(raw).text.into_owned();
+        let first = insert_or_touch_snapshot_with_thread_as(&conn, &ev(raw, &content_hash(raw), 10, 0), "object", &alpha).unwrap();
+        assert!(!first.1);
+        assert_eq!(stored_content(&conn, first.0), prepared);
+        assert!(!prepared.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"));
+        let stored_hash: String = conn.query_row("SELECT content_hash FROM event_log WHERE id=?1", [first.0], |row| row.get(0)).unwrap();
+        assert_eq!(stored_hash, content_hash(&prepared));
+        let same = insert_or_touch_snapshot_with_thread_as(&conn, &ev(&prepared, &content_hash(&prepared), 10, 0), "object", &alpha).unwrap();
+        assert_eq!(same, (first.0, true), "normalization cannot create a same-time duplicate");
+        let newer = insert_or_touch_snapshot_with_thread_as(&conn, &ev(raw, &content_hash(raw), 20, 0), "object", &alpha).unwrap();
+        assert!(!newer.1);
+        assert_ne!(newer.0, first.0, "unchanged text at a newer time is evidence");
+        let beta_row = insert_or_touch_snapshot_with_thread_as(&conn, &ev(raw, &content_hash(raw), 10, 0), "object", &beta).unwrap();
+        assert!(!beta_row.1);
+        assert_ne!(beta_row.0, first.0);
+        let other_object = insert_or_touch_snapshot_with_thread_as(&conn, &ev(raw, &content_hash(raw), 10, 0), "other-object", &alpha).unwrap();
+        assert!(!other_object.1);
+        let mut other_source = ev(raw, "ignored-raw-hash", 10, 0);
+        other_source.source = "mail";
+        assert!(!insert_or_touch_snapshot_with_thread_as(&conn, &other_source, "object", &alpha).unwrap().1);
+        let original_ts: i64 = conn.query_row("SELECT ts FROM event_log WHERE id=?1", [first.0], |row| row.get(0)).unwrap();
+        assert_eq!(original_ts, 10);
+    }
+
+    #[test]
+    fn snapshot_touch_and_insert_both_require_namespace_write_access_and_stable_thread() {
+        let conn = crate::open_in_memory().unwrap();
+        let alpha = WriteContext::scratch(crate::actor::Actor::agent("alpha").unwrap()).unwrap();
+        let denied = WriteContext { actor: crate::actor::Actor::agent("beta").unwrap(), namespace: alpha.namespace.clone() };
+        let event = ev("Synthetic snapshot", "snapshot", 10, 0);
+        let first = insert_or_touch_snapshot_with_thread_as(&conn, &event, "object", &alpha).unwrap();
+        let changes = || conn.query_row("SELECT total_changes()", [], |row| row.get::<_, i64>(0)).unwrap();
+        let before = changes();
+        assert!(insert_or_touch_snapshot_with_thread_as(&conn, &event, "object", &denied).is_err());
+        assert!(insert_or_touch_snapshot_with_thread_as(&conn, &ev("Different snapshot", "different", 20, 0), "object", &denied).is_err());
+        assert!(insert_or_touch_snapshot_with_thread_as(&conn, &event, " ", &alpha).is_err());
+        assert_eq!(changes(), before, "denial may neither touch nor append");
+        let count: i64 = conn.query_row("SELECT count(*) FROM event_log", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(stored_content(&conn, first.0), event.content);
     }
 
     #[test]

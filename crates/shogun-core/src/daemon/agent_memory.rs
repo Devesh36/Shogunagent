@@ -15,7 +15,8 @@
 //!    exact duplicate onto its row.
 //!
 //! Trusted versioned connector snapshots use the same path with gate 2 disabled: a one-character
-//! factual edit must remain evidence. Exact content dedup and idempotent receipts still apply.
+//! factual edit must remain evidence. Only identical bodies at the same source timestamp dedup;
+//! each different timestamp remains evidence. Idempotent version receipts still apply.
 //! The connector boundary selects this internal policy, never a source label or wire argument.
 //!
 //! The local-rule extraction then runs over every new row exactly as it does for a synced mail,
@@ -23,7 +24,7 @@
 //!
 //! The receipt is kept under a SHA-256-derived identity in `ingest_receipts` (V99). Ordinary
 //! ingestion uses the bare digest and reads old `memory_markers` receipts as a fallback.
-//! Snapshots use `snapshot:v1:<digest>` with no ordinary/legacy fallback: an old near-collapsed
+//! Snapshots use `snapshot:v2:<digest>` with no ordinary/legacy fallback: an old near-collapsed
 //! receipt must not block repair when a changed version is refetched. Neither old receipts nor
 //! source history are overwritten, and no automatic historical refetch is scheduled. Repeating
 //! a key within its policy replays the first outcome and appends nothing.
@@ -61,7 +62,7 @@ const NEAR_DUP_RECENT_ROWS: usize = 32;
 const MATCH_WORD_MIN_CHARS: usize = 3;
 
 /// The digest portion of `ingest_receipts.idempotency_key_hash`, never the raw key. Ordinary
-/// receipts store this bare hex digest; snapshots add a disjoint `snapshot:v1:` policy prefix.
+/// receipts store this bare hex digest; snapshots add a disjoint `snapshot:v2:` policy prefix.
 fn receipt_hash(idempotency_key: &str) -> String {
     let digest = Sha256::digest(idempotency_key.as_bytes());
     digest.iter().map(|b| format!("{b:02x}")).collect()
@@ -180,7 +181,7 @@ fn recent_thread_bodies(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum IngestDedup {
     NearDuplicates,
-    ExactOnly,
+    SnapshotVersions,
 }
 
 impl Db {
@@ -191,9 +192,11 @@ impl Db {
     }
 
     /// Trusted read-sync snapshots preserve small factual changes; all other ingest gates and
-    /// the atomic receipt remain shared with `memory.ingest`.
+    /// the atomic receipt remain shared with `memory.ingest`. Chronology uses the supplied
+    /// source timestamp; missing timestamps retain the ingestion-clock fallback, not inferred
+    /// provider ordering.
     pub(crate) fn ingest_versioned_snapshot(&self, request: &IngestRequest) -> Result<IngestOutcome, String> {
-        self.ingest_with_dedup(request, IngestDedup::ExactOnly)
+        self.ingest_with_dedup(request, IngestDedup::SnapshotVersions)
     }
 
     fn ingest_with_dedup(&self, request: &IngestRequest, policy: IngestDedup) -> Result<IngestOutcome, String> {
@@ -203,10 +206,13 @@ impl Db {
             IngestDedup::NearDuplicates => (hash, Some(legacy_marker_key(&request.idempotency_key))),
             // A stored prefix cannot collide with any ordinary 64-hex receipt, even when a
             // caller chooses a key that looks like a snapshot key. Keep old receipts intact.
-            IngestDedup::ExactOnly => (format!("snapshot:v1:{hash}"), None),
+            IngestDedup::SnapshotVersions => (format!("snapshot:v2:{hash}"), None),
         };
         let now = self.now_ms();
         let native_thread = request.thread_key.as_deref();
+        if policy == IngestDedup::SnapshotVersions && native_thread.map(str::trim).filter(|id| !id.is_empty()).is_none() {
+            return Err("invalid_snapshot_thread".to_string());
+        }
         let derived_thread = native_thread.and_then(|id| shogun_memory::thread::thread_key(EVENT_SOURCE, Some(id), None, None));
         let namespace = ctx.namespace_sql();
         self.with_conn_mut("agent_ingest", |conn| -> Result<IngestOutcome, rusqlite::Error> {
@@ -229,7 +235,7 @@ impl Db {
                 // join the front as they are written.
                 let mut recents = match policy {
                     IngestDedup::NearDuplicates => recent_thread_bodies(conn, &namespace, derived_thread.as_deref())?,
-                    IngestDedup::ExactOnly => Vec::new(),
+                    IngestDedup::SnapshotVersions => Vec::new(),
                 };
                 for item in &request.items {
                     // Gate 1: an instruction to the assistant is not a memory (P4).
@@ -249,7 +255,7 @@ impl Db {
                                 .collect();
                             dedup::decide_hash(&item.content, &candidates, |_| fresh.clone())
                         }
-                        IngestDedup::ExactOnly => dedup::HashDecision::Fresh(fresh.clone()),
+                        IngestDedup::SnapshotVersions => dedup::HashDecision::Fresh(fresh.clone()),
                     };
                     let near_duplicate = decision.is_duplicate() && decision.hash() != fresh;
                     let title = item.title.as_deref().map(str::to_string).unwrap_or_else(|| request.source.clone());
@@ -266,8 +272,14 @@ impl Db {
                         display_id: None,
                         window_bounds: None,
                     };
-                    // Gate 3: the shared append path (strip, redact, exact dedup per thread).
-                    let (id, touched) = event_log::insert_or_touch_with_thread_as(conn, &ev, native_thread, &ctx)?;
+                    // Gate 3: shared sanitization and append guards. Snapshot dedup also keeps
+                    // the provider timestamp, so historical wording can become new evidence.
+                    let (id, touched) = match policy {
+                        IngestDedup::NearDuplicates => event_log::insert_or_touch_with_thread_as(conn, &ev, native_thread, &ctx)?,
+                        IngestDedup::SnapshotVersions => event_log::insert_or_touch_snapshot_with_thread_as(
+                            conn, &ev, native_thread.ok_or(rusqlite::Error::InvalidQuery)?, &ctx,
+                        )?,
+                    };
                     self.reconcile_hot_locked(conn, id);
                     outcome.event_ids.push(id);
                     if touched {
@@ -540,14 +552,17 @@ mod tests {
     }
 
     #[test]
-    fn versioned_snapshot_does_not_replay_an_ordinary_legacy_receipt() {
+    fn versioned_snapshot_does_not_replay_legacy_or_older_snapshot_receipts() {
         let db = db();
         let original = db.agent_ingest(&request("old-snapshot", &["Synthetic launch deadline: April 20."])).unwrap();
         let revised_request = request("legacy-lossy-snapshot", &["Synthetic launch deadline: April 21."]);
         let legacy_key = legacy_marker_key(&revised_request.idempotency_key);
         db.with_conn_mut("seed-legacy-receipt", |c| {
             c.execute("INSERT INTO memory_markers(key, value) VALUES (?1, 1)", [&legacy_key])?;
-            c.execute("INSERT INTO memory_markers(key, value) VALUES (?1, ?2)", params![format!("{legacy_key}:0"), original.event_ids[0]])
+            c.execute("INSERT INTO memory_markers(key, value) VALUES (?1, ?2)", params![format!("{legacy_key}:0"), original.event_ids[0]])?;
+            // The earlier experimental snapshot policy also collapsed historical reversions.
+            write_receipt(c, &format!("snapshot:v1:{}", receipt_hash(&revised_request.idempotency_key)),
+                &WriteContext::owner(), None, &original.event_ids, 1_000_000)
         }).unwrap();
         let repaired = db.ingest_versioned_snapshot(&revised_request).unwrap();
         assert_eq!(repaired.inserted, 1, "snapshot receipts must not inherit lossy legacy markers");
@@ -559,6 +574,21 @@ mod tests {
         let replay = db.ingest_versioned_snapshot(&revised_request).unwrap();
         assert!(replay.replayed);
         assert_eq!(replay.event_ids, repaired.event_ids);
+        let old = db.with_conn("old-snapshot-receipt", |c| read_receipt(c,
+            &format!("snapshot:v1:{}", receipt_hash(&revised_request.idempotency_key)), None)).unwrap();
+        assert_eq!(old, Some(original.event_ids), "old snapshot receipt stays intact");
+    }
+
+    #[test]
+    fn versioned_snapshot_requires_a_stable_thread_without_changing_generic_ingest() {
+        let db = db();
+        let mut request = request("snapshot-thread", &["Synthetic snapshot"]);
+        for thread in [None, Some(" ".to_string())] {
+            request.thread_key = thread;
+            assert_eq!(db.ingest_versioned_snapshot(&request), Err("invalid_snapshot_thread".to_string()));
+        }
+        request.thread_key = None;
+        assert_eq!(db.agent_ingest(&request).unwrap().inserted, 1);
     }
 
     #[test]
