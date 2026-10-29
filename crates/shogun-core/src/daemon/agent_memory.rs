@@ -21,9 +21,12 @@
 //! The local-rule extraction then runs over every new row exactly as it does for a synced mail,
 //! and the review sessionizes `turns[]` by thread and hour (E5-T2, `dreamcycle::session`).
 //!
-//! The receipt is kept under the SHA-256 of the caller's `idempotency_key` in `ingest_receipts`
-//! (V99): a repeated key replays the first outcome and appends nothing. Receipts the E4 build left
-//! in `memory_markers` are read as a fallback and never written again.
+//! The receipt is kept under a SHA-256-derived identity in `ingest_receipts` (V99). Ordinary
+//! ingestion uses the bare digest and reads old `memory_markers` receipts as a fallback.
+//! Snapshots use `snapshot:v1:<digest>` with no ordinary/legacy fallback: an old near-collapsed
+//! receipt must not block repair when a changed version is refetched. Neither old receipts nor
+//! source history are overwritten, and no automatic historical refetch is scheduled. Repeating
+//! a key within its policy replays the first outcome and appends nothing.
 //!
 //! **Recall** reads under a [`ReadScope`] (`include_scratch` widens the call's scope, never
 //! narrows it): state rows that match the query come first, each with its confidence band and
@@ -57,7 +60,8 @@ const NEAR_DUP_RECENT_ROWS: usize = 32;
 /// Shortest query word that takes part in state-row matching.
 const MATCH_WORD_MIN_CHARS: usize = 3;
 
-/// `ingest_receipts.idempotency_key_hash`: the SHA-256 of the key, hex. Never the key itself.
+/// The digest portion of `ingest_receipts.idempotency_key_hash`, never the raw key. Ordinary
+/// receipts store this bare hex digest; snapshots add a disjoint `snapshot:v1:` policy prefix.
 fn receipt_hash(idempotency_key: &str) -> String {
     let digest = Sha256::digest(idempotency_key.as_bytes());
     digest.iter().map(|b| format!("{b:02x}")).collect()
@@ -94,14 +98,17 @@ pub fn parse_actor(raw: &str) -> Result<Actor, String> {
     parsed.map_err(|_| "invalid_actor".to_string())
 }
 
-fn read_receipt(conn: &Connection, hash: &str, legacy_key: &str) -> Result<Option<Vec<i64>>, rusqlite::Error> {
+fn read_receipt(conn: &Connection, hash: &str, legacy_key: Option<&str>) -> Result<Option<Vec<i64>>, rusqlite::Error> {
     let stored: Option<String> = conn
         .query_row("SELECT event_ids FROM ingest_receipts WHERE idempotency_key_hash = ?1", [hash], |r| r.get(0))
         .optional()?;
     if let Some(stored) = stored {
         return Ok(Some(serde_json::from_str::<Vec<i64>>(&stored).unwrap_or_default()));
     }
-    read_legacy_receipt(conn, legacy_key)
+    match legacy_key {
+        Some(key) => read_legacy_receipt(conn, key),
+        None => Ok(None),
+    }
 }
 
 fn read_legacy_receipt(conn: &Connection, key: &str) -> Result<Option<Vec<i64>>, rusqlite::Error> {
@@ -192,7 +199,12 @@ impl Db {
     fn ingest_with_dedup(&self, request: &IngestRequest, policy: IngestDedup) -> Result<IngestOutcome, String> {
         let ctx = write_context(request)?;
         let hash = receipt_hash(&request.idempotency_key);
-        let legacy_key = legacy_marker_key(&request.idempotency_key);
+        let (hash, legacy_key) = match policy {
+            IngestDedup::NearDuplicates => (hash, Some(legacy_marker_key(&request.idempotency_key))),
+            // A stored prefix cannot collide with any ordinary 64-hex receipt, even when a
+            // caller chooses a key that looks like a snapshot key. Keep old receipts intact.
+            IngestDedup::ExactOnly => (format!("snapshot:v1:{hash}"), None),
+        };
         let now = self.now_ms();
         let native_thread = request.thread_key.as_deref();
         let derived_thread = native_thread.and_then(|id| shogun_memory::thread::thread_key(EVENT_SOURCE, Some(id), None, None));
@@ -204,7 +216,7 @@ impl Db {
                 conn.execute_batch("BEGIN IMMEDIATE")?;
             }
             let outcome = (|| -> Result<IngestOutcome, rusqlite::Error> {
-                if let Some(ids) = read_receipt(conn, &hash, &legacy_key)? {
+                if let Some(ids) = read_receipt(conn, &hash, legacy_key.as_deref())? {
                     return Ok(IngestOutcome {
                         event_ids: ids,
                         replayed: true,
@@ -525,6 +537,28 @@ mod tests {
             rows
         })
         .expect("rows")
+    }
+
+    #[test]
+    fn versioned_snapshot_does_not_replay_an_ordinary_legacy_receipt() {
+        let db = db();
+        let original = db.agent_ingest(&request("old-snapshot", &["Synthetic launch deadline: April 20."])).unwrap();
+        let revised_request = request("legacy-lossy-snapshot", &["Synthetic launch deadline: April 21."]);
+        let legacy_key = legacy_marker_key(&revised_request.idempotency_key);
+        db.with_conn_mut("seed-legacy-receipt", |c| {
+            c.execute("INSERT INTO memory_markers(key, value) VALUES (?1, 1)", [&legacy_key])?;
+            c.execute("INSERT INTO memory_markers(key, value) VALUES (?1, ?2)", params![format!("{legacy_key}:0"), original.event_ids[0]])
+        }).unwrap();
+        let repaired = db.ingest_versioned_snapshot(&revised_request).unwrap();
+        assert_eq!(repaired.inserted, 1, "snapshot receipts must not inherit lossy legacy markers");
+        assert!(!repaired.replayed);
+        assert_ne!(repaired.event_ids, original.event_ids);
+        let ordinary = db.agent_ingest(&revised_request).unwrap();
+        assert!(ordinary.replayed);
+        assert_eq!(ordinary.event_ids, original.event_ids, "legacy generic receipt remains intact");
+        let replay = db.ingest_versioned_snapshot(&revised_request).unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.event_ids, repaired.event_ids);
     }
 
     #[test]

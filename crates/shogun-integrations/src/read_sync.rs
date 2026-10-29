@@ -28,6 +28,8 @@
 //! ([`HostedConnectors::access_token`]: refreshed through the single egress when needed), every GET
 //! goes through the core's HTTP client behind [`ProviderHttp`] (the single egress; a fake in
 //! tests), and each one writes an audit row (action `sync`, the vendor host, the outcome).
+//! Snapshot receipts are separate from old generic-ingest receipts, so refetching a previously
+//! collapsed version can recover its text. This does not schedule a historical backfill.
 //!
 //! Failures: no grant (or a revoked one) drops the notice and counts it `not_connected`; a vendor
 //! or store that did not answer re-queues it with a back-off, at most [`MAX_ATTEMPTS`] times; an

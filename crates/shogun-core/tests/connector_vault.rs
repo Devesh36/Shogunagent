@@ -602,3 +602,56 @@ fn versioned_notion_snapshot_retains_small_factual_edits_and_replays_after_resta
     }
     assert_eq!(handle.db().try_events_in_range(0, i64::MAX).unwrap().len(), 2);
 }
+
+#[test]
+fn refetched_snapshot_repairs_a_lossy_pre_upgrade_receipt() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    println!("SYNTHETIC UPGRADE REPLAY: refetch repairs an old lossy receipt; no automatic backfill or network calls.");
+    let root = TempRoot::new("snapshot_receipt_upgrade");
+    let store = PrincipalStore::new(&root.0, Arc::new(EnvKeyProvider::with_default(DbKey::new([0x68; 32]))), Arc::new(|| 1_800_000_000_000), 2);
+    let principal = PrincipalId::parse("snapshot_upgrade").unwrap();
+    let http = FakeNotionVersions { version: AtomicUsize::new(1), fail_next: AtomicBool::new(false) };
+    let first_request = http.request();
+    http.version.store(2, Ordering::SeqCst);
+    let revised_request = http.request();
+
+    // Reproduce the old read-sync dispatch, including its successful but lossy receipt.
+    let handle = store.open(&principal).unwrap();
+    let backend = handle.memory_backend();
+    let original = backend.ingest(&first_request).unwrap();
+    let lost_revision = backend.ingest(&revised_request).unwrap();
+    assert_eq!((lost_revision.inserted, lost_revision.near_duplicates), (0, 1));
+    assert_eq!(lost_revision.event_ids, original.event_ids);
+    drop(backend);
+    drop(handle);
+    store.close_all();
+
+    // Merely reopening does not backfill anything. Repair happens when that version is fetched.
+    let handle = store.open(&principal).unwrap();
+    assert_eq!(handle.db().try_events_in_range(0, i64::MAX).unwrap().len(), 1);
+    let backend = handle.memory_backend();
+    let repaired = backend.ingest_versioned_snapshot(&revised_request).unwrap();
+    assert_eq!(repaired.inserted, 1, "an old lossy receipt must not block a refetched correction");
+    assert!(!repaired.replayed);
+    assert_ne!(repaired.event_ids, original.event_ids);
+    let exact_original = backend.ingest_versioned_snapshot(&first_request).unwrap();
+    assert_eq!((exact_original.inserted, exact_original.deduplicated), (0, 1));
+    assert_eq!(exact_original.event_ids, original.event_ids);
+    let ordinary_replay = backend.ingest(&revised_request).unwrap();
+    assert!(ordinary_replay.replayed);
+    assert_eq!(ordinary_replay.event_ids, original.event_ids, "ordinary receipts are retained, not overwritten");
+    drop(backend);
+    drop(handle);
+    store.close_all();
+
+    let handle = store.open(&principal).unwrap();
+    let replay = handle.memory_backend().ingest_versioned_snapshot(&revised_request).unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.inserted, 0);
+    assert_eq!(replay.event_ids, repaired.event_ids);
+    assert_eq!(handle.db().try_events_in_range(0, i64::MAX).unwrap().len(), 2);
+    let events = handle.db().events_json(&[original.event_ids[0], repaired.event_ids[0]], 16_000).unwrap();
+    assert_eq!(events["events"][0]["text"].as_str(), Some(first_request.items[0].content.as_str()));
+    assert_eq!(events["events"][1]["text"].as_str(), Some(revised_request.items[0].content.as_str()));
+}
