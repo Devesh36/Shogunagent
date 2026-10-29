@@ -526,8 +526,10 @@ pub fn search_federated(
         SourceConstraint::Require(family) if family != MemorySourceFamily::Meeting
     );
     let document_focus = required_document_focus(options.source).unwrap_or(options.focus);
-    let range = options.since_ts.map(|from_ms| SearchRange {
-        from_ms,
+    // Either bound constrains candidate selection. An upper-only range must also reach the
+    // lexical, Warm-vector and meeting lanes before their per-source limits are applied.
+    let range = (options.since_ts.is_some() || options.to_ts.is_some()).then(|| SearchRange {
+        from_ms: options.since_ts.unwrap_or(i64::MIN),
         to_ms: options.to_ts.unwrap_or(now_ms).min(now_ms),
     });
     // Raw-event lexical lane (`lexical.rs`): bounded AND-first / relaxed-OR retrieval over the
