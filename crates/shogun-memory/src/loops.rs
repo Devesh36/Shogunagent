@@ -632,6 +632,14 @@ fn open_item(conn: &mut Connection, item: &Value, events: &[i64], now: i64, ctx:
     }
     let t = table.as_str();
     let tx = conn.savepoint()?;
+    // A hard-deleted or rewritten item has no row for the closed-source check above. Consult
+    // its description digest before creating a replacement, using the cited event's real time
+    // and the new row's explicit destination (which need not equal the current call scope).
+    if existing.is_none() && crate::state_edit::is_suppressed_in_namespace(
+        &tx, table, &text, said_at, &ctx.namespace_sql(),
+    )? {
+        return Ok(None);
+    }
     let id = match existing {
         Some(id) => {
             if table == StateTable::Commitments {
