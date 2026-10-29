@@ -11,9 +11,12 @@
 //! **Delete = gone, and stays gone.** The state row, its provenance links, and any dispute naming
 //! it are removed; the events themselves stay (they are the log). Because the Dream Cycle
 //! re-classifies a window of past events, the same belief would otherwise come straight back from
-//! the same old events on the next pass. A `state_suppressions` row (a digest of the key the
+//! the same old events on the next pass. A `state_suppressions_scoped` row (a digest of the key the
 //! extractor derives — never the text) stops that for evidence at or before the deletion; the same
 //! thing said again *later* is new evidence and is extracted as usual.
+//! New suppressions affect only the deleted/edited row's namespace. Pre-V106
+//! `state_suppressions` rows lack recoverable namespace information and retain their original
+//! global effect, so upgrading cannot resurrect a historically deleted belief.
 //!
 //! Known gap (documented, not handled here): a person created from an email/handle identity
 //! (`identity::observe`) has no extraction key, so a deleted one reappears when new mail from the
@@ -182,34 +185,52 @@ pub fn suppression_digest(table: StateTable, key: &str) -> String {
 fn suppress(
     conn: &Connection,
     table: StateTable,
+    namespace: &str,
     key: &str,
     reason: &str,
     now: i64,
 ) -> Result<(), rusqlite::Error> {
     conn.execute(
-        "INSERT INTO state_suppressions (state_table, match_digest, reason, suppressed_at)
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (state_table, match_digest) DO UPDATE
+        "INSERT INTO state_suppressions_scoped (state_table, namespace, match_digest, reason, suppressed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (state_table, namespace, match_digest) DO UPDATE
             SET reason = excluded.reason,
                 suppressed_at = MAX(suppressed_at, excluded.suppressed_at)",
-        params![table.as_str(), suppression_digest(table, key), reason, now],
+        params![table.as_str(), namespace, suppression_digest(table, key), reason, now],
     )?;
     Ok(())
 }
 
 /// Whether the user deleted (or rewrote) this belief after the evidence at `evidence_ts` was
 /// captured — i.e. re-extracting it from that evidence would undo the user's correction.
+/// Uses the current writer's destination namespace, just like the extraction insert. The source
+/// event's namespace is not the destination. Legacy-global suppressions retain their old cutoff.
 pub fn is_suppressed(
     conn: &Connection,
     table: StateTable,
     key: &str,
     evidence_ts: i64,
 ) -> Result<bool, rusqlite::Error> {
+    is_suppressed_in_namespace(conn, table, key, evidence_ts, &crate::actor::current_write().namespace_sql())
+}
+
+/// Explicit destination variant for writers that carry a context instead of the call scope.
+pub fn is_suppressed_in_namespace(
+    conn: &Connection,
+    table: StateTable,
+    key: &str,
+    evidence_ts: i64,
+    namespace: &str,
+) -> Result<bool, rusqlite::Error> {
     Ok(conn
         .query_row(
-            "SELECT 1 FROM state_suppressions
-              WHERE state_table = ?1 AND match_digest = ?2 AND suppressed_at >= ?3",
-            params![table.as_str(), suppression_digest(table, key), evidence_ts],
+            "SELECT 1 FROM state_suppressions_scoped
+              WHERE state_table = ?1 AND match_digest = ?2 AND suppressed_at >= ?3 AND namespace = ?4
+             UNION ALL
+             SELECT 1 FROM state_suppressions
+              WHERE state_table = ?1 AND match_digest = ?2 AND suppressed_at >= ?3
+             LIMIT 1",
+            params![table.as_str(), suppression_digest(table, key), evidence_ts, namespace],
             |_| Ok(()),
         )
         .optional()?
@@ -391,21 +412,21 @@ pub fn update_state_as(
     if !may_write_state(&tx, table, id, ctx)? {
         return Ok(false);
     }
-    let old_description: Option<String> = match table {
+    let old_row: Option<(String, String)> = match table {
         StateTable::Commitments | StateTable::OpenLoops => tx
             .query_row(
-                &format!("SELECT description FROM {} WHERE id = ?1", table.as_str()),
+                &format!("SELECT description, namespace FROM {} WHERE id = ?1", table.as_str()),
                 [id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?,
         StateTable::People | StateTable::Projects => tx
-            .query_row(&format!("SELECT '' FROM {} WHERE id = ?1", table.as_str()), [id], |r| {
-                r.get(0)
+            .query_row(&format!("SELECT '', namespace FROM {} WHERE id = ?1", table.as_str()), [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
             })
             .optional()?,
     };
-    let Some(old_description) = old_description else {
+    let Some((old_description, namespace)) = old_row else {
         return Ok(false);
     };
 
@@ -429,7 +450,7 @@ pub fn update_state_as(
 
     // The old wording must not come back as a twin from the events that produced it.
     if new_description.as_deref().is_some_and(|d| d != old_description) {
-        suppress(&tx, table, &old_description, "edited", now)?;
+        suppress(&tx, table, &namespace, &old_description, "edited", now)?;
     }
     tx.commit()?;
     let _ = crate::search_documents::project_source_after_write(conn, &source_ref(table, id), now);
@@ -574,28 +595,28 @@ pub fn delete_state_as(
     if !may_write_state(&tx, table, id, ctx)? {
         return Ok(false);
     }
-    let key: Option<Option<String>> = match table {
+    let row: Option<(Option<String>, String)> = match table {
         StateTable::Commitments | StateTable::OpenLoops => tx
             .query_row(
-                &format!("SELECT description FROM {} WHERE id = ?1", table.as_str()),
+                &format!("SELECT description, namespace FROM {} WHERE id = ?1", table.as_str()),
                 [id],
-                |r| r.get::<_, String>(0).map(Some),
+                |r| Ok((Some(r.get(0)?), r.get(1)?)),
             )
             .optional()?,
         StateTable::People | StateTable::Projects => tx
             .query_row(
-                &format!("SELECT extraction_key FROM {} WHERE id = ?1", table.as_str()),
+                &format!("SELECT extraction_key, namespace FROM {} WHERE id = ?1", table.as_str()),
                 [id],
-                |r| r.get::<_, Option<String>>(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?,
     };
-    let Some(key) = key else {
+    let Some((key, namespace)) = row else {
         return Ok(false);
     };
     remove_state_row(&tx, table, id)?;
     if let Some(key) = key {
-        suppress(&tx, table, &key, "deleted", now)?;
+        suppress(&tx, table, &namespace, &key, "deleted", now)?;
     }
     tombstone(&tx, table.as_str(), id, now, ctx)?;
     tx.commit()?;
