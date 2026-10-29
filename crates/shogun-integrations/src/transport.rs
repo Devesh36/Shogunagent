@@ -119,7 +119,11 @@ impl<R: McpRpc> IntegrationTransport for RemoteMcpTransport<R> {
             args["page_token"] = Value::String(t.to_string());
         }
         let result = self.rpc.call_tool(service, tool, args)?;
-        let items = crate::result::parse_items(&result)?;
+        let items = if service == Service::GitHub {
+            crate::result::parse_github_issues(&result)?
+        } else {
+            crate::result::parse_items(&result)?
+        };
         let next_page_token = if provider_specific {
             crate::provider_read::next_page(
                 service,
