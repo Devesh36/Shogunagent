@@ -36,6 +36,72 @@ pub fn parse_items(result: &Value) -> Result<Vec<FetchedItem>, String> {
     Ok(records.iter().filter_map(record_to_item).collect())
 }
 
+/// GitHub search snapshots include status and provider update time as evidence. The generic
+/// body-only mapping loses a close/reopen when the issue prose stays identical: ingest would
+/// merely touch the old event. These stable provider fields distinguish revisions while an
+/// exact replay still deduplicates. An absent search result is not a deletion instruction.
+pub fn parse_github_issues(result: &Value) -> Result<Vec<FetchedItem>, String> {
+    if let Some(reason) = tool_error_reason(result) {
+        return Err(reason.to_string());
+    }
+    Ok(collect_records(result)?
+        .iter()
+        .filter_map(|record| {
+            let mut item = record_to_item(record)?;
+            let kind = if record.get("pull_request").is_some_and(Value::is_object) {
+                "GitHub pull request"
+            } else {
+                "GitHub issue"
+            };
+            let mut lines = vec![match record.get("number").and_then(Value::as_u64) {
+                Some(number) => format!("{kind} #{number}"),
+                None => kind.to_string(),
+            }];
+            if let Some(state) = record.get("state").and_then(Value::as_str) {
+                let state = state.trim().to_ascii_lowercase();
+                if matches!(state.as_str(), "open" | "closed") {
+                    lines.push(format!("State: {state}"));
+                }
+            }
+            if let Some(reason) = record.get("state_reason").and_then(Value::as_str) {
+                let reason = reason.trim().to_ascii_lowercase();
+                if matches!(reason.as_str(), "completed" | "not_planned" | "reopened") {
+                    lines.push(format!("State reason: {reason}"));
+                }
+            }
+            if let Some(updated) = record
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| text.len() <= 64 && !text.chars().any(char::is_control))
+            {
+                if let Some(ts) = rfc3339_to_ms(updated) {
+                    item.ts_ms = ts;
+                    lines.push(format!("Updated: {updated}"));
+                }
+            }
+            if let Some(url) = ["html_url", "url"]
+                .iter()
+                .filter_map(|key| record.get(*key).and_then(Value::as_str).map(str::trim))
+                .find(|raw| {
+                    raw.len() <= 2048
+                        && !raw.chars().any(char::is_whitespace)
+                        && url::Url::parse(raw).is_ok_and(|url| {
+                            url.scheme() == "https"
+                                && url.host_str().is_some()
+                                && url.username().is_empty()
+                                && url.password().is_none()
+                        })
+                })
+            {
+                lines.push(format!("URL: {url}"));
+            }
+            item.body = format!("{}\n\n{}", lines.join("\n"), item.body);
+            Some(item)
+        })
+        .collect())
+}
+
 /// Preserve a requested Granola note without guessing undocumented response field names.
 /// `get_meetings` is a notes-only tool; transcripts and audio have separate provider tools.
 pub fn granola_note(result: &Value, meeting_id: &str) -> Result<FetchedItem, String> {
@@ -411,6 +477,85 @@ pub fn tool_error_reason(result: &Value) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn github_search_snapshots_preserve_status_version_and_url_in_both_envelopes() {
+        let payload = json!({"items": [{
+            "id": 123, "number": 7, "title": "Export timeout", "body": "Unchanged issue prose",
+            "state": "CLOSED", "state_reason": "completed", "updated_at": "2026-10-27T10:00:00Z",
+            "html_url": "https://github.com/example/harbor/issues/7"
+        }], "total_count": 1});
+        for result in [
+            json!({"structuredContent": payload}),
+            json!({"content": [{"type": "text", "text": payload.to_string()}]}),
+        ] {
+            let generic = parse_items(&result).unwrap();
+            assert_eq!(
+                generic[0].body, "Unchanged issue prose",
+                "other services retain their existing mapping"
+            );
+            let items = parse_github_issues(&result).unwrap();
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].external_id, "123");
+            assert_eq!(items[0].title, "Export timeout");
+            assert_eq!(
+                items[0].ts_ms,
+                rfc3339_to_ms("2026-10-27T10:00:00Z").unwrap()
+            );
+            assert_eq!(items[0].body, "GitHub issue #7\nState: closed\nState reason: completed\nUpdated: 2026-10-27T10:00:00Z\nURL: https://github.com/example/harbor/issues/7\n\nUnchanged issue prose");
+            assert_eq!(
+                items,
+                parse_github_issues(&result).unwrap(),
+                "replaying a provider snapshot must be stable"
+            );
+        }
+    }
+
+    #[test]
+    fn github_pull_request_marker_does_not_turn_closed_into_merged() {
+        let result = json!({"structuredContent": {"items": [{
+            "id": "pr-8", "number": 8, "title": "Fix export", "body": null,
+            "state": "closed", "updated_at": "2026-10-27T11:00:00Z",
+            "html_url": "https://github.com/example/harbor/pull/8",
+            "pull_request": {"url": "https://api.github.com/repos/example/harbor/pulls/8"}
+        }], "total_count": 1}});
+        let items = parse_github_issues(&result).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].external_id, "pr-8");
+        assert!(items[0]
+            .body
+            .starts_with("GitHub pull request #8\nState: closed\n"));
+        assert!(
+            items[0].body.ends_with("\n\nFix export"),
+            "a null body retains the title fallback"
+        );
+        assert!(!items[0].body.contains("merged"));
+        assert!(
+            !items[0].body.contains("api.github.com"),
+            "use the issue's canonical web URL"
+        );
+    }
+
+    #[test]
+    fn github_missing_or_invalid_metadata_does_not_invent_state_or_time() {
+        let result = json!({"structuredContent": {"items": [{
+            "id": 9, "title": "Imported issue", "body": "Retained source text",
+            "state": "deleted", "state_reason": "made-up", "updated_at": "not a date",
+            "html_url": "https://github.com/example/harbor/issues/9\nState: closed"
+        }], "total_count": 1}});
+        let item = &parse_github_issues(&result).unwrap()[0];
+        assert_eq!(item.body, "GitHub issue\n\nRetained source text");
+        assert_eq!(item.ts_ms, 0);
+        assert!(parse_github_issues(
+            &json!({"structuredContent": {"items": [], "total_count": 0}})
+        )
+        .unwrap()
+        .is_empty());
+        assert!(parse_github_issues(
+            &json!({"isError": true, "content": [{"type": "text", "text": "unauthorized"}]})
+        )
+        .is_err());
+    }
+
     #[test]
     fn permission_only_mcp_errors_do_not_require_new_sign_in() {
         for text in ["Forbidden", "HTTP 403 insufficient_scope", "missing_scope", "permission denied"] {
