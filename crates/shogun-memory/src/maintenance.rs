@@ -710,6 +710,7 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     tx.execute("DELETE FROM relay_attempts", [])?;
     tx.execute("DELETE FROM dream_event_arrivals", [])?;
     tx.execute("DELETE FROM state_suppressions", [])?;
+    tx.execute("DELETE FROM state_suppressions_scoped", [])?;
     // The dictionary ownership key only keys digests of rows deleted above; a new one keeps any
     // digest that survives elsewhere (a backup, an export) from matching future rows.
     tx.execute("UPDATE dictionary_autoadd_secret SET key = randomblob(32) WHERE id = 1", [])?;
@@ -2857,14 +2858,18 @@ mod tests {
         seed(&mut conn);
         conn.execute_batch(
             "INSERT INTO relay_attempts (fingerprint, request_id) VALUES ('fp', 'req');
-             INSERT INTO dream_event_arrivals (event_id) VALUES (1);",
+             INSERT INTO dream_event_arrivals (event_id) VALUES (1);
+             INSERT INTO state_suppressions (state_table, match_digest, reason, suppressed_at)
+             VALUES ('commitments', 'legacy-digest', 'deleted', 100);
+             INSERT INTO state_suppressions_scoped (state_table, namespace, match_digest, reason, suppressed_at)
+             VALUES ('commitments', 'agent_scratch:alpha', 'scoped-digest', 'edited', 200);",
         )
         .unwrap();
         let secret_before: Vec<u8> = conn
             .query_row("SELECT key FROM dictionary_autoadd_secret WHERE id = 1", [], |r| r.get(0))
             .unwrap();
         delete_all(&mut conn).unwrap();
-        for table in ["llm_usage", "relay_attempts", "dream_event_arrivals", "state_suppressions"] {
+        for table in ["llm_usage", "relay_attempts", "dream_event_arrivals", "state_suppressions", "state_suppressions_scoped"] {
             let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{table} should be empty after delete_all");
         }

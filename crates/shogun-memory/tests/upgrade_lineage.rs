@@ -176,6 +176,71 @@ fn upgrade_from_release_v0_2_0_schema_v41() -> TestResult {
 }
 
 #[test]
+fn v105_suppressions_preserve_legacy_cutoffs_across_upgrade_reopen_and_snapshot_restore() -> TestResult {
+    use shogun_memory::{
+        actor::{Actor, WriteContext},
+        state::StateTable,
+        state_edit::{create_state_as, delete_state_as, is_suppressed_in_namespace, suppression_digest, CreateRequest},
+    };
+
+    fn legacy_rows(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+        conn.prepare("SELECT json_array(id, state_table, match_digest, reason, suppressed_at)
+            FROM state_suppressions ORDER BY id")?
+            .query_map([], |r| r.get(0))?.collect()
+    }
+
+    let tmp = TempDb::new("v105_suppression_namespaces");
+    let snapshot = tmp.path();
+    create_encrypted_at(&snapshot, 105)?;
+    let tables = [StateTable::People, StateTable::Projects, StateTable::Commitments, StateTable::OpenLoops];
+    let before = {
+        let conn = open_keyed(&snapshot)?;
+        for table in tables {
+            conn.execute("INSERT INTO state_suppressions (state_table, match_digest, reason, suppressed_at)
+                VALUES (?1, ?2, 'deleted', 1000)", rusqlite::params![table.as_str(), suppression_digest(table, "legacy belief")])?;
+        }
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+        legacy_rows(&conn)?
+    };
+
+    // Restore the same closed pre-upgrade synthetic snapshot twice. No history editing and no
+    // inference of namespaces from digest-only legacy rows occurs on either upgrade.
+    for attempt in 0..2 {
+        let restored = tmp.0.join(format!("restored-{attempt}.db"));
+        std::fs::copy(&snapshot, &restored)?;
+        let mut conn = product_upgrade(&restored)?;
+        assert_eq!(schema_version(&conn)?, Some(LATEST_SCHEMA_VERSION));
+        assert_eq!(legacy_rows(&conn)?, before);
+        assert_eq!(conn.query_row("SELECT count(*) FROM state_suppressions_scoped", [], |r| r.get::<_, i64>(0))?, 0);
+        let alpha = WriteContext::scratch(Actor::agent("alpha")?)?;
+        let req = CreateRequest {
+            table: StateTable::Commitments, description: "legacy belief".into(),
+            due_at: None, person_id: None,
+        };
+        let id = create_state_as(&mut conn, &req, 1500, &alpha).expect("create synthetic row").expect("synthetic row");
+        assert!(delete_state_as(&mut conn, req.table, id, 2000, &WriteContext::owner()).expect("delete synthetic row"));
+        assert_eq!(legacy_rows(&conn)?, before, "new deletions never alter old global cutoffs");
+        drop(conn);
+
+        for _ in 0..2 {
+            let conn = product_upgrade(&restored)?;
+            assert_eq!(legacy_rows(&conn)?, before);
+            assert_eq!(conn.query_row("PRAGMA quick_check", [], |r| r.get::<_, String>(0))?, "ok");
+            for table in tables {
+                for namespace in ["world", "agent_scratch:alpha", "agent_scratch:beta"] {
+                    assert!(is_suppressed_in_namespace(&conn, table, "legacy belief", 1000, namespace)?);
+                    let scoped = table == StateTable::Commitments && namespace == "agent_scratch:alpha";
+                    assert_eq!(is_suppressed_in_namespace(&conn, table, "legacy belief", 1001, namespace)?, scoped);
+                    assert_eq!(is_suppressed_in_namespace(&conn, table, "legacy belief", 2000, namespace)?, scoped);
+                    assert!(!is_suppressed_in_namespace(&conn, table, "legacy belief", 2001, namespace)?);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn upgrade_from_release_v0_2_1_schema_v43() -> TestResult {
     assert_shipped_upgrade("v0.2.1", 43)
 }
