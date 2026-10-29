@@ -723,10 +723,11 @@ impl WorldModel {
 }
 
 fn provenance_map(conn: &Connection, table: StateTable) -> Result<HashMap<i64, Vec<i64>>, rusqlite::Error> {
-    let mut stmt = conn.prepare(
-        "SELECT state_id, event_id FROM state_provenance WHERE state_table = ?1
-          ORDER BY state_id, event_id",
-    )?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT p.state_id, p.event_id FROM state_provenance p JOIN event_log e ON e.id=p.event_id
+          WHERE p.state_table = ?1 AND {} ORDER BY p.state_id, p.event_id",
+        crate::actor::current_read().predicate("e."),
+    ))?;
     let mut map: HashMap<i64, Vec<i64>> = HashMap::new();
     let rows = stmt.query_map([table.as_str()], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?;
     for row in rows {
@@ -739,8 +740,9 @@ fn provenance_map(conn: &Connection, table: StateTable) -> Result<HashMap<i64, V
     Ok(map)
 }
 
-/// Read one editable entity page without exporting the other state rows.
+/// Read one editable entity page within the caller's read scope. Hidden ids read as absent.
 pub fn export_entity(conn: &Connection, table: StateTable, id: i64) -> Result<Option<ExportRow>, rusqlite::Error> {
+    let scope = crate::actor::current_read();
     let (title, detail, status, fields) = match table {
         StateTable::People => ("display_name", "relationship_summary", "NULL", "aliases, emails, handles, interaction_channel"),
         StateTable::Projects => ("name", "summary", "status", "NULL, NULL, NULL, NULL"),
@@ -751,9 +753,12 @@ pub fn export_entity(conn: &Connection, table: StateTable, id: i64) -> Result<Op
     let sql = format!(
         "SELECT id, {title}, {detail}, {status}, {}, user_pinned, page IS NOT NULL OR wording_edited = 1, {fields},
                 last_evidence_at,
-                (SELECT COUNT(*) FROM state_provenance WHERE state_table='{name}' AND state_id={name}.id)
-           FROM {name} WHERE id = ?1{filter}",
+                (SELECT COUNT(*) FROM state_provenance p JOIN event_log e ON e.id=p.event_id
+                 WHERE p.state_table='{name}' AND p.state_id={name}.id AND {})
+           FROM {name} WHERE id = ?1{filter} AND {}",
         crate::entity_pages::listed_confidence_sql(table, name),
+        scope.predicate("e."),
+        scope.predicate(&format!("{name}.")),
     );
     let mut row = conn.query_row(&sql, [id], |r| {
         let confidence: f64 = r.get(4)?;
@@ -770,15 +775,20 @@ pub fn export_entity(conn: &Connection, table: StateTable, id: i64) -> Result<Op
         })
     }).optional()?;
     if let Some(row) = &mut row {
-        let mut stmt = conn.prepare("SELECT DISTINCT event_id FROM state_provenance WHERE state_table = ?1 AND state_id = ?2 ORDER BY event_id")?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT DISTINCT p.event_id FROM state_provenance p JOIN event_log e ON e.id=p.event_id
+             WHERE p.state_table = ?1 AND p.state_id = ?2 AND {} ORDER BY p.event_id",
+            scope.predicate("e."),
+        ))?;
         row.provenance = stmt.query_map(params![name, id], |r| r.get(0))?.collect::<Result<_, _>>()?;
     }
     Ok(row)
 }
 
-/// Read every state row with its confidence and provenance. Commitment confidence is read through
-/// the dispute cap, exactly as Fusion and the list tools see it.
+/// Read state and provenance within the caller's read scope (world-only by default).
+/// Commitment confidence is read through the dispute cap, exactly as Fusion and the list tools see it.
 pub fn export(conn: &Connection) -> Result<WorldModel, rusqlite::Error> {
+    let scope = crate::actor::current_read();
     let read = |table: StateTable, sql: &str| -> Result<Vec<ExportRow>, rusqlite::Error> {
         let mut provenance = provenance_map(conn, table)?;
         let mut stmt = conn.prepare(sql)?;
@@ -815,14 +825,20 @@ pub fn export(conn: &Connection) -> Result<WorldModel, rusqlite::Error> {
         &format!(
             "SELECT id, display_name, relationship_summary, NULL, NULL, {}, user_pinned, page IS NOT NULL OR wording_edited = 1,
                     last_evidence_at,
-                    (SELECT COUNT(*) FROM state_provenance WHERE state_table='people' AND state_id=people.id)
-               FROM people WHERE COALESCE(person_class, '') <> 'self' ORDER BY display_name COLLATE NOCASE, id",
+                    (SELECT COUNT(*) FROM state_provenance p JOIN event_log e ON e.id=p.event_id
+                     WHERE p.state_table='people' AND p.state_id=people.id AND {})
+               FROM people WHERE COALESCE(person_class, '') <> 'self' AND {} ORDER BY display_name COLLATE NOCASE, id",
             listed_confidence_sql(StateTable::People, "people"),
+            scope.predicate("e."),
+            scope.predicate("people."),
         ),
     )?;
     let mut fields: HashMap<i64, PersonFields> = HashMap::new();
     {
-        let mut stmt = conn.prepare("SELECT id, aliases, emails, handles, interaction_channel FROM people")?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, aliases, emails, handles, interaction_channel FROM people WHERE {}",
+            scope.predicate("people."),
+        ))?;
         let it = stmt.query_map([], |r| {
             Ok((r.get::<_, i64>(0)?, PersonFields {
                 aliases: json_list(r.get(1)?),
@@ -846,23 +862,27 @@ pub fn export(conn: &Connection) -> Result<WorldModel, rusqlite::Error> {
             &format!(
                 "SELECT id, name, summary, status, NULL, {}, user_pinned, page IS NOT NULL OR wording_edited = 1,
                         last_evidence_at,
-                        (SELECT COUNT(*) FROM state_provenance WHERE state_table='projects' AND state_id=projects.id)
-                   FROM projects ORDER BY name COLLATE NOCASE, id",
+                        (SELECT COUNT(*) FROM state_provenance p JOIN event_log e ON e.id=p.event_id
+                         WHERE p.state_table='projects' AND p.state_id=projects.id AND {})
+                   FROM projects WHERE {} ORDER BY name COLLATE NOCASE, id",
                 listed_confidence_sql(StateTable::Projects, "projects"),
+                scope.predicate("e."),
+                scope.predicate("projects."),
             ),
         )?,
         commitments: read(
             StateTable::Commitments,
             &format!(
                 "SELECT id, description, NULL, status, due_at, {}, user_pinned, 0, NULL, NULL
-                   FROM commitments ORDER BY (due_at IS NULL), due_at, id",
-                crate::disputes::COMMITMENT_CONFIDENCE_SQL
+                   FROM commitments WHERE {} ORDER BY (due_at IS NULL), due_at, id",
+                crate::disputes::COMMITMENT_CONFIDENCE_SQL,
+                scope.predicate("commitments."),
             ),
         )?,
         open_loops: read(
             StateTable::OpenLoops,
-            "SELECT id, description, kind, status, NULL, confidence, user_pinned, 0, NULL, NULL
-               FROM open_loops ORDER BY opened_at, id",
+            &format!("SELECT id, description, kind, status, NULL, confidence, user_pinned, 0, NULL, NULL
+               FROM open_loops WHERE {} ORDER BY opened_at, id", scope.predicate("open_loops.")),
         )?,
     })
 }
