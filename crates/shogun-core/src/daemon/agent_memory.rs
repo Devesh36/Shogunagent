@@ -50,8 +50,6 @@ const RECALL_EXCERPT_CHARS: usize = 600;
 const RECALL_ITEMS_PER_KIND: usize = 12;
 /// Recent rows of the same thread a new body is compared against for the near-duplicate collapse.
 const NEAR_DUP_RECENT_ROWS: usize = 32;
-/// Shortest query word that takes part in state-row matching.
-const MATCH_WORD_MIN_CHARS: usize = 3;
 
 /// `ingest_receipts.idempotency_key_hash`: the SHA-256 of the key, hex. Never the key itself.
 fn receipt_hash(idempotency_key: &str) -> String {
@@ -286,14 +284,13 @@ impl Db {
     }
 }
 
-/// The words of a query that take part in matching: lower-cased, at least
-/// [`MATCH_WORD_MIN_CHARS`] long, with CJK runs kept whole.
+/// Use the search vocabulary for typed recall too: function words cannot select unrelated
+/// state, while short identifiers and CJK subjects remain searchable. Terms retain display
+/// case in the shared parser, so lowercase them for the state text matcher.
 fn match_words(query: &str) -> Vec<String> {
-    query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() >= MATCH_WORD_MIN_CHARS || !w.is_ascii())
-        .filter(|w| !w.is_empty())
-        .map(str::to_lowercase)
+    shogun_memory::search::lexical_terms(query)
+        .into_iter()
+        .map(|word| word.to_lowercase())
         .collect()
 }
 
